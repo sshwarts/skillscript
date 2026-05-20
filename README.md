@@ -27,10 +27,11 @@ That works on cold install — no Ollama, no environment setup. With Ollama runn
 
 The canonical spec lives in `docs/`:
 
-- [`docs/PRD.md`](./docs/PRD.md) — product requirements
 - [`docs/LANGUAGE_REFERENCE.md`](./docs/LANGUAGE_REFERENCE.md) — syntax, ops, lifecycle, connectors
 - [`docs/ERD.md`](./docs/ERD.md) — engineering requirements
 - [`ARCHITECTURE.md`](./ARCHITECTURE.md) — one-page map of which file does what
+
+(PRD pending.)
 
 ## License
 
