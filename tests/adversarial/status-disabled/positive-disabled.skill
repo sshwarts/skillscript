@@ -1,0 +1,5 @@
+# Skill: gone
+# Status: disabled
+t:
+    ! hi
+default: t

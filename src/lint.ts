@@ -209,7 +209,7 @@ const NO_TARGETS: LintRule = {
 const NO_ENTRY_TARGET: LintRule = {
   id: "no-entry-target",
   severity: "error",
-  description: "Targets exist but no `default:` line and no implicit fallback resolved.",
+  description: "Targets exist but no entry resolved. Currently unreachable since the parser's fallback picks the last target — kept in the registry so authoring tools can introspect the rule list; a parser change that tracks `entryTargetExplicit` would activate this.",
   remediation: "Add `default: <target-name>` at the bottom of the skill.",
   check: (ctx) => {
     if (ctx.parsed.targets.size > 0 && ctx.parsed.entryTarget === null) {

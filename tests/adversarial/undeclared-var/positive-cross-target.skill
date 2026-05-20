@@ -1,0 +1,6 @@
+# Skill: bad
+a:
+    $set X = hi
+b:
+    ! $(X)
+default: b

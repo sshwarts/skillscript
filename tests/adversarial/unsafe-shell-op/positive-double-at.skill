@@ -1,0 +1,4 @@
+# Skill: bad
+t:
+    @ @rm -rf /tmp/something
+default: t
