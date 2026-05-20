@@ -31,8 +31,6 @@ The canonical spec lives in `docs/`:
 - [`docs/ERD.md`](./docs/ERD.md) — engineering requirements
 - [`ARCHITECTURE.md`](./ARCHITECTURE.md) — one-page map of which file does what
 
-(PRD pending.)
-
 ## License
 
 MIT. See [`LICENSE`](./LICENSE).
