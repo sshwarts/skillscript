@@ -280,26 +280,35 @@ const UNKNOWN_CAPABILITY: LintRule = {
 const UNDECLARED_VAR: LintRule = {
   id: "undeclared-var",
   severity: "error",
-  description: "An op body references `$(NAME)` for a variable that's not declared in `# Vars:`, `# Requires:`, or output-bound by a prior op in the target.",
+  description: "An op body references `$(NAME)` for a variable that's not declared in `# Vars:`/`# Requires:`, not output-bound by any op anywhere in the skill, and not a foreach iterator in scope.",
   remediation: "Add the variable to `# Vars:` or `# Requires:`, or check the spelling against the declared variable list.",
   check: (ctx) => {
     const declared = new Set<string>();
     for (const v of ctx.parsed.vars) declared.add(v.name);
     for (const r of ctx.parsed.requires) declared.add(r.target);
+    // Collect output-bound vars across the whole skill — once bound by any
+    // target's $set / -> outputVar / foreach iterator, the var is available
+    // for substitution downstream. The runtime walks targets in topo-sort;
+    // by the time a downstream target executes, earlier targets' bindings
+    // have populated `vars`.
+    for (const target of ctx.parsed.targets.values()) {
+      walkOps(target.ops, (op) => {
+        if (op.setName !== undefined) declared.add(op.setName);
+        if (op.outputVar !== undefined) declared.add(op.outputVar);
+        if (op.foreachIter !== undefined) declared.add(op.foreachIter);
+      });
+    }
     const findings: LintFinding[] = [];
     for (const [targetName, target] of ctx.parsed.targets) {
-      // Vars bound by prior ops in THIS target. Conservative — doesn't track
-      // cross-target bindings since target outputs use $(targetname.output).
-      const localBound = new Set<string>();
+      const reported = new Set<string>(); // dedupe per target
       for (const op of target.ops) {
         for (const ref of extractVarRefs(op)) {
-          // Heuristic: dotted refs (targetname.output, MEMORY.field) and
-          // iterator vars from foreach are ambient. Only flag bare refs
-          // that aren't declared or locally bound.
+          // Heuristic: dotted refs (targetname.output, MEMORY.field) pass
+          // as ambient — runtime substitution handles dotted lookups.
           if (ref.includes(".")) continue;
-          if (declared.has(ref) || localBound.has(ref)) continue;
-          // Walk loop iterator vars in scope.
-          if (isLoopIterInScope(target.ops, op, ref)) continue;
+          if (declared.has(ref)) continue;
+          if (reported.has(ref)) continue;
+          reported.add(ref);
           findings.push({
             rule: "undeclared-var",
             severity: "error",
@@ -308,9 +317,6 @@ const UNDECLARED_VAR: LintRule = {
             extras: { var_name: ref },
           });
         }
-        // Track bound vars from this op for subsequent ops in the target.
-        if (op.setName !== undefined) localBound.add(op.setName);
-        if (op.outputVar !== undefined) localBound.add(op.outputVar);
       }
     }
     return findings;
@@ -326,17 +332,20 @@ const UNKNOWN_FILTER: LintRule = {
     const knownSet = new Set<string>(KNOWN_FILTERS);
     const findings: LintFinding[] = [];
     for (const [targetName, target] of ctx.parsed.targets) {
+      const reported = new Set<string>(); // dedupe per target
       for (const op of target.ops) {
         for (const { name, filter } of extractVarRefsWithFilter(op)) {
-          if (filter && !knownSet.has(filter)) {
-            findings.push({
-              rule: "unknown-filter",
-              severity: "error",
-              message: `Reference '$(${name}|${filter})' in target '${targetName}' uses unknown filter '${filter}'.`,
-              block: targetName,
-              extras: { var_name: name, filter },
-            });
-          }
+          if (!filter || knownSet.has(filter)) continue;
+          const key = `${name}|${filter}`;
+          if (reported.has(key)) continue;
+          reported.add(key);
+          findings.push({
+            rule: "unknown-filter",
+            severity: "error",
+            message: `Reference '$(${name}|${filter})' in target '${targetName}' uses unknown filter '${filter}'.`,
+            block: targetName,
+            extras: { var_name: name, filter },
+          });
         }
       }
     }
