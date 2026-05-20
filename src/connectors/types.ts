@@ -46,24 +46,95 @@ export interface ManifestInfo {
 
 // ─── SkillStore ───────────────────────────────────────────────────────────
 
-export interface SkillRecord {
+export type SkillStatus = "draft" | "approved" | "disabled";
+
+/**
+ * The source bytes of a skill plus its identity metadata. Returned by
+ * `SkillStore.load()`. `version` is opaque-substrate-declared (equality
+ * comparison only); `content_hash` is substrate-independent SHA-256 of
+ * canonicalized source. Use `content_hash` for staleness / dependency
+ * walking; use `version` for display + substrate-specific pinning.
+ */
+export interface SkillSource {
   name: string;
-  body: string;
-  status?: string;
-  createdAt?: number;
-  description?: string;
+  version: string;
+  content_hash: string;
+  source: string;
+  metadata: SkillMeta;
 }
 
-export interface SkillSummary {
+/**
+ * Skill metadata — everything you can know about a skill without loading
+ * its body. Returned by `query()` / `metadata()`. `created_at` /
+ * `updated_at` / `status_changed_at` are Unix seconds.
+ */
+export interface SkillMeta {
   name: string;
-  status?: string;
+  version: string;
+  content_hash: string;
+  status: SkillStatus;
   description?: string;
+  vars?: string[];
+  requires?: string[];
+  triggers?: Array<{ source: string; name: string; agent_id?: string }>;
+  outputs?: string[];
+  type?: "procedural" | "data";
+  created_at: number;
+  updated_at: number;
+  status_changed_at?: number;
+  author?: string;
+  metadata_bag?: Record<string, unknown>;
+}
+
+/**
+ * Records a write or status transition. `previous_status` is populated
+ * on every `update_status()` call so audit traces can reconstruct the
+ * lifecycle without reading the full version list. `changed_at` is
+ * Unix seconds.
+ */
+export interface VersionInfo {
+  name: string;
+  version: string;
+  content_hash: string;
+  status: SkillStatus;
+  previous_status?: SkillStatus;
+  changed_at: number;
+  changed_by?: string;
+}
+
+/**
+ * Filter shape for `SkillStore.query()`. Extensible — substrates honor what
+ * they support and ignore the rest. `name_pattern` is a substrate-specific
+ * glob/regex string; substrates declare support via the
+ * `supports_tag_filter` / `supports_versioning` feature flags.
+ */
+export interface SkillFilter {
+  status?: SkillStatus | SkillStatus[];
+  type?: "procedural" | "data";
+  tag?: string | string[];
+  author?: string;
+  since?: number;
+  name_pattern?: string;
+  limit?: number;
+  offset?: number;
+  [key: string]: unknown;
 }
 
 export interface SkillStore {
-  load(name: string): Promise<SkillRecord | null>;
-  exists(name: string): Promise<boolean>;
-  list(filter?: { status?: string }): Promise<SkillSummary[]>;
+  /** Throws `SkillNotFoundError` if `name` (+ optional `version`) is missing. */
+  load(name: string, version?: string): Promise<SkillSource>;
+  /** Returns empty array on no matches; never throws for "not found". */
+  query(filter?: SkillFilter): Promise<SkillMeta[]>;
+  /** Throws `SkillNotFoundError` if missing. */
+  metadata(name: string): Promise<SkillMeta>;
+  /** Throws `SkillNotFoundError` if missing. Empty array is valid for new skills. */
+  versions(name: string): Promise<VersionInfo[]>;
+  /** Creates or updates. Throws `LintFailureError` if tier-1 lint rejects. */
+  store(name: string, source: string, metadata?: Partial<SkillMeta>): Promise<VersionInfo>;
+  /** Substrate-only delete. Referential integrity is the runtime's concern (T2 Phase 2.1). */
+  delete(name: string): Promise<void>;
+  /** Returns a `VersionInfo` with `previous_status` populated. */
+  update_status(name: string, status: SkillStatus): Promise<VersionInfo>;
   manifest(): Promise<ManifestInfo>;
 }
 

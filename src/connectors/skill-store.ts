@@ -1,24 +1,39 @@
-import { readFile, readdir, access, writeFile, mkdir, stat } from "node:fs/promises";
+import { readFile, readdir, writeFile, mkdir, stat, unlink, appendFile } from "node:fs/promises";
 import { join, basename, extname } from "node:path";
-import { constants } from "node:fs";
+import { createHash } from "node:crypto";
 import type {
   SkillStore,
-  SkillRecord,
-  SkillSummary,
+  SkillSource,
+  SkillMeta,
+  SkillStatus,
+  SkillFilter,
+  VersionInfo,
   StaticCapabilities,
   ManifestInfo,
 } from "./types.js";
+import { SkillNotFoundError, VersionNotFoundError, StorageConflictError } from "../errors.js";
 
 const CONTRACT_VERSION = "1.0.0";
 
 /**
  * Filesystem-backed SkillStore. Skills live as `*.skill` files under a
- * directory. The filename (sans extension) is the canonical skill name;
- * the body's `# Skill:` header is informational but the filename wins on
- * lookups. This makes "what skill exists at what name" obvious from `ls`.
+ * directory. Per-skill version history lives in a sidecar `*.versions.jsonl`
+ * (append-only, one JSON object per line).
  *
- * T1 baseline: load + exists + list. Status transitions / save semantics
- * land in T2 (the full SkillStore surface plus capabilities discovery).
+ * Limitations of the filesystem substrate (acknowledged):
+ *   - `load(name, version)` cannot return historical bytes — only the current
+ *     file content is on disk. If `version` is supplied and doesn't match
+ *     the current file's hash, throws `VersionNotFoundError`. A
+ *     content-addressed substrate (git-backed, S3, etc.) would preserve
+ *     bytes per version.
+ *   - `versions()` reads the `.jsonl` sidecar if present, else synthesizes
+ *     one entry from the file's mtime (for legacy files written before
+ *     T2's versioning landed).
+ *   - `query()` reads every file's headers on each call. Fine for small
+ *     stores; a larger substrate caches metadata.
+ *
+ * `version` string format: first 12 chars of `content_hash` — short, stable,
+ * shareable. Consumers MUST treat `version` as opaque (equality only).
  */
 export class FilesystemSkillStore implements SkillStore {
   static staticCapabilities(): StaticCapabilities {
@@ -28,9 +43,9 @@ export class FilesystemSkillStore implements SkillStore {
       contract_version: CONTRACT_VERSION,
       features: {
         supports_writes: true,
+        supports_versioning: true,
         supports_tag_filter: false,
-        supports_versioning: false,
-        supports_audit_trail: false,
+        supports_audit_trail: true,
         supports_atomic_status_transitions: false,
       },
     };
@@ -48,37 +63,33 @@ export class FilesystemSkillStore implements SkillStore {
     };
   }
 
-  async load(name: string): Promise<SkillRecord | null> {
+  async load(name: string, version?: string): Promise<SkillSource> {
     const path = this.pathFor(name);
+    let source: string;
     try {
-      const body = await readFile(path, "utf8");
-      const st = await stat(path);
-      const description = this.extractHeader(body, "Description");
-      const status = this.extractHeader(body, "Status");
-      const record: SkillRecord = {
-        name,
-        body,
-        createdAt: Math.floor(st.mtimeMs / 1000),
-      };
-      if (description !== null) record.description = description;
-      if (status !== null) record.status = status;
-      return record;
+      source = await readFile(path, "utf8");
     } catch (err) {
-      if ((err as NodeJS.ErrnoException).code === "ENOENT") return null;
+      if ((err as NodeJS.ErrnoException).code === "ENOENT") {
+        throw new SkillNotFoundError(name, "FilesystemSkillStore");
+      }
       throw err;
     }
-  }
-
-  async exists(name: string): Promise<boolean> {
-    try {
-      await access(this.pathFor(name), constants.R_OK);
-      return true;
-    } catch {
-      return false;
+    const content_hash = hashSource(source);
+    const versionLabel = shortHash(content_hash);
+    if (version !== undefined && version !== versionLabel) {
+      throw new VersionNotFoundError(name, version, "FilesystemSkillStore");
     }
+    const meta = await this.buildMeta(name, source);
+    return {
+      name,
+      version: versionLabel,
+      content_hash,
+      source,
+      metadata: meta,
+    };
   }
 
-  async list(filter?: { status?: string }): Promise<SkillSummary[]> {
+  async query(filter?: SkillFilter): Promise<SkillMeta[]> {
     let entries: string[];
     try {
       entries = await readdir(this.rootDir);
@@ -86,40 +97,221 @@ export class FilesystemSkillStore implements SkillStore {
       if ((err as NodeJS.ErrnoException).code === "ENOENT") return [];
       throw err;
     }
-    const summaries: SkillSummary[] = [];
+    const metas: SkillMeta[] = [];
     for (const entry of entries) {
       if (extname(entry) !== ".skill") continue;
       const name = basename(entry, ".skill");
       try {
-        const body = await readFile(join(this.rootDir, entry), "utf8");
-        const description = this.extractHeader(body, "Description");
-        const status = this.extractHeader(body, "Status");
-        if (filter?.status !== undefined && status !== filter.status) continue;
-        const summary: SkillSummary = { name };
-        if (description !== null) summary.description = description;
-        if (status !== null) summary.status = status;
-        summaries.push(summary);
+        const source = await readFile(join(this.rootDir, entry), "utf8");
+        metas.push(await this.buildMeta(name, source));
       } catch {
-        // Unreadable file — skip silently.
+        // Unreadable file — skip.
       }
     }
-    summaries.sort((a, b) => a.name.localeCompare(b.name));
-    return summaries;
+    metas.sort((a, b) => a.name.localeCompare(b.name));
+    return applyFilter(metas, filter);
   }
 
-  /** Helper for authoring tools — writes a `.skill` file to the store. */
-  async save(name: string, body: string): Promise<void> {
+  async metadata(name: string): Promise<SkillMeta> {
+    let source: string;
+    try {
+      source = await readFile(this.pathFor(name), "utf8");
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === "ENOENT") {
+        throw new SkillNotFoundError(name, "FilesystemSkillStore");
+      }
+      throw err;
+    }
+    return this.buildMeta(name, source);
+  }
+
+  async versions(name: string): Promise<VersionInfo[]> {
+    const sidecar = this.versionsPathFor(name);
+    let lines: string[];
+    try {
+      const body = await readFile(sidecar, "utf8");
+      lines = body.split("\n").filter((l) => l.trim() !== "");
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== "ENOENT") throw err;
+      // No sidecar — verify the skill file itself exists. If neither
+      // exists, it's a not-found. If the file exists but no sidecar,
+      // synthesize a single legacy entry from current state.
+      const meta = await this.metadata(name).catch((e) => {
+        if (e instanceof SkillNotFoundError) throw e;
+        throw e;
+      });
+      const fileStat = await stat(this.pathFor(name));
+      return [{
+        name,
+        version: meta.version,
+        content_hash: meta.content_hash,
+        status: meta.status,
+        changed_at: Math.floor(fileStat.mtimeMs / 1000),
+      }];
+    }
+    const out: VersionInfo[] = [];
+    for (const line of lines) {
+      try {
+        out.push(JSON.parse(line) as VersionInfo);
+      } catch {
+        // Skip malformed; resilient to partial-write tear at append time.
+      }
+    }
+    return out;
+  }
+
+  async store(name: string, source: string, metadata?: Partial<SkillMeta>): Promise<VersionInfo> {
+    if (!/^[A-Za-z0-9][\w\-.]*$/.test(name)) {
+      throw new StorageConflictError(name, "name contains characters unsafe for filesystem path", "FilesystemSkillStore");
+    }
     await mkdir(this.rootDir, { recursive: true });
-    await writeFile(this.pathFor(name), body, "utf8");
+    const content_hash = hashSource(source);
+    const version = shortHash(content_hash);
+    const status = metadata?.status ?? extractStatus(source) ?? "draft";
+    const nowSec = Math.floor(Date.now() / 1000);
+
+    await writeFile(this.pathFor(name), source, "utf8");
+    const info: VersionInfo = {
+      name,
+      version,
+      content_hash,
+      status,
+      changed_at: nowSec,
+      ...(metadata?.author !== undefined ? { changed_by: metadata.author } : {}),
+    };
+    await appendFile(this.versionsPathFor(name), JSON.stringify(info) + "\n", "utf8");
+    return info;
+  }
+
+  async delete(name: string): Promise<void> {
+    let removed = false;
+    for (const p of [this.pathFor(name), this.versionsPathFor(name)]) {
+      try {
+        await unlink(p);
+        removed = true;
+      } catch (err) {
+        if ((err as NodeJS.ErrnoException).code !== "ENOENT") throw err;
+      }
+    }
+    if (!removed) {
+      throw new SkillNotFoundError(name, "FilesystemSkillStore");
+    }
+  }
+
+  async update_status(name: string, status: SkillStatus): Promise<VersionInfo> {
+    const path = this.pathFor(name);
+    let source: string;
+    try {
+      source = await readFile(path, "utf8");
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === "ENOENT") {
+        throw new SkillNotFoundError(name, "FilesystemSkillStore");
+      }
+      throw err;
+    }
+    const previous_status = extractStatus(source) ?? "draft";
+    const updated = rewriteStatusHeader(source, status);
+    await writeFile(path, updated, "utf8");
+    const content_hash = hashSource(updated);
+    const version = shortHash(content_hash);
+    const info: VersionInfo = {
+      name,
+      version,
+      content_hash,
+      status,
+      previous_status,
+      changed_at: Math.floor(Date.now() / 1000),
+    };
+    await appendFile(this.versionsPathFor(name), JSON.stringify(info) + "\n", "utf8");
+    return info;
   }
 
   private pathFor(name: string): string {
     return join(this.rootDir, `${name}.skill`);
   }
 
-  private extractHeader(body: string, key: string): string | null {
-    const re = new RegExp(`^#\\s*${key}\\s*:\\s*(.+?)\\s*$`, "m");
-    const m = re.exec(body);
-    return m ? m[1]! : null;
+  private versionsPathFor(name: string): string {
+    return join(this.rootDir, `${name}.versions.jsonl`);
   }
+
+  private async buildMeta(name: string, source: string): Promise<SkillMeta> {
+    const content_hash = hashSource(source);
+    const version = shortHash(content_hash);
+    const status = extractStatus(source) ?? "draft";
+    const description = extractHeader(source, "Description");
+    const fileStat = await stat(this.pathFor(name)).catch(() => null);
+    const updated_at = fileStat ? Math.floor(fileStat.mtimeMs / 1000) : 0;
+    const meta: SkillMeta = {
+      name,
+      version,
+      content_hash,
+      status,
+      created_at: updated_at,
+      updated_at,
+    };
+    if (description !== null) meta.description = description;
+    return meta;
+  }
+}
+
+function hashSource(source: string): string {
+  return createHash("sha256").update(source, "utf8").digest("hex");
+}
+
+function shortHash(content_hash: string): string {
+  return content_hash.slice(0, 12);
+}
+
+function extractHeader(body: string, key: string): string | null {
+  const re = new RegExp(`^#\\s*${key}\\s*:\\s*(.+?)\\s*$`, "m");
+  const m = re.exec(body);
+  return m ? m[1]! : null;
+}
+
+function extractStatus(source: string): SkillStatus | null {
+  const raw = extractHeader(source, "Status");
+  if (raw === null) return null;
+  const norm = raw.toLowerCase();
+  if (norm === "draft" || norm === "approved" || norm === "disabled") return norm;
+  return null;
+}
+
+/**
+ * Rewrite or insert the `# Status:` header. If absent, inserts after the
+ * `# Skill:` line (or at the top of the file as a fallback).
+ */
+function rewriteStatusHeader(source: string, status: SkillStatus): string {
+  const re = /^#\s*Status\s*:\s*.+?\s*$/m;
+  if (re.test(source)) {
+    return source.replace(re, `# Status: ${status}`);
+  }
+  const skillLineRe = /^(#\s*Skill\s*:\s*.+?)\s*$/m;
+  if (skillLineRe.test(source)) {
+    return source.replace(skillLineRe, `$1\n# Status: ${status}`);
+  }
+  return `# Status: ${status}\n${source}`;
+}
+
+function applyFilter(metas: SkillMeta[], filter?: SkillFilter): SkillMeta[] {
+  if (filter === undefined) return metas;
+  let out = metas;
+  if (filter.status !== undefined) {
+    const wanted = Array.isArray(filter.status) ? filter.status : [filter.status];
+    out = out.filter((m) => wanted.includes(m.status));
+  }
+  if (filter.name_pattern !== undefined) {
+    const pat = new RegExp(filter.name_pattern);
+    out = out.filter((m) => pat.test(m.name));
+  }
+  if (filter.since !== undefined) {
+    const since = filter.since;
+    out = out.filter((m) => m.updated_at >= since);
+  }
+  if (filter.offset !== undefined) {
+    out = out.slice(filter.offset);
+  }
+  if (filter.limit !== undefined) {
+    out = out.slice(0, filter.limit);
+  }
+  return out;
 }

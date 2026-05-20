@@ -81,8 +81,11 @@ export async function compile(
   }
 
   if (parsed.onError !== null && skillStore !== undefined) {
-    const exists = await skillStore.exists(parsed.onError);
-    if (!exists) {
+    try {
+      await skillStore.metadata(parsed.onError);
+    } catch (err) {
+      // SkillNotFoundError (or any error from metadata lookup) → fail-clean
+      // at compile time rather than at runtime when the fallback would fire.
       throw new Error(
         `Skill references missing fallback skill '${parsed.onError}' in \`# OnError:\` header.`,
       );

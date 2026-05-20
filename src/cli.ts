@@ -197,15 +197,16 @@ async function cmdLint(args: string[]): Promise<number> {
 async function cmdList(args: string[]): Promise<number> {
   const statusFilter = extractFlag(args, "--status");
   const store = new FilesystemSkillStore(SKILLS_DIR);
-  const summaries = await store.list(statusFilter !== undefined ? { status: statusFilter } : undefined);
-  if (summaries.length === 0) {
+  const metas = await store.query(
+    statusFilter !== undefined ? { status: statusFilter as "draft" | "approved" | "disabled" } : undefined,
+  );
+  if (metas.length === 0) {
     process.stdout.write(`No skills found in ${SKILLS_DIR}.\nRun \`skillfile init\` to scaffold the tree.\n`);
     return 0;
   }
-  for (const s of summaries) {
-    const status = s.status !== undefined ? ` [${s.status}]` : "";
-    const desc = s.description !== undefined ? ` — ${s.description}` : "";
-    process.stdout.write(`  ${s.name}${status}${desc}\n`);
+  for (const m of metas) {
+    const desc = m.description !== undefined ? ` — ${m.description}` : "";
+    process.stdout.write(`  ${m.name} [${m.status}]${desc}\n`);
   }
   return 0;
 }

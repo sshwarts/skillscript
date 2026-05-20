@@ -53,8 +53,11 @@ export type { DispatchFn } from "./connectors/mcp.js";
 export type {
   SkillStore,
   SkillStoreClass,
-  SkillRecord,
-  SkillSummary,
+  SkillSource,
+  SkillMeta,
+  SkillStatus,
+  SkillFilter,
+  VersionInfo,
   MemoryStore,
   MemoryStoreClass,
   PortableMemory,
@@ -70,3 +73,16 @@ export type {
   CuratedMemoryField,
 } from "./connectors/types.js";
 export { CURATED_MEMORY_FIELDS } from "./connectors/types.js";
+
+export {
+  ConnectorError,
+  SkillNotFoundError,
+  VersionNotFoundError,
+  LintFailureError,
+  StorageConflictError,
+  QueryError,
+  DispatchError,
+  ModelError,
+  TimeoutError,
+} from "./errors.js";
+export type { LintDiagnostic } from "./errors.js";
