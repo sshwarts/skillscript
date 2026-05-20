@@ -109,6 +109,20 @@ export class ReferenceIndex {
     for (const set of this.referencing.values()) n += set.size;
     return n;
   }
+
+  /**
+   * Replace this index's edges with another's. Used by
+   * `invalidateConnector()` when rebuilding from disk — the caller passes
+   * the long-lived index, we rebuild a fresh one off the store, then
+   * atomically swap the edges.
+   */
+  replaceAll(other: ReferenceIndex): void {
+    this.referencedBy.clear();
+    this.referencing.clear();
+    for (const [name, targets] of other.referencing) {
+      this.setOutgoing(name, Array.from(targets));
+    }
+  }
 }
 
 /**
@@ -194,20 +208,36 @@ export async function deleteSkill(
 }
 
 /**
- * Invalidate a connector's cached manifest. Triggers a refresh on the
- * next `manifest()` call. Used in dev/hot-reload loops and after operators
- * change connector state out-of-band (new Ollama model loaded, new MCP
- * server wired).
+ * Invalidate a connector's cached state. **"Refresh everything dependent
+ * on this connector."** Type-aware behavior:
+ *
+ *   - Any connector kind: calls `instance.invalidateManifest()` if defined.
+ *     Triggers a refresh on the next `manifest()` call.
+ *   - SkillStore (when an `index` is passed in `options`): also rebuilds
+ *     the reference index by re-scanning the store. The recovery path for
+ *     stale reference state after operators edit `.skill` files directly
+ *     without going through `storeSkill()`.
+ *
+ * Used in dev/hot-reload loops and after operators change connector state
+ * out-of-band (new Ollama model loaded, new MCP server wired, manual
+ * .skill file edit).
  *
  * Convention reminder: connectors bump their internal `capabilities_version`
  * on schema/structural changes, NOT on every query. This invalidate hook
  * is the explicit escape valve for cases where the version-bump didn't
- * fire (e.g., live model installation that the connector didn't observe).
+ * fire (e.g., live model installation that the connector didn't observe,
+ * or out-of-band .skill file edits the runtime didn't mediate).
+ *
+ * Returns `Promise<void>` because the SkillStore reference-index rebuild
+ * is async. Non-SkillStore invalidations complete synchronously but the
+ * surface is uniform.
  */
-export function invalidateConnector(name: string, registry: Registry): void {
-  // Walk all four kinds; whichever owns the name flushes its cache. We
-  // don't ask the caller which kind because operators think in connector
-  // names, not connector kinds.
+export async function invalidateConnector(
+  name: string,
+  registry: Registry,
+  options: { index?: ReferenceIndex } = {},
+): Promise<void> {
+  let matchedSkillStore: SkillStore | null = null;
   for (const lookup of [
     () => registry.hasLocalModel(name) ? registry.getLocalModel(name) : null,
     () => registry.hasMemoryStore(name) ? registry.getMemoryStore(name) : null,
@@ -219,6 +249,20 @@ export function invalidateConnector(name: string, registry: Registry): void {
     const maybe = instance as unknown as { invalidateManifest?: () => void };
     if (typeof maybe.invalidateManifest === "function") {
       maybe.invalidateManifest();
+    }
+  }
+  // Reference-index rebuild for SkillStore invalidations. Out-of-band
+  // .skill file edits (vim, direct disk writes) leave the in-memory
+  // reference index stale — incremental updates only fire through
+  // storeSkill(). A SkillStore invalidate is the explicit recovery.
+  if (registry.hasSkillStore(name)) {
+    matchedSkillStore = registry.getSkillStore(name);
+    if (options.index !== undefined) {
+      const fresh = await buildReferenceIndex(matchedSkillStore);
+      // Replace this index's edges with the rebuilt set. We do it by
+      // walking known edges + clearing them, then applying the fresh
+      // edges — cheaper than mutating private state from outside.
+      options.index.replaceAll(fresh);
     }
   }
 }

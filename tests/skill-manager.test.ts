@@ -147,18 +147,37 @@ describe("buildReferenceIndex", () => {
 describe("invalidateConnector", () => {
   it("invokes invalidateManifest on the named instance if defined", async () => {
     const ollama = new OllamaLocalModel({ defaultModelTag: "gemma2:9b" });
-    // Prime the cache so we can observe invalidation.
-    // Actual fetch will fail (no Ollama running) but the cache fills with [].
     await ollama.manifest();
     registry.registerLocalModel("default", ollama);
-    invalidateConnector("default", registry);
-    // After invalidation the next manifest call will re-fetch. We can't
-    // assert that without a fake Ollama; just verify the method exists
-    // and didn't throw.
+    await invalidateConnector("default", registry);
     expect(typeof (ollama as unknown as { invalidateManifest: () => void }).invalidateManifest).toBe("function");
   });
 
-  it("no-ops silently when name doesn't match any registered connector", () => {
-    expect(() => invalidateConnector("missing", registry)).not.toThrow();
+  it("no-ops silently when name doesn't match any registered connector", async () => {
+    await expect(invalidateConnector("missing", registry)).resolves.toBeUndefined();
+  });
+
+  it("rebuilds the reference index when the connector is a SkillStore", async () => {
+    // Pre-populate the index with a stale edge that doesn't reflect disk state.
+    // After invalidateConnector, the rebuild should scan the store (which has
+    // no skills + no & ops) and clear the stale edge.
+    index.setOutgoing("phantom-source", ["phantom-target"]);
+    expect(index.size()).toBe(1);
+
+    await invalidateConnector("primary", registry, { index });
+
+    // Real store is empty (no & ops in T1 grammar anyway), so rebuild yields zero edges.
+    expect(index.size()).toBe(0);
+  });
+
+  it("doesn't touch the index when no index is passed", async () => {
+    // Even though "primary" matches a SkillStore, omitting `index` means
+    // the rebuild step is skipped. Index stays whatever it was.
+    index.setOutgoing("phantom-source", ["phantom-target"]);
+    expect(index.size()).toBe(1);
+
+    await invalidateConnector("primary", registry);
+
+    expect(index.size()).toBe(1); // untouched
   });
 });
