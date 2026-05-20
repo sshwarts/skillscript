@@ -86,3 +86,14 @@ export {
   TimeoutError,
 } from "./errors.js";
 export type { LintDiagnostic } from "./errors.js";
+
+export {
+  ReferenceIndex,
+  ReferentialIntegrityError,
+  buildReferenceIndex,
+  extractReferences,
+  storeSkill,
+  deleteSkill,
+  invalidateConnector,
+} from "./skill-manager.js";
+export type { DeleteSkillOptions } from "./skill-manager.js";
