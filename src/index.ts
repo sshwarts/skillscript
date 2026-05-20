@@ -52,15 +52,21 @@ export type { DispatchFn } from "./connectors/mcp.js";
 
 export type {
   SkillStore,
+  SkillStoreClass,
   SkillRecord,
   SkillSummary,
   MemoryStore,
+  MemoryStoreClass,
   PortableMemory,
   QueryFilters,
   LocalModel,
+  LocalModelClass,
   McpConnector,
+  McpConnectorClass,
   McpDispatchCtx,
-  Capabilities,
+  StaticCapabilities,
+  ManifestInfo,
+  ConnectorType,
   CuratedMemoryField,
 } from "./connectors/types.js";
 export { CURATED_MEMORY_FIELDS } from "./connectors/types.js";

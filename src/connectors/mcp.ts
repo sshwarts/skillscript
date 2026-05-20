@@ -1,8 +1,11 @@
 import type {
   McpConnector,
   McpDispatchCtx,
-  Capabilities,
+  StaticCapabilities,
+  ManifestInfo,
 } from "./types.js";
+
+const CONTRACT_VERSION = "1.0.0";
 
 /**
  * Callback-based McpConnector. Wraps a user-supplied dispatch function and
@@ -23,6 +26,19 @@ export type DispatchFn = (
 ) => Promise<unknown>;
 
 export class CallbackMcpConnector implements McpConnector {
+  static staticCapabilities(): StaticCapabilities {
+    return {
+      connector_type: "mcp_connector",
+      implementation: "CallbackMcpConnector",
+      contract_version: CONTRACT_VERSION,
+      features: {
+        supports_identity_propagation: true,
+        supports_streaming_responses: false,
+        supports_batch: false,
+      },
+    };
+  }
+
   constructor(private readonly dispatchFn: DispatchFn) {}
 
   call(
@@ -33,7 +49,12 @@ export class CallbackMcpConnector implements McpConnector {
     return this.dispatchFn(toolName, args, ctxOverrides);
   }
 
-  capabilities(): Capabilities {
-    return { kind: "callback" };
+  async manifest(): Promise<ManifestInfo> {
+    return {
+      capabilities_version: "1",
+      manifest: {
+        kind: "callback",
+      },
+    };
   }
 }

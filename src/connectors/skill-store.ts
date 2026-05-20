@@ -5,8 +5,11 @@ import type {
   SkillStore,
   SkillRecord,
   SkillSummary,
-  Capabilities,
+  StaticCapabilities,
+  ManifestInfo,
 } from "./types.js";
+
+const CONTRACT_VERSION = "1.0.0";
 
 /**
  * Filesystem-backed SkillStore. Skills live as `*.skill` files under a
@@ -18,7 +21,32 @@ import type {
  * land in T2 (the full SkillStore surface plus capabilities discovery).
  */
 export class FilesystemSkillStore implements SkillStore {
+  static staticCapabilities(): StaticCapabilities {
+    return {
+      connector_type: "skill_store",
+      implementation: "FilesystemSkillStore",
+      contract_version: CONTRACT_VERSION,
+      features: {
+        supports_writes: true,
+        supports_tag_filter: false,
+        supports_versioning: false,
+        supports_audit_trail: false,
+        supports_atomic_status_transitions: false,
+      },
+    };
+  }
+
   constructor(private readonly rootDir: string) {}
+
+  async manifest(): Promise<ManifestInfo> {
+    return {
+      capabilities_version: "1",
+      manifest: {
+        kind: "filesystem",
+        root_dir: this.rootDir,
+      },
+    };
+  }
 
   async load(name: string): Promise<SkillRecord | null> {
     const path = this.pathFor(name);
@@ -77,14 +105,6 @@ export class FilesystemSkillStore implements SkillStore {
     }
     summaries.sort((a, b) => a.name.localeCompare(b.name));
     return summaries;
-  }
-
-  capabilities(): Capabilities {
-    return {
-      kind: "filesystem",
-      writable: true,
-      rootDir: this.rootDir,
-    };
   }
 
   /** Helper for authoring tools — writes a `.skill` file to the store. */

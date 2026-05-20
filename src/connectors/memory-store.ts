@@ -5,8 +5,11 @@ import type {
   MemoryStore,
   PortableMemory,
   QueryFilters,
-  Capabilities,
+  StaticCapabilities,
+  ManifestInfo,
 } from "./types.js";
+
+const CONTRACT_VERSION = "1.0.0";
 
 /**
  * SQLite-backed MemoryStore. Schema:
@@ -36,6 +39,23 @@ export interface SqliteMemoryStoreConfig {
 }
 
 export class SqliteMemoryStore implements MemoryStore {
+  static staticCapabilities(): StaticCapabilities {
+    return {
+      connector_type: "memory_store",
+      implementation: "SqliteMemoryStore",
+      contract_version: CONTRACT_VERSION,
+      features: {
+        supports_writes: true,
+        supports_tag_filter: true,
+        supports_semantic: false,
+        supports_rerank: false,
+        supports_thread_status_filter: false,
+        supports_pinning: false,
+        supports_decay_model: false,
+      },
+    };
+  }
+
   private readonly db: DatabaseSync;
 
   constructor(config: SqliteMemoryStoreConfig) {
@@ -106,12 +126,15 @@ export class SqliteMemoryStore implements MemoryStore {
     return results;
   }
 
-  capabilities(): Capabilities {
+  async manifest(): Promise<ManifestInfo> {
     return {
-      kind: "sqlite-fts",
-      supportedModes: ["fts"],
-      scoreRange: "unbounded",
-      supportedFilters: ["domain_tags"],
+      capabilities_version: "1",
+      manifest: {
+        kind: "sqlite-fts",
+        supported_modes: ["fts"],
+        score_range: "unbounded",
+        supported_filters: ["domain_tags"],
+      },
     };
   }
 

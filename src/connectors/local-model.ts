@@ -1,4 +1,6 @@
-import type { LocalModel, Capabilities } from "./types.js";
+import type { LocalModel, StaticCapabilities, ManifestInfo } from "./types.js";
+
+const CONTRACT_VERSION = "1.0.0";
 
 /**
  * Ollama HTTP client. Wraps `POST /api/generate` with the registered model
@@ -20,9 +22,24 @@ export interface OllamaConfig {
 }
 
 export class OllamaLocalModel implements LocalModel {
+  static staticCapabilities(): StaticCapabilities {
+    return {
+      connector_type: "local_model",
+      implementation: "OllamaLocalModel",
+      contract_version: CONTRACT_VERSION,
+      features: {
+        supports_max_tokens: true,
+        supports_timeout: true,
+        supports_streaming: false,
+        supports_embedding: false,
+      },
+    };
+  }
+
   private readonly baseUrl: string;
   private readonly defaultModelTag: string;
   private readonly timeoutMs: number;
+  private manifestCache: { version: string; models: string[] } | null = null;
 
   constructor(config: OllamaConfig) {
     this.baseUrl = config.baseUrl ?? "http://localhost:11434";
@@ -69,11 +86,44 @@ export class OllamaLocalModel implements LocalModel {
     }
   }
 
-  capabilities(): Capabilities {
+  /**
+   * Runtime manifest. Queries `/api/tags` for the live model list. Cached
+   * until `invalidateManifest()` (or in the future, a `runtime.invalidateConnector()`
+   * call) flushes it. Authors don't add new models often enough to justify
+   * polling on every dispatch.
+   */
+  async manifest(): Promise<ManifestInfo> {
+    if (this.manifestCache === null) {
+      const models = await this.fetchInstalledModels().catch(() => [] as string[]);
+      this.manifestCache = { version: "1", models };
+    }
     return {
-      kind: "ollama",
-      modelTag: this.defaultModelTag,
-      baseUrl: this.baseUrl,
+      capabilities_version: this.manifestCache.version,
+      manifest: {
+        kind: "ollama",
+        base_url: this.baseUrl,
+        default_model_tag: this.defaultModelTag,
+        models_available: this.manifestCache.models,
+      },
     };
+  }
+
+  invalidateManifest(): void {
+    this.manifestCache = null;
+  }
+
+  private async fetchInstalledModels(): Promise<string[]> {
+    const controller = new AbortController();
+    const t = setTimeout(() => controller.abort(), 5_000);
+    try {
+      const resp = await fetch(`${this.baseUrl}/api/tags`, { signal: controller.signal });
+      if (!resp.ok) return [];
+      const data = (await resp.json()) as { models?: Array<{ name?: string }> };
+      return (data.models ?? []).map((m) => m.name ?? "").filter(Boolean);
+    } catch {
+      return [];
+    } finally {
+      clearTimeout(t);
+    }
   }
 }
