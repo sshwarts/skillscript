@@ -9,7 +9,9 @@
 // semantics, and the full v1 lint set land in later threads (see
 // ARCHITECTURE.md "Out-of-scope for T1").
 
-export { parse, toposort, applyFilter, tokenizeKeywordArgs, processSetValue } from "./parser.js";
+export { parse, tokenizeKeywordArgs, processSetValue } from "./parser.js";
+export { toposort } from "./compile.js";
+export { applyFilter } from "./filters.js";
 export type {
   ParsedSkill,
   SkillOp,

@@ -1,5 +1,7 @@
 import { describe, it, expect } from "vitest";
-import { parse, toposort, applyFilter } from "../src/parser.js";
+import { parse } from "../src/parser.js";
+import { toposort } from "../src/compile.js";
+import { applyFilter } from "../src/filters.js";
 
 describe("parser", () => {
   it("parses headers + simple skill", () => {

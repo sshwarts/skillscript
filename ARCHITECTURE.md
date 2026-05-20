@@ -9,11 +9,12 @@ src/
   index.ts              — library entrypoint; named exports for embedders
   cli.ts                — `skillfile` CLI entrypoint
   parser.ts             — source text → AST
-  compile.ts            — AST → resolved skill model → rendered artifact
+  compile.ts            — AST → resolved skill model → rendered artifact (owns toposort)
+  filters.ts            — pipe-filter implementations (url / shell / json / trim)
   lint.ts               — structural validation (compiler preflight + standalone)
   runtime.ts            — executor: walks compiled artifact, dispatches ops
-  scheduler.ts          — trigger registry + cron scan
-  output.ts             — output dispatch (text, prompt-context, none)
+  scheduler.ts          — trigger registry + cron scan (T5)
+  output.ts             — output dispatch (text, prompt-context, none) (T6/T7)
   connectors/
     types.ts            — contracts: SkillStore, MemoryStore, LocalModel, McpConnector
     registry.ts         — per-kind instance registry + three-layer resolution
@@ -23,15 +24,16 @@ src/
     mcp.ts              — bundled default: stub; no servers wired by default
 ```
 
-Target: 14 source files. Budget for future growth: 5 more.
+Target: 13 source files written + 2 more planned (scheduler.ts in T5, output.ts in T6/T7). Budget headroom from the < 20 ceiling: 5 files.
 
 ## What each file owns
 
 | File | Responsibility |
 | --- | --- |
 | `parser.ts` | Tokenize and parse skill source. Header lines, target blocks, op grammar, conditionals, `foreach`, variable interpolation. Produces AST. Syntax errors only — semantic checks are downstream. |
-| `compile.ts` | Three subsystems: (1) variable resolution against `# Requires:` cascade + caller inputs; (2) data-skill compile-time inlining; (3) topo-sort + render. Output formats: `prompt` (canonical), `prose`, `test`. Produces compiled artifact + provenance. |
-| `lint.ts` | Structural rules: undeclared vars, missing deps, malformed ops, lifecycle status enforcement, `@@` opt-in flagging. Used by `compile.ts` as preflight and exposed as `skillfile lint`. Structured diagnostics. |
+| `compile.ts` | Three subsystems: (1) variable resolution against `# Requires:` cascade + caller inputs; (2) data-skill compile-time inlining (T3); (3) topo-sort + render. Owns the `toposort` function (semantic analysis). Output formats: `prompt` (canonical), `prose`, `test`. Produces compiled artifact + provenance. |
+| `filters.ts` | Pipe-filter implementations dispatched by `$(NAME|filter)` syntax. v1: `url`, `shell`, `json`, `trim`. Adding a new filter = adding a case to `applyFilter` and documenting it in the Language Reference. Per ERD §2 modifiability, this is the predictable location agents look for filter extensions. |
+| `lint.ts` | Structured diagnostics. T1 baseline rules: `parse-error` (any parser syntax error), `no-targets` (zero targets), `no-entry-target` (no `default:` resolved), `orphan-target` (target unreachable from entry). Full 20-rule v1 set + adversarial library land in T4 — baseline rules keep their IDs and severity through T4 so authors consuming today's diagnostics don't see breakage. |
 | `runtime.ts` | Executor that walks the compiled artifact and dispatches ops through connector instances. Handles error propagation, per-op timeout chain, `foreach` iteration, conditionals, `$set`, output binding. |
 | `scheduler.ts` | Trigger registry. Cron firing in v1; event/agent-event/file-watch/sensor are parse-only. Status-aware: skips `Draft` / `Disabled` skills at fire time. |
 | `output.ts` | Routes the goal target's output by `# Output:` header. Kinds: `text` (stdout), `prompt-context` (returns to caller), `none`. |

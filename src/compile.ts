@@ -3,10 +3,10 @@ import {
   type SkillOp,
   type OutputDecl,
   type SkillRequire,
-  applyFilter,
+  type SkillTarget,
   parse,
-  toposort,
 } from "./parser.js";
+import { applyFilter } from "./filters.js";
 import type { SkillStore } from "./connectors/types.js";
 
 /**
@@ -135,6 +135,7 @@ export async function compile(
 
   const order = toposort(parsed.targets, parsed.entryTarget);
 
+
   // Default output declaration when `# Output:` is absent.
   const outputs: OutputDecl[] = parsed.outputs.length > 0 ? parsed.outputs : [{ kind: "text" }];
 
@@ -169,6 +170,35 @@ export async function compile(
     warnings,
     parsed,
   };
+}
+
+/**
+ * Topological sort starting at `entry`. Leaves-first ordering. Throws on
+ * cycle or missing-dependency reference. Exported so embedders that compile
+ * by hand (parse → walk targets → ...) can use the same ordering as the
+ * default compile pipeline.
+ */
+export function toposort(targets: Map<string, SkillTarget>, entry: string): string[] {
+  const visited = new Set<string>();
+  const visiting = new Set<string>();
+  const order: string[] = [];
+  function visit(name: string): void {
+    if (visited.has(name)) return;
+    if (visiting.has(name)) {
+      throw new Error(`Dependency cycle detected at target '${name}'`);
+    }
+    const target = targets.get(name);
+    if (!target) {
+      throw new Error(`Target '${name}' references missing dependency`);
+    }
+    visiting.add(name);
+    for (const dep of target.deps) visit(dep);
+    visiting.delete(name);
+    visited.add(name);
+    order.push(name);
+  }
+  visit(entry);
+  return order;
 }
 
 /**

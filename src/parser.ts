@@ -668,49 +668,5 @@ export function parse(source: string): ParsedSkill {
   return result;
 }
 
-/**
- * Topological sort starting at `entry`. Leaves-first ordering. Throws on
- * cycle or missing-dependency reference.
- */
-export function toposort(targets: Map<string, SkillTarget>, entry: string): string[] {
-  const visited = new Set<string>();
-  const visiting = new Set<string>();
-  const order: string[] = [];
-  function visit(name: string): void {
-    if (visited.has(name)) return;
-    if (visiting.has(name)) {
-      throw new Error(`Dependency cycle detected at target '${name}'`);
-    }
-    const target = targets.get(name);
-    if (!target) {
-      throw new Error(`Target '${name}' references missing dependency`);
-    }
-    visiting.add(name);
-    for (const dep of target.deps) visit(dep);
-    visiting.delete(name);
-    visited.add(name);
-    order.push(name);
-  }
-  visit(entry);
-  return order;
-}
-
-/**
- * Pipe-filter syntax: `$(NAME|filter)`. Filters apply at compile time when
- * the value is already resolved, or at runtime for ambient refs. Unknown
- * filter names throw.
- */
-export function applyFilter(value: string, filter: string): string {
-  switch (filter) {
-    case "url":
-      return encodeURIComponent(value);
-    case "shell":
-      return `'${value.replace(/'/g, "'\\''")}'`;
-    case "json":
-      return JSON.stringify(value);
-    case "trim":
-      return value.trim();
-    default:
-      throw new Error(`Unknown filter '${filter}' — supported: url, shell, json, trim`);
-  }
-}
+// Toposort moved to compile.ts (semantic analysis). applyFilter moved to
+// filters.ts (predictable filter-add location per ERD §2 modifiability).

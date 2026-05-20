@@ -1,11 +1,29 @@
 import { parse } from "./parser.js";
 
 /**
- * Lint diagnostics. T1 baseline surfaces parser errors as structured
- * findings. The full 20-rule v1 lint set (Tier-1 hard fails, Tier-2 opt-in
- * gates, Tier-3 style nits) lands in T4 along with the adversarial example
- * library. Authors and tooling consume `LintFinding[]`; CI gates on
- * `severity === "error"`.
+ * Lint diagnostics. T1 baseline rules — the full 20-rule v1 set (Tier-1
+ * hard fails, Tier-2 opt-in gates, Tier-3 style nits) plus the adversarial
+ * example library land in T4. Authors and tooling consume `LintFinding[]`;
+ * CI gates on `severity === "error"`.
+ *
+ * ## T1 baseline rules
+ *
+ *   parse-error       (error)    — any syntax error collected by the parser.
+ *                                  Covers every grammar rule the parser
+ *                                  validates (op shape, conditional grammar,
+ *                                  header well-formedness, indent/dedent
+ *                                  consistency, target structure).
+ *   no-targets        (error)    — the skill defines zero targets.
+ *   no-entry-target   (error)    — targets exist but no `default:` line and
+ *                                  no implicit fallback resolved.
+ *   orphan-target     (warning)  — a target isn't reachable from the entry
+ *                                  via the `needs:` DAG; surfaces the
+ *                                  Make-style composition gotcha.
+ *
+ * T4 extends this. The contract for T4: every rule in the baseline keeps
+ * its rule ID and severity (no renames, no severity demotions); T4 adds
+ * new rule IDs alongside. Authors who consume the baseline diagnostics
+ * today shouldn't see breakage when T4 lands.
  */
 export type LintSeverity = "error" | "warning" | "info";
 

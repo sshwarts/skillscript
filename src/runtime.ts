@@ -1,5 +1,6 @@
 import type { ParsedSkill, SkillOp, OutputDecl } from "./parser.js";
-import { applyFilter, tokenizeKeywordArgs, processSetValue } from "./parser.js";
+import { tokenizeKeywordArgs, processSetValue } from "./parser.js";
+import { applyFilter } from "./filters.js";
 import type { Registry } from "./connectors/registry.js";
 
 /**
