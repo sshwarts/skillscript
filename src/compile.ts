@@ -297,9 +297,14 @@ async function inlineOps(
         });
         // Recursively inline data-skills referenced by this data-skill.
         await inlineDataSkills(refParsed, store, inlinedRecord, [...chain, refName]);
-        // Synthesize the inlined op: $set if outputVar named, else !.
-        const content = dataSkillContent(refParsed);
+        // Synthesize the inlined ops. Output-binding case (`-> VAR`)
+        // collapses the content into one $set so $(VAR) substitution
+        // sees a single value. Bare case splats into N `!` ops mirroring
+        // the data-skill's op structure — preserves per-rule granularity
+        // so an agent reading the parent's compiled output sees the
+        // guidance directives as separate items, not one giant emission.
         if (op.outputVar !== undefined) {
+          const content = dataSkillContent(refParsed);
           out.push({
             kind: "$set",
             body: `$set ${op.outputVar} = ${content}`,
@@ -307,10 +312,9 @@ async function inlineOps(
             setValue: content,
           });
         } else {
-          out.push({
-            kind: "!",
-            body: content,
-          });
+          for (const dataOp of dataSkillBangOps(refParsed)) {
+            out.push({ kind: "!", body: dataOp });
+          }
         }
         continue;
       }
@@ -340,12 +344,21 @@ async function inlineOps(
 }
 
 /**
- * Extract the inlineable content of a data-skill. Concatenates the bodies
- * of `!` ops across all targets in topological order. Headers are skipped;
- * only the emitted content is what consumers want when composing.
+ * Extract the inlineable content of a data-skill as a single joined string.
+ * Used for output-binding inlining (`& data -> VAR`) where the consumer
+ * wants the whole content as one value.
  */
 function dataSkillContent(parsed: ParsedSkill): string {
-  if (parsed.entryTarget === null) return "";
+  return dataSkillBangOps(parsed).join("\n");
+}
+
+/**
+ * Extract each `!` op body from a data-skill in topological order.
+ * Used for bare-`&` inlining where we synthesize N `!` ops in the parent
+ * to preserve the per-rule structure agents need for reading.
+ */
+function dataSkillBangOps(parsed: ParsedSkill): string[] {
+  if (parsed.entryTarget === null) return [];
   const order = toposort(parsed.targets, parsed.entryTarget);
   const lines: string[] = [];
   for (const name of order) {
@@ -355,7 +368,7 @@ function dataSkillContent(parsed: ParsedSkill): string {
       if (op.kind === "!") lines.push(op.body);
     }
   }
-  return lines.join("\n");
+  return lines;
 }
 
 function anyAmpDataLookupNeeded(parsed: ParsedSkill): boolean {

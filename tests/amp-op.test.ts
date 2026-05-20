@@ -371,6 +371,46 @@ default: t
     await expect(compile(CALLER, { skillStore: store })).rejects.toThrow(/cycle detected/i);
   });
 
+  it("bare & data-skill splats into N ! ops, one per source ! op (preserves per-rule structure)", async () => {
+    // Dogfood-driven: a data-skill with three guidance bullets should
+    // inline as three separate `!` ops in the parent, not one joined
+    // emission. Agents reading the parent's compiled output see the
+    // rules as distinct items.
+    const VOICE_GUIDE = `# Skill: voice-guide
+# Type: data
+
+t:
+    ! rule one
+    ! rule two
+    ! rule three
+
+default: t
+`;
+    const CALLER = `# Skill: caller
+t:
+    & voice-guide
+    ! after
+
+default: t
+`;
+    await registry.getSkillStore().store("voice-guide", VOICE_GUIDE);
+
+    const compiled = await compile(CALLER, { skillStore: registry.getSkillStore() });
+
+    // Three separate "Tell the user: rule N" lines in the rendered output.
+    expect(compiled.output).toContain("Tell the user: rule one");
+    expect(compiled.output).toContain("Tell the user: rule two");
+    expect(compiled.output).toContain("Tell the user: rule three");
+    // Not joined with embedded newlines.
+    expect(compiled.output).not.toMatch(/Tell the user: rule one\nrule two/);
+
+    // AST inspection: parent's target should now have 4 `!` ops (3 inlined + 1 original).
+    const callerTarget = compiled.parsed.targets.get("t")!;
+    const bangOps = callerTarget.ops.filter((op) => op.kind === "!");
+    expect(bangOps).toHaveLength(4);
+    expect(bangOps.map((op) => op.body)).toEqual(["rule one", "rule two", "rule three", "after"]);
+  });
+
   it("inlined data-skill compiled artifact has no & op in the AST", async () => {
     const VOICE_GUIDE = `# Skill: voice-guide
 # Type: data

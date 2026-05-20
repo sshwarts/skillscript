@@ -1,0 +1,18 @@
+{
+  "provenance_version": "1.0",
+  "language_version": "1.0",
+  "compiler_version": "0.1.0-dev",
+  "compiled_at": "2026-05-20T21:06:13.989Z",
+  "source_skill": {
+    "name": "milestone-thread-template",
+    "version": "e92d72936faa",
+    "content_hash": "e92d72936faaf3e8546bc7b299a546076a93ea537ec82e161d96b2e1a55559b2"
+  },
+  "data_skills_inlined": [
+    {
+      "name": "cc-voice",
+      "version": "b82c37c186be",
+      "content_hash": "b82c37c186bed306f10ad618dd7b368a28b15d1e0244f0c6d1384b4f8354b561"
+    }
+  ]
+}

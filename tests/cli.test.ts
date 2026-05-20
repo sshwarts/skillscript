@@ -63,4 +63,35 @@ describe("skillfile CLI", () => {
     expect(r2.code).toBe(0);
     expect(r2.stdout).toMatch(/Hello, world!/);
   });
+
+  it("run resolves data-skill references via the SkillStore (regression: cmdRun was skipping inline)", () => {
+    // Dogfood-driven: a hand-authored skill with `& cc-voice` reference
+    // was failing to execute via `skillfile run` because cmdRun wasn't
+    // threading the SkillStore into compile(). The compile path was
+    // already passing it; run had to be brought in line.
+    const home = mkdtempSync(resolve(tmpdir(), "skillscript-test-"));
+    runCli(["init"], { SKILLSCRIPT_HOME: home });
+    // Write a data-skill and a caller that references it.
+    const fs = require("node:fs") as typeof import("node:fs");
+    const path = require("node:path") as typeof import("node:path");
+    fs.writeFileSync(path.join(home, "skills", "voice.skill"), `# Skill: voice
+# Type: data
+
+t:
+    ! be concise
+
+default: t
+`);
+    fs.writeFileSync(path.join(home, "skills", "caller.skill"), `# Skill: caller
+t:
+    & voice
+    ! ok
+
+default: t
+`);
+    const r = runCli(["run", "caller"], { SKILLSCRIPT_HOME: home });
+    expect(r.code).toBe(0);
+    expect(r.stdout).toMatch(/be concise/);
+    expect(r.stdout).toMatch(/ok/);
+  });
 });

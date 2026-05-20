@@ -131,6 +131,7 @@ async function cmdRun(args: string[]): Promise<number> {
     const compiled = await compile(source, {
       inputs: opts.inputs,
       format: opts.format,
+      skillStore: registry.getSkillStore(),
     });
     const result = await execute(compiled.parsed, compiled.resolvedVariables, compiled.targetOrder, {
       registry,
