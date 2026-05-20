@@ -55,6 +55,10 @@ describe("SqliteMemoryStore conformance", () => {
       return new SqliteMemoryStore({ dbPath: join(d, "test.db") });
     },
     ctor: SqliteMemoryStore,
+    // Close the SQLite handle so Windows can unlink the file in afterEach.
+    // Linux/macOS don't care (open files can be unlinked), but Windows
+    // locks held files.
+    teardown: async (instance) => { (instance as { close?(): void }).close?.(); },
   });
 
   for (const t of tests) {
