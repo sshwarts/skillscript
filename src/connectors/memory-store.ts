@@ -1,4 +1,4 @@
-import { DatabaseSync } from "node:sqlite";
+import { createRequire } from "node:module";
 import { dirname } from "node:path";
 import { mkdirSync, existsSync } from "node:fs";
 import type {
@@ -10,6 +10,30 @@ import type {
 } from "./types.js";
 
 const CONTRACT_VERSION = "1.0.0";
+
+/**
+ * Lazy-load `node:sqlite` at instance construction time, not at module
+ * load time. Two reasons:
+ *   1. The Vite transformer (used by vitest dev pipeline) strips the
+ *      `node:` prefix and fails to resolve plain `sqlite`. Lazy-loading
+ *      via createRequire bypasses Vite entirely.
+ *   2. CLI invocations that never touch SQLite (running a no-LocalModel
+ *      skill, listing skills, etc.) don't pay the ExperimentalWarning
+ *      cost on every command.
+ *
+ * Type guarded as `unknown` since we can't import the type without paying
+ * the load cost.
+ */
+const requireNode = createRequire(import.meta.url);
+type DatabaseSyncCtor = new (path: string) => DatabaseSync;
+interface DatabaseSync {
+  exec(sql: string): void;
+  prepare(sql: string): { get(params?: object): unknown; all(params?: object): unknown[]; run(params?: object): unknown };
+  close(): void;
+}
+function loadDatabaseSync(): DatabaseSyncCtor {
+  return (requireNode("node:sqlite") as { DatabaseSync: DatabaseSyncCtor }).DatabaseSync;
+}
 
 /**
  * SQLite-backed MemoryStore. Schema:
@@ -61,6 +85,7 @@ export class SqliteMemoryStore implements MemoryStore {
   constructor(config: SqliteMemoryStoreConfig) {
     const dir = dirname(config.dbPath);
     if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
+    const DatabaseSync = loadDatabaseSync();
     this.db = new DatabaseSync(config.dbPath);
     this.bootstrap();
   }

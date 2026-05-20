@@ -70,7 +70,15 @@ export interface ParsedSkill {
   name: string | null;
   description: string | null;
   vars: SkillVar[];
+  /** Variable resolution declarations — `user-var:key -> VAR (fallback: X)` shape. */
   requires: SkillRequire[];
+  /**
+   * Capability requirements — `connector_type.feature_flag` tokens. The
+   * linter's `unknown-capability` rule validates these against the
+   * registered connector classes' `staticCapabilities()`. Empty when no
+   * capability `# Requires:` clauses are authored.
+   */
+  requiredCapabilities: string[];
   useWhen: string | null;
   targets: Map<string, SkillTarget>;
   entryTarget: string | null;
@@ -82,6 +90,8 @@ export interface ParsedSkill {
 
 // Regex grammar.
 const REQUIRES_LINE = /^(user-var|system-var):([A-Za-z0-9_-]+)\s*(?:→|->)\s*([A-Za-z_][\w-]*)\s*(?:\(\s*fallback\s*:\s*(.+?)\s*\)\s*)?$/;
+/** Capability token: `connector_type.feature_flag`. Matches one space-separated token of a capability `# Requires:` line. */
+const CAPABILITY_TOKEN = /^[a-z_][a-z0-9_]*\.[a-z_][a-z0-9_]*$/;
 const SET_OP_REGEX = /^\$set\s+([A-Za-z_]\w*)\s*=\s*(.*)$/;
 const FOREACH_OP_REGEX = /^foreach\s+([A-Za-z_]\w*)\s+in\s+(.+?):\s*$/;
 const IF_OP_REGEX = /^if\s+(.+?):\s*$/;
@@ -294,6 +304,7 @@ export function parse(source: string): ParsedSkill {
     description: null,
     vars: [],
     requires: [],
+    requiredCapabilities: [],
     useWhen: null,
     targets: new Map(),
     entryTarget: null,
@@ -400,15 +411,24 @@ export function parse(source: string): ParsedSkill {
       } else if (key === "requires") {
         if (value.toLowerCase() === "(none)" || value === "") continue;
         const match = REQUIRES_LINE.exec(value);
-        if (!match) continue;
-        const [, namespace, k, target, fallback] = match;
-        result.requires.push({
-          namespace: namespace as "user-var" | "system-var",
-          key: k!,
-          target: target!,
-          fallback: fallback === undefined ? null : fallback,
-          raw: value,
-        });
+        if (match) {
+          const [, namespace, k, target, fallback] = match;
+          result.requires.push({
+            namespace: namespace as "user-var" | "system-var",
+            key: k!,
+            target: target!,
+            fallback: fallback === undefined ? null : fallback,
+            raw: value,
+          });
+        } else {
+          // Try capability form: space-separated `connector_type.feature_flag`
+          // tokens. Silently drop the line if it matches neither shape
+          // (existing parser convention for unknown # Requires: dialects).
+          const tokens = value.trim().split(/\s+/);
+          if (tokens.length > 0 && tokens.every((t) => CAPABILITY_TOKEN.test(t))) {
+            for (const t of tokens) result.requiredCapabilities.push(t);
+          }
+        }
       }
       continue;
     }

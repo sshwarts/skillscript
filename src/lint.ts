@@ -1,29 +1,35 @@
 import { parse } from "./parser.js";
+import type { StaticCapabilities } from "./connectors/types.js";
+import type { Registry } from "./connectors/registry.js";
 
 /**
- * Lint diagnostics. T1 baseline rules — the full 20-rule v1 set (Tier-1
- * hard fails, Tier-2 opt-in gates, Tier-3 style nits) plus the adversarial
+ * Lint diagnostics. T2 baseline rules — the full 20-rule v1 set (tier-1
+ * hard fails, tier-2 opt-in gates, tier-3 style nits) plus the adversarial
  * example library land in T4. Authors and tooling consume `LintFinding[]`;
  * CI gates on `severity === "error"`.
  *
- * ## T1 baseline rules
+ * ## Current baseline rules
  *
- *   parse-error       (error)    — any syntax error collected by the parser.
- *                                  Covers every grammar rule the parser
- *                                  validates (op shape, conditional grammar,
- *                                  header well-formedness, indent/dedent
- *                                  consistency, target structure).
- *   no-targets        (error)    — the skill defines zero targets.
- *   no-entry-target   (error)    — targets exist but no `default:` line and
- *                                  no implicit fallback resolved.
- *   orphan-target     (warning)  — a target isn't reachable from the entry
- *                                  via the `needs:` DAG; surfaces the
- *                                  Make-style composition gotcha.
+ *   parse-error          (error)    — any syntax error collected by the parser.
+ *   no-targets           (error)    — the skill defines zero targets.
+ *   no-entry-target      (error)    — targets exist but no `default:` line
+ *                                     and no implicit fallback resolved.
+ *   orphan-target        (warning)  — a target isn't reachable from the
+ *                                     entry via the `needs:` DAG; surfaces
+ *                                     the Make-style composition gotcha.
+ *   unknown-capability   (error)    — a `# Requires:` capability clause
+ *                                     names a feature flag that no
+ *                                     registered connector class reports
+ *                                     as true. The validation is OFFLINE:
+ *                                     lint reads `Ctor.staticCapabilities()`
+ *                                     for each provided class without
+ *                                     constructing instances or touching
+ *                                     the underlying substrate.
  *
- * T4 extends this. The contract for T4: every rule in the baseline keeps
- * its rule ID and severity (no renames, no severity demotions); T4 adds
- * new rule IDs alongside. Authors who consume the baseline diagnostics
- * today shouldn't see breakage when T4 lands.
+ * T4 extends this. Contract for T4: every baseline rule keeps its rule ID
+ * and severity (no renames, no severity demotions); T4 adds new rule IDs
+ * alongside. Authors who consume baseline diagnostics today won't see
+ * breakage when T4 lands.
  */
 export type LintSeverity = "error" | "warning" | "info";
 
@@ -41,7 +47,25 @@ export interface LintResult {
   warningCount: number;
 }
 
-export function lint(source: string): LintResult {
+/**
+ * Options for `lint()`. Both `classes` and `registry` are optional; without
+ * either, capability validation is skipped (the `unknown-capability` rule
+ * just doesn't fire). When both are passed, `classes` wins — the caller
+ * has signaled intent to use that specific class set.
+ */
+export interface LintOptions {
+  /**
+   * Connector classes whose `staticCapabilities()` provides the available
+   * feature flags. The linter calls these directly — no instance
+   * construction, no network, no substrate reachability required. This
+   * is the offline-validation path.
+   */
+  classes?: Array<{ staticCapabilities(): StaticCapabilities }>;
+  /** Convenience: derive `classes` from a Registry's registered instances. */
+  registry?: Registry;
+}
+
+export function lint(source: string, options?: LintOptions): LintResult {
   const findings: LintFinding[] = [];
   const parsed = parse(source);
 
@@ -53,8 +77,6 @@ export function lint(source: string): LintResult {
     });
   }
 
-  // Structural sanity. These are conditions the compiler also fails on,
-  // but the lint surface lets authors discover them without invoking compile.
   if (parsed.targets.size === 0 && parsed.parseErrors.length === 0) {
     findings.push({
       rule: "no-targets",
@@ -70,7 +92,7 @@ export function lint(source: string): LintResult {
     });
   }
 
-  // Orphan-target warning — targets that aren't reachable from the entry.
+  // Orphan-target warning — targets unreachable from the entry.
   if (parsed.entryTarget !== null && parsed.targets.has(parsed.entryTarget)) {
     const reached = new Set<string>();
     function walk(name: string): void {
@@ -94,7 +116,58 @@ export function lint(source: string): LintResult {
     }
   }
 
+  // unknown-capability — offline validation against registered classes.
+  if (parsed.requiredCapabilities.length > 0) {
+    const classes = options?.classes ?? collectClassesFromRegistry(options?.registry);
+    if (classes !== null) {
+      const provided = buildFeatureSet(classes);
+      for (const cap of parsed.requiredCapabilities) {
+        if (!provided.has(cap)) {
+          findings.push({
+            rule: "unknown-capability",
+            severity: "error",
+            message:
+              `Skill requires capability '${cap}', but no registered connector class provides it. ` +
+              `Available: ${provided.size === 0 ? "(none)" : Array.from(provided).sort().join(", ")}.`,
+          });
+        }
+      }
+    }
+  }
+
   const errorCount = findings.filter((f) => f.severity === "error").length;
   const warningCount = findings.filter((f) => f.severity === "warning").length;
   return { findings, errorCount, warningCount };
+}
+
+function collectClassesFromRegistry(
+  registry: Registry | undefined,
+): Array<{ staticCapabilities(): StaticCapabilities }> | null {
+  if (registry === undefined) return null;
+  return [
+    ...registry.listSkillStoreClasses(),
+    ...registry.listMemoryStoreClasses(),
+    ...registry.listLocalModelClasses(),
+    ...registry.listMcpConnectorClasses(),
+  ];
+}
+
+/**
+ * Build the set of capability tokens (`connector_type.feature_flag`) that
+ * any provided class reports as `true`. The set's name format mirrors the
+ * skill author's `# Requires:` token shape so direct membership check works.
+ */
+function buildFeatureSet(
+  classes: Array<{ staticCapabilities(): StaticCapabilities }>,
+): Set<string> {
+  const provided = new Set<string>();
+  for (const Ctor of classes) {
+    const caps = Ctor.staticCapabilities();
+    for (const [flag, value] of Object.entries(caps.features)) {
+      if (value === true) {
+        provided.add(`${caps.connector_type}.${flag}`);
+      }
+    }
+  }
+  return provided;
 }

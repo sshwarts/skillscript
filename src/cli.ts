@@ -181,7 +181,11 @@ async function cmdLint(args: string[]): Promise<number> {
     process.stderr.write(`skillfile lint: skill '${ref}' not found\n`);
     return 1;
   }
-  const result = lint(source);
+  // Pass the bundled-default class set so capability `# Requires:`
+  // validation works against the standard connector surface.
+  const result = lint(source, {
+    classes: [FilesystemSkillStore, SqliteMemoryStore, OllamaLocalModel],
+  });
   if (result.findings.length === 0) {
     process.stdout.write("OK: no findings.\n");
     return 0;
