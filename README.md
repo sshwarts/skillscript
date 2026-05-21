@@ -11,17 +11,33 @@ A skillscript is a declarative recipe — a small program with a dependency DAG 
 ```sh
 npm install -g skillscript-runtime
 skillfile init
-skillfile run examples/hello.skill
+skillfile run examples/hello.skill.md
 ```
 
 That works on cold install — no Ollama, no environment setup. With Ollama running, additional examples demonstrate local-model dispatch.
 
+## Browser dashboard
+
+The runtime ships with a browser dashboard for non-CLI operators — see skills, fire history, trigger configuration, status transitions, connector health. Localhost-only by default; no auth in v1.
+
+```sh
+# Local install
+skillfile dashboard               # http://localhost:7878
+
+# Via docker-compose (runtime + dashboard colocated)
+docker compose up --build
+```
+
+The dashboard talks to the runtime via an MCP server contract (JSON-RPC 2.0) — same wire protocol that future MCP clients (Claude Desktop, Cursor, etc.) can use.
+
 ## What's in the box
 
-- **`skillfile` CLI** — `init`, `run`, `compile`, `lint`, `list`.
+- **`skillfile` CLI** — `init`, `run`, `compile`, `lint`, `list`, `fires`, `diagram`, `sign`/`verify`, `replay`, `health`, `dashboard`.
 - **Bundled-default connectors** — filesystem SkillStore, SQLite MemoryStore, Ollama LocalModel, MCP scaffold.
-- **Container image** — multi-arch, wired in the sample `docker-compose.yml` alongside Ollama and a SQLite volume.
-- **Library exports** — `import { compile, execute, lint } from "skillscript-runtime"` for embedding.
+- **Browser dashboard** — five views (overview / skills / triggers / connectors), 30s polling, write paths for status + trigger management.
+- **MCP server contract** — JSON-RPC 2.0 over stdio or HTTP; seven tool endpoints wrapping runtime primitives.
+- **Container image** — `docker-compose.yml` for one-command local setup.
+- **Library exports** — `import { compile, execute, lint, Scheduler, McpServer, DashboardServer } from "skillscript-runtime"` for embedding.
 
 ## Docs
 
