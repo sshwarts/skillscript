@@ -1,44 +1,72 @@
 version: "3.9"
 
-# Sample compose stack wiring skillscript-runtime alongside Ollama and a
-# host-bind for the SkillStore + MemoryStore. End-to-end demo:
+# Local development + small-deployment compose for skillscript-runtime.
 #
-#   docker compose up -d ollama
-#   docker compose run --rm runtime init
-#   docker compose run --rm runtime run examples/hello.skill
+# Three services, two profiles:
 #
-# Operators typically extend this with their own configured connectors via
-# ~/.skillscript/connectors.json.
+# - default profile (runtime+dashboard, the operator-path):
+#     docker compose up --build
+#     open http://localhost:7878
+#
+# - tools profile (one-shot CLI invocations):
+#     docker compose run --rm tools init
+#     docker compose run --rm tools run examples/hello.skill.md
+#
+# Optional ollama service for skills using `~` (LocalModel) ops.
+# Disabled by default; enable via `--profile ollama`.
 
 services:
+  # The default service — runtime + dashboard colocated. Per ERD §8
+  # the dashboard is conceptually a separate process; v1 colocates
+  # them in one node process (smaller footprint). v1.x can split.
+  dashboard:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+    image: skillscript-runtime:dev
+    container_name: skillscript-dashboard
+    ports:
+      # 127.0.0.1 bind on host — container also binds 127.0.0.1
+      # inside per kickoff criterion #12 (no auth in v1).
+      - "127.0.0.1:7878:7878"
+    volumes:
+      - skillscript-data:/data
+    environment:
+      SKILLSCRIPT_HOME: /data
+      NODE_ENV: production
+    restart: unless-stopped
+
+  # CLI tools — one-shot invocations via `docker compose run --rm tools <cmd>`.
+  # Shares the data volume with the dashboard so skills + traces persist.
+  tools:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+    image: skillscript-runtime:dev
+    volumes:
+      - skillscript-data:/data
+    environment:
+      SKILLSCRIPT_HOME: /data
+    entrypoint: ["node", "/app/dist/cli.js"]
+    profiles: ["tools"]
+
+  # Optional Ollama backing for `~` LocalModel ops. Enable via:
+  #   docker compose --profile ollama up
   ollama:
     image: ollama/ollama:latest
     ports:
-      - "11434:11434"
+      - "127.0.0.1:11434:11434"
     volumes:
       - ollama-data:/root/.ollama
+    profiles: ["ollama"]
     healthcheck:
       test: ["CMD", "ollama", "list"]
       interval: 10s
       timeout: 5s
       retries: 5
 
-  runtime:
-    build:
-      context: .
-      dockerfile: Dockerfile
-    environment:
-      OLLAMA_BASE_URL: http://ollama:11434
-      SKILLSCRIPT_HOME: /data
-    volumes:
-      - ./.skillscript:/data
-    depends_on:
-      ollama:
-        condition: service_healthy
-    # `runtime` is one-shot — `docker compose run --rm runtime <cmd>`.
-    # No restart loop here; that's the operator's call when registering
-    # cron-triggered skills (T5 work).
-    profiles: ["tools"]
-
 volumes:
+  skillscript-data:
+    driver: local
   ollama-data:
+    driver: local
