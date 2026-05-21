@@ -143,3 +143,13 @@ export type {
   PerSkillMetrics,
   PerConnectorMetrics,
 } from "./metrics.js";
+
+export { McpServer } from "./mcp-server.js";
+export type {
+  McpServerDeps,
+  McpTool,
+  JsonRpcRequest,
+  JsonRpcResponse,
+  JsonRpcSuccessResponse,
+  JsonRpcErrorResponse,
+} from "./mcp-server.js";

@@ -28,8 +28,8 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const SRC_DIR = join(fileURLToPath(new URL(".", import.meta.url)), "..", "src");
-const MAX_LOC = 7500;
-const MAX_FILES = 24;
+const MAX_LOC = 9500;
+const MAX_FILES = 28;
 
 async function walk(dir) {
   const entries = await readdir(dir, { withFileTypes: true });
