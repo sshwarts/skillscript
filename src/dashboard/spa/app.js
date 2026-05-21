@@ -258,17 +258,6 @@ function renderTriggers() {
     <h2>Triggers</h2>
 
     <section>
-      <div class="remediation" style="border-color: #2a6fb1; background: #eef5fb; color: #1a3d5c;">
-        <strong>Trigger registration is CLI-only.</strong>
-        Creating a new trigger introduces autonomous dispatch surface that doesn't appear
-        in the skill source. To prevent miswired cron expressions on a localhost-no-auth
-        dashboard, register from the terminal where intent is explicit:
-        <pre style="background: transparent; color: inherit; padding: 8px 0; margin-top: 8px;">skillfile register-trigger &lt;skill&gt; --source cron --name '0 9 * * *'</pre>
-        Unregister (safe — removes existing dispatch, doesn't create) stays in the UI below.
-      </div>
-    </section>
-
-    <section>
       ${state.triggers.length === 0
         ? `<div class="empty">No triggers registered.</div>`
         : `<table>
