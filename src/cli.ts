@@ -77,9 +77,9 @@ Audit options:
 
 Examples:
   skillfile init
-  skillfile run examples/hello.skill
+  skillfile run examples/hello.skill.md
   skillfile run hello --input WHO=Scott
-  skillfile compile examples/hello.skill --format prose
+  skillfile compile examples/hello.skill.md --format prose
   skillfile audit support-response.provenance.json
 
 Config:
@@ -139,7 +139,7 @@ async function cmdInit(): Promise<number> {
   connectors.json ${join(HOME_DIR, "connectors.json")}
 
 Next:
-  skillfile run examples/hello.skill
+  skillfile run examples/hello.skill.md
 `);
   return 0;
 }
@@ -163,9 +163,15 @@ async function cmdRun(args: string[]): Promise<number> {
       format: opts.format,
       skillStore: registry.getSkillStore(),
     });
+    const traceMode = opts.traceMode;
+    const traceStore = traceMode !== undefined && traceMode !== "off"
+      ? new FilesystemTraceStore(TRACE_DIR)
+      : undefined;
     const result = await execute(compiled.parsed, compiled.resolvedVariables, compiled.targetOrder, {
       registry,
       ...(opts.mechanical ? { mechanical: true } : {}),
+      ...(traceMode !== undefined ? { trace: { mode: traceMode } } : {}),
+      ...(traceStore !== undefined ? { traceStore } : {}),
     });
     for (const line of result.emissions) {
       process.stdout.write(`${line}\n`);
@@ -173,7 +179,10 @@ async function cmdRun(args: string[]): Promise<number> {
     if (result.errors.length > 0) {
       process.stderr.write(`\n${result.errors.length} error(s):\n`);
       for (const e of result.errors) {
-        process.stderr.write(`  [${e.target}/${e.opKind}] ${e.message}\n`);
+        process.stderr.write(`  [${e.target}/${e.opKind}] (${e.class}) ${e.message}\n`);
+        if (e.remediation !== undefined) {
+          process.stderr.write(`    → ${e.remediation}\n`);
+        }
       }
       return 1;
     }
@@ -312,6 +321,8 @@ interface RunCompileOpts {
   mechanical: boolean;
   inlineProvenance: boolean;
   sidecarPath?: string;
+  /** When set, `skillfile run` records a trace via FilesystemTraceStore at TRACE_DIR. */
+  traceMode?: "off" | "on" | "sample";
   error?: string;
 }
 
@@ -339,6 +350,12 @@ function parseRunCompileArgs(args: string[]): RunCompileOpts {
       const v = args[++i];
       if (v === undefined) return { ...opts, error: "--sidecar requires a path" };
       opts.sidecarPath = v;
+    } else if (a === "--trace") {
+      const v = args[++i];
+      if (v !== "off" && v !== "on" && v !== "sample") {
+        return { ...opts, error: `--trace must be off/on/sample (got '${v}')` };
+      }
+      opts.traceMode = v;
     } else if (a.startsWith("--")) {
       return { ...opts, error: `unknown flag '${a}'` };
     } else if (opts.skillRef === undefined) {
