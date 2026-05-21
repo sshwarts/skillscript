@@ -12,6 +12,12 @@
 // to parser + compiler + executor + connector registry + lint — those
 // remain well under that even at T5.
 //
+// T6 raises the ceiling again to accommodate Phase 1 (error contract +
+// remediation strings, ~250 LOC), Phase 2 (trace recording, ~400 LOC),
+// Phase 3 (health metrics aggregation, ~200 LOC), and Phase 4 (5 new CLI
+// commands, ~500 LOC). T6b (dashboard) lands separately on its own
+// ceiling budget.
+//
 // T7 distribution polish: tighten the script's scope to the 5 named core
 // components rather than all of src/, per Perry's T4 acceptance note.
 //
@@ -22,8 +28,8 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const SRC_DIR = join(fileURLToPath(new URL(".", import.meta.url)), "..", "src");
-const MAX_LOC = 6500;
-const MAX_FILES = 22;
+const MAX_LOC = 7500;
+const MAX_FILES = 24;
 
 async function walk(dir) {
   const entries = await readdir(dir, { withFileTypes: true });

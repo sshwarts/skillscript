@@ -11,6 +11,8 @@ import {
   UnsafeShellDisabledError,
   UnresolvedVariableError,
 } from "./errors.js";
+import { TraceBuilder, shouldTraceFire } from "./trace.js";
+import type { TraceConfig, TraceStore } from "./trace.js";
 
 /**
  * Runtime executor. Pure mechanical execution: walks the parsed skill
@@ -65,6 +67,23 @@ export interface ExecuteContext {
    * flags every `@ unsafe` op regardless.
    */
   enableUnsafeShell?: boolean;
+  /**
+   * Dispatch trace recording config per ERD §8. Combined with `traceStore`
+   * to persist records. Mode "off" / undefined skips tracing entirely;
+   * "on" traces every fire; "sample" samples deterministically via
+   * SHA-256(trigger_id + skill_name). Build-only (no persistence) happens
+   * when `traceStore` is undefined even with mode "on" — useful for tests.
+   */
+  trace?: TraceConfig;
+  /** Persistence backend for trace records. Wires alongside `trace`. */
+  traceStore?: TraceStore;
+  /**
+   * Trigger context for trace identity + sampling. Scheduler passes the
+   * fired trigger's metadata; direct callers can synthesize.
+   */
+  triggerCtx?: { source: string; name: string; fired_at_ms: number; trigger_id?: string };
+  /** Skill identity for trace records. Optional — falls back to parsed.name + version inference. */
+  skillVersion?: string;
 }
 
 /**
@@ -135,6 +154,17 @@ export async function execute(
   let lastBoundVar: string | null = null;
 
   const absoluteTimeoutMs = ctx.absoluteTimeoutMs ?? DEFAULT_RUNTIME_ABSOLUTE_TIMEOUT_MS;
+
+  // Trace recording (per ERD §8). Build when shouldTraceFire returns true;
+  // skip entirely when off (the NFR-11 floor — errors still surface via
+  // `result.errors[]`).
+  const triggerCtx = ctx.triggerCtx ?? { source: "manual", name: "", fired_at_ms: nowMs };
+  const triggerId = triggerCtx.trigger_id ?? `${triggerCtx.source}:${triggerCtx.name}`;
+  const skillName = parsed.name ?? "(anonymous)";
+  const traceBuilder = shouldTraceFire(ctx.trace, triggerId, skillName)
+    ? new TraceBuilder(skillName, ctx.skillVersion ?? "unknown", triggerCtx, { agent_id: ctx.agentId })
+    : null;
+
   for (const targetName of order) {
     const target = parsed.targets.get(targetName);
     if (!target) continue;
@@ -143,14 +173,14 @@ export async function execute(
     let targetLastValue: unknown = undefined;
 
     try {
-      const r = await execOps(target.ops, vars, emissions, ctx, targetName, parsed.timeout, absoluteTimeoutMs);
+      const r = await execOps(target.ops, vars, emissions, ctx, targetName, parsed.timeout, absoluteTimeoutMs, traceBuilder);
       targetLastBound = r.lastBoundVar;
       targetLastValue = r.lastBoundVar !== null ? vars.get(r.lastBoundVar) : r.lastValue;
     } catch (err) {
       errors.push(buildExecutionError(err, targetName));
       if (target.elseBlock !== undefined) {
         try {
-          const r = await execOps(target.elseBlock, vars, emissions, ctx, targetName, parsed.timeout, absoluteTimeoutMs);
+          const r = await execOps(target.elseBlock, vars, emissions, ctx, targetName, parsed.timeout, absoluteTimeoutMs, traceBuilder);
           targetLastBound = r.lastBoundVar;
           targetLastValue = r.lastBoundVar !== null ? vars.get(r.lastBoundVar) : r.lastValue;
         } catch (innerErr) {
@@ -201,6 +231,20 @@ export async function execute(
     }
   }
 
+  // Persist trace record if recording was active. Write is non-blocking —
+  // a failed write logs to stderr but doesn't change the execute() result
+  // (per ERD §8 NFR-11 floor: errors in trace persistence shouldn't bubble
+  // up as op errors; the trace store is an observability surface, not a
+  // dispatch dependency).
+  if (traceBuilder !== null && ctx.traceStore !== undefined) {
+    const record = traceBuilder.finalize(emissions, outputs, errors);
+    try {
+      await ctx.traceStore.write(record);
+    } catch (err) {
+      process.stderr.write(`[trace] failed to write record ${record.trace_id}: ${(err as Error).message}\n`);
+    }
+  }
+
   return {
     finalVars: Object.fromEntries(vars),
     emissions,
@@ -218,11 +262,12 @@ async function execOps(
   targetName: string,
   skillTimeoutSec: number | string | null,
   absoluteTimeoutMs: number,
+  traceBuilder: TraceBuilder | null,
 ): Promise<ExecOpsResult> {
   let lastBoundVar: string | null = null;
   let lastValue: unknown = undefined;
   for (const op of ops) {
-    const r = await execOp(op, vars, emissions, ctx, targetName, skillTimeoutSec, absoluteTimeoutMs);
+    const r = await execOp(op, vars, emissions, ctx, targetName, skillTimeoutSec, absoluteTimeoutMs, traceBuilder);
     if (r.lastBoundVar !== null) {
       lastBoundVar = r.lastBoundVar;
       lastValue = r.lastValue;
@@ -241,15 +286,30 @@ async function execOp(
   targetName: string,
   skillTimeoutSec: number | string | null,
   absoluteTimeoutMs: number,
+  traceBuilder: TraceBuilder | null,
 ): Promise<ExecOpsResult> {
+  const startMs = traceBuilder !== null ? Date.now() : 0;
+  let errored = false;
   try {
-    return await execOpInner(op, vars, emissions, ctx, targetName, skillTimeoutSec, absoluteTimeoutMs);
+    return await execOpInner(op, vars, emissions, ctx, targetName, skillTimeoutSec, absoluteTimeoutMs, traceBuilder);
   } catch (err) {
+    errored = true;
     // Default-tag any escaping error with `op.kind`. Explicit makeOpError()
     // tags take precedence. Fixes the case where `~` failures classified as `?`.
     const e = err as Error & { opKind?: string };
     if (e.opKind === undefined) e.opKind = op.kind;
     throw e;
+  } finally {
+    if (traceBuilder !== null) {
+      traceBuilder.recordOp({
+        op_kind: op.kind,
+        target: targetName,
+        body: op.body,
+        started_at_ms: startMs,
+        duration_ms: Date.now() - startMs,
+        errored,
+      });
+    }
   }
 }
 
@@ -261,6 +321,7 @@ async function execOpInner(
   targetName: string,
   skillTimeoutSec: number | string | null,
   absoluteTimeoutMs: number,
+  traceBuilder: TraceBuilder | null,
 ): Promise<ExecOpsResult> {
   switch (op.kind) {
     case "$set": {
@@ -563,7 +624,7 @@ async function execOpInner(
       let last: ExecOpsResult = { lastBoundVar: null, lastValue: undefined };
       for (const item of listVal) {
         vars.set(iterName, item);
-        last = await execOps(op.foreachBody!, vars, emissions, ctx, targetName, skillTimeoutSec, absoluteTimeoutMs);
+        last = await execOps(op.foreachBody!, vars, emissions, ctx, targetName, skillTimeoutSec, absoluteTimeoutMs, traceBuilder);
       }
       for (const k of Array.from(vars.keys())) {
         if (!before.has(k)) vars.delete(k);
@@ -573,11 +634,11 @@ async function execOpInner(
     case "if": {
       for (const branch of op.ifBranches!) {
         if (evalCondition(branch.cond, vars)) {
-          return execOps(branch.body, vars, emissions, ctx, targetName, skillTimeoutSec, absoluteTimeoutMs);
+          return execOps(branch.body, vars, emissions, ctx, targetName, skillTimeoutSec, absoluteTimeoutMs, traceBuilder);
         }
       }
       if (op.ifElseBody !== undefined) {
-        return execOps(op.ifElseBody, vars, emissions, ctx, targetName, skillTimeoutSec, absoluteTimeoutMs);
+        return execOps(op.ifElseBody, vars, emissions, ctx, targetName, skillTimeoutSec, absoluteTimeoutMs, traceBuilder);
       }
       return { lastBoundVar: null, lastValue: undefined };
     }

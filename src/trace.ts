@@ -1,0 +1,302 @@
+import { createHash, randomUUID } from "node:crypto";
+import { mkdir, readdir, readFile, stat, unlink, writeFile } from "node:fs/promises";
+import { join, basename, dirname } from "node:path";
+import type { ExecutionError } from "./runtime.js";
+
+/**
+ * Per-fire dispatch trace recording. Lets operators query "what did this
+ * skill do at 09:05?" + "which fires failed?" + replay traces against
+ * current connectors for "does this still work?" debugging.
+ *
+ * Three trace modes per-deployment + per-fire (per Open Q #6 disposition):
+ *   - off    — no per-fire record. Error-only trace records still written
+ *              (NFR-11 floor: failures always visible).
+ *   - on     — every op + every output recorded.
+ *   - sample — N% of fires recorded; sampling is deterministic via SHA-256
+ *              of (trigger_id + skill_name).
+ *
+ * Trace store contract: pluggable backend. v1 ships `FilesystemTraceStore`
+ * (file-backed default, zero external dependency). `MemoryStoreTraceStore`
+ * (substrate-backed via the configured MemoryStore connector) becomes
+ * possible when MemoryStore contract grows a write surface — currently
+ * read-only per §3.
+ */
+
+export type TraceMode = "off" | "on" | "sample";
+
+export interface TraceConfig {
+  mode: TraceMode;
+  /** Used when mode === "sample"; integer 0-100. Default 10. */
+  samplePct?: number;
+  /** Retention in ms before prune archives the record. Default 30d. */
+  retentionMs?: number;
+}
+
+const DEFAULT_SAMPLE_PCT = 10;
+const DEFAULT_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
+
+/**
+ * Versioned trace record. Bumping `version` is a breaking change for
+ * trace store consumers; T6 ships at version 1.
+ */
+export interface TraceRecord {
+  version: 1;
+  trace_id: string;
+  skill_name: string;
+  skill_version: string;
+  trigger: { source: string; name: string; fired_at_ms: number };
+  identity: { agent_id?: string };
+  ops: TraceOpRecord[];
+  emissions: string[];
+  outputs: Record<string, unknown>;
+  errors: ExecutionError[];
+  fired_at_ms: number;
+  completed_at_ms: number;
+  duration_ms: number;
+}
+
+export interface TraceOpRecord {
+  op_kind: string;
+  target: string;
+  body: string;
+  started_at_ms: number;
+  duration_ms: number;
+  /** True when the op produced an error (captured in TraceRecord.errors). */
+  errored: boolean;
+}
+
+export interface TraceQueryFilter {
+  skill_name?: string;
+  since_ms?: number;
+  until_ms?: number;
+  limit?: number;
+}
+
+export interface TraceStore {
+  write(record: TraceRecord): Promise<void>;
+  query(filter: TraceQueryFilter): Promise<TraceRecord[]>;
+  get(traceId: string): Promise<TraceRecord | null>;
+  /**
+   * Prune records older than now-retentionMs. Non-destructive by default:
+   * v1 hard-deletes (audit trail simplification); v1.x can add an archive
+   * path. Returns the count of records pruned.
+   */
+  prune(retentionMs: number): Promise<number>;
+}
+
+// ─── FilesystemTraceStore (bundled default) ─────────────────────────────────
+
+/**
+ * Writes JSON records under `<rootDir>/<skill_name>/<trace_id>.json`.
+ * Zero external dependency; suitable for the standalone runtime out of
+ * the box. Operators with a substrate wired can swap for a
+ * substrate-backed store via config.
+ */
+export class FilesystemTraceStore implements TraceStore {
+  constructor(private readonly rootDir: string) {}
+
+  async write(record: TraceRecord): Promise<void> {
+    const dir = join(this.rootDir, sanitize(record.skill_name));
+    await mkdir(dir, { recursive: true });
+    const path = join(dir, `${record.trace_id}.json`);
+    await writeFile(path, JSON.stringify(record, null, 2), "utf8");
+  }
+
+  async query(filter: TraceQueryFilter): Promise<TraceRecord[]> {
+    const results: TraceRecord[] = [];
+    let skillDirs: string[];
+    if (filter.skill_name !== undefined) {
+      skillDirs = [sanitize(filter.skill_name)];
+    } else {
+      try {
+        skillDirs = await readdir(this.rootDir);
+      } catch (err) {
+        if ((err as NodeJS.ErrnoException).code === "ENOENT") return [];
+        throw err;
+      }
+    }
+    for (const skillDir of skillDirs) {
+      const full = join(this.rootDir, skillDir);
+      let entries: string[];
+      try {
+        entries = await readdir(full);
+      } catch (err) {
+        if ((err as NodeJS.ErrnoException).code === "ENOENT") continue;
+        throw err;
+      }
+      for (const entry of entries) {
+        if (!entry.endsWith(".json")) continue;
+        try {
+          const text = await readFile(join(full, entry), "utf8");
+          const rec = JSON.parse(text) as TraceRecord;
+          if (filter.since_ms !== undefined && rec.fired_at_ms < filter.since_ms) continue;
+          if (filter.until_ms !== undefined && rec.fired_at_ms > filter.until_ms) continue;
+          results.push(rec);
+        } catch {
+          /* unreadable / unparseable — skip */
+        }
+      }
+    }
+    results.sort((a, b) => b.fired_at_ms - a.fired_at_ms);
+    if (filter.limit !== undefined) return results.slice(0, filter.limit);
+    return results;
+  }
+
+  async get(traceId: string): Promise<TraceRecord | null> {
+    let skillDirs: string[];
+    try {
+      skillDirs = await readdir(this.rootDir);
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === "ENOENT") return null;
+      throw err;
+    }
+    for (const skillDir of skillDirs) {
+      const path = join(this.rootDir, skillDir, `${traceId}.json`);
+      try {
+        const text = await readFile(path, "utf8");
+        return JSON.parse(text) as TraceRecord;
+      } catch (err) {
+        if ((err as NodeJS.ErrnoException).code === "ENOENT") continue;
+        throw err;
+      }
+    }
+    return null;
+  }
+
+  async prune(retentionMs: number): Promise<number> {
+    const cutoff = Date.now() - retentionMs;
+    let count = 0;
+    let skillDirs: string[];
+    try {
+      skillDirs = await readdir(this.rootDir);
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === "ENOENT") return 0;
+      throw err;
+    }
+    for (const skillDir of skillDirs) {
+      const full = join(this.rootDir, skillDir);
+      let entries: string[];
+      try {
+        entries = await readdir(full);
+      } catch {
+        continue;
+      }
+      for (const entry of entries) {
+        if (!entry.endsWith(".json")) continue;
+        const path = join(full, entry);
+        try {
+          const text = await readFile(path, "utf8");
+          const rec = JSON.parse(text) as TraceRecord;
+          if (rec.fired_at_ms < cutoff) {
+            await unlink(path);
+            count++;
+          }
+        } catch {
+          /* skip unreadable */
+        }
+      }
+    }
+    return count;
+  }
+}
+
+// ─── Sampling decision ─────────────────────────────────────────────────────
+
+/**
+ * Deterministic sample decision per Open Q #2: SHA-256 of `trigger_id +
+ * ":" + skill_name`, take the first byte mod 100, fire trace if under
+ * `pct`. Same inputs always produce the same sampling decision — useful
+ * for reproducible testing + dashboard drill-down.
+ */
+export function shouldSample(triggerId: string, skillName: string, pct: number): boolean {
+  if (pct >= 100) return true;
+  if (pct <= 0) return false;
+  const hash = createHash("sha256").update(`${triggerId}:${skillName}`).digest();
+  return hash[0]! % 100 < pct;
+}
+
+// ─── TraceBuilder (mutable, used during execution) ──────────────────────────
+
+/**
+ * Accumulator used by the runtime during a single fire. Records per-op
+ * timing + body; finalize() builds the immutable TraceRecord.
+ */
+export class TraceBuilder {
+  private readonly ops: TraceOpRecord[] = [];
+  private readonly firedAtMs: number;
+  readonly trace_id: string;
+
+  constructor(
+    private readonly skill_name: string,
+    private readonly skill_version: string,
+    private readonly trigger: { source: string; name: string; fired_at_ms: number },
+    private readonly identity: { agent_id?: string },
+  ) {
+    this.firedAtMs = trigger.fired_at_ms;
+    this.trace_id = randomUUID();
+  }
+
+  recordOp(record: TraceOpRecord): void {
+    this.ops.push(record);
+  }
+
+  finalize(
+    emissions: string[],
+    outputs: Record<string, unknown>,
+    errors: ExecutionError[],
+  ): TraceRecord {
+    const completedAtMs = Date.now();
+    return {
+      version: 1,
+      trace_id: this.trace_id,
+      skill_name: this.skill_name,
+      skill_version: this.skill_version,
+      trigger: this.trigger,
+      identity: this.identity,
+      ops: this.ops,
+      emissions: [...emissions],
+      outputs: { ...outputs },
+      errors: [...errors],
+      fired_at_ms: this.firedAtMs,
+      completed_at_ms: completedAtMs,
+      duration_ms: completedAtMs - this.firedAtMs,
+    };
+  }
+}
+
+/**
+ * Decide whether a fire should be traced given config + trigger context.
+ * Used by the runtime / scheduler at fire start. `mode === "off"` always
+ * returns false (errors are still surfaced via `result.errors[]` — the
+ * NFR-11 floor); the trace store is bypassed entirely.
+ */
+export function shouldTraceFire(
+  config: TraceConfig | undefined,
+  triggerId: string,
+  skillName: string,
+): boolean {
+  if (config === undefined || config.mode === "off") return false;
+  if (config.mode === "on") return true;
+  const pct = config.samplePct ?? DEFAULT_SAMPLE_PCT;
+  return shouldSample(triggerId, skillName, pct);
+}
+
+export const TRACE_DEFAULTS = {
+  SAMPLE_PCT: DEFAULT_SAMPLE_PCT,
+  RETENTION_MS: DEFAULT_RETENTION_MS,
+} as const;
+
+// ─── Internals ──────────────────────────────────────────────────────────────
+
+function sanitize(name: string): string {
+  // Filesystem-safe per the FilesystemSkillStore convention. Same charset
+  // — alphanumeric, hyphen, underscore, dot.
+  return name.replace(/[^A-Za-z0-9._-]/g, "_");
+}
+
+/** Convenience for tests: derive the on-disk path FilesystemTraceStore writes to. */
+export function _traceFilePathFor(rootDir: string, record: TraceRecord): string {
+  void basename;
+  void dirname;
+  return join(rootDir, sanitize(record.skill_name), `${record.trace_id}.json`);
+}

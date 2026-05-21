@@ -3,6 +3,7 @@ import { execute, type ExecuteContext, type ExecuteResult } from "./runtime.js";
 import type { Registry } from "./connectors/registry.js";
 import type { SkillStore } from "./connectors/types.js";
 import type { TriggerSource } from "./parser.js";
+import type { TraceConfig, TraceStore } from "./trace.js";
 
 /**
  * Trigger scheduler — the autonomous-dispatch surface per ERD §6.
@@ -48,6 +49,10 @@ export interface SchedulerConfig {
   /** Forwarded to runtime.execute(). */
   enableUnsafeShell?: boolean;
   absoluteTimeoutMs?: number;
+  /** Dispatch trace recording config. Forwarded to execute() ctx. */
+  trace?: TraceConfig;
+  /** Trace store backend. Forwarded to execute() ctx. */
+  traceStore?: TraceStore;
   /** Optional clock source for tests. Default Date.now. */
   now?: () => number;
   /** Optional debug logger. Default console.warn. */
@@ -65,6 +70,8 @@ export class Scheduler {
   private readonly pollIntervalMs: number;
   private readonly enableUnsafeShell: boolean;
   private readonly absoluteTimeoutMs: number | undefined;
+  private readonly trace: TraceConfig | undefined;
+  private readonly traceStore: TraceStore | undefined;
   private readonly now: () => number;
   private readonly log: (msg: string) => void;
   private readonly triggers = new Map<string, TriggerRegistration>();
@@ -79,6 +86,8 @@ export class Scheduler {
     this.pollIntervalMs = (config.pollIntervalSeconds ?? 30) * 1000;
     this.enableUnsafeShell = config.enableUnsafeShell ?? false;
     this.absoluteTimeoutMs = config.absoluteTimeoutMs;
+    this.trace = config.trace;
+    this.traceStore = config.traceStore;
     this.now = config.now ?? (() => Date.now());
     this.log = config.log ?? ((msg) => process.stderr.write(`[scheduler] ${msg}\n`));
   }
@@ -191,7 +200,11 @@ export class Scheduler {
    * Callers invoking dispatchSkill directly (without going through a
    * registered trigger) still get clock-time ambient refs out of the box.
    */
-  async dispatchSkill(skillName: string, eventPayload?: Record<string, unknown>): Promise<ExecuteResult | null> {
+  async dispatchSkill(
+    skillName: string,
+    eventPayload?: Record<string, unknown>,
+    triggerCtx?: { source: string; name: string; fired_at_ms: number; trigger_id?: string },
+  ): Promise<ExecuteResult | null> {
     let meta;
     try {
       meta = await this.skillStore.metadata(skillName);
@@ -205,10 +218,15 @@ export class Scheduler {
     }
     const loaded = await this.skillStore.load(skillName);
     const compiled = await compile(loaded.source);
+    const nowMs = this.now();
     const ctx: ExecuteContext = {
       registry: this.registry,
       enableUnsafeShell: this.enableUnsafeShell,
       ...(this.absoluteTimeoutMs !== undefined ? { absoluteTimeoutMs: this.absoluteTimeoutMs } : {}),
+      ...(this.trace !== undefined ? { trace: this.trace } : {}),
+      ...(this.traceStore !== undefined ? { traceStore: this.traceStore } : {}),
+      triggerCtx: triggerCtx ?? { source: "manual", name: "", fired_at_ms: nowMs },
+      skillVersion: loaded.metadata.version,
     };
     const defaults = this.buildEventDefaults();
     return execute(
@@ -247,7 +265,12 @@ export class Scheduler {
       "EVENT.fired_at_plus_7d_unix": firedAtUnix + 604_800,
     };
     try {
-      const result = await this.dispatchSkill(trig.skillName, eventPayload);
+      const result = await this.dispatchSkill(trig.skillName, eventPayload, {
+        source: trig.source,
+        name: trig.name,
+        fired_at_ms: firedAtMs,
+        trigger_id: trig.id,
+      });
       if (result !== null && result.errors.length > 0) {
         for (const e of result.errors) {
           this.log(`trigger ${trig.id} (${trig.source}: ${trig.name}) → ${trig.skillName} → ${e.target}/${e.opKind}: ${e.message}`);

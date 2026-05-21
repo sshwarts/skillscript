@@ -119,3 +119,19 @@ export type { AuditResult, AuditFinding, AuditRule } from "./audit.js";
 
 export { Scheduler, cronMatches } from "./scheduler.js";
 export type { SchedulerConfig, TriggerRegistration, ResolvableTriggerSource } from "./scheduler.js";
+
+export {
+  FilesystemTraceStore,
+  TraceBuilder,
+  shouldSample,
+  shouldTraceFire,
+  TRACE_DEFAULTS,
+} from "./trace.js";
+export type {
+  TraceStore,
+  TraceConfig,
+  TraceMode,
+  TraceRecord,
+  TraceOpRecord,
+  TraceQueryFilter,
+} from "./trace.js";
