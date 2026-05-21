@@ -135,3 +135,11 @@ export type {
   TraceOpRecord,
   TraceQueryFilter,
 } from "./trace.js";
+
+export { healthMetrics } from "./metrics.js";
+export type {
+  HealthMetrics,
+  HealthMetricsFilter,
+  PerSkillMetrics,
+  PerConnectorMetrics,
+} from "./metrics.js";

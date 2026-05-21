@@ -301,6 +301,7 @@ async function execOp(
     throw e;
   } finally {
     if (traceBuilder !== null) {
+      const connector = extractOpConnector(op);
       traceBuilder.recordOp({
         op_kind: op.kind,
         target: targetName,
@@ -308,8 +309,19 @@ async function execOp(
         started_at_ms: startMs,
         duration_ms: Date.now() - startMs,
         errored,
+        ...(connector !== undefined ? { connector } : {}),
       });
     }
+  }
+}
+
+/** Extract the connector instance name for $/~/> ops; undefined for others. */
+function extractOpConnector(op: SkillOp): string | undefined {
+  switch (op.kind) {
+    case "$": return op.mcpConnector ?? "primary";
+    case "~": return op.localModelParams?.model ?? "default";
+    case ">": return op.retrievalParams?.connector ?? "primary";
+    default: return undefined;
   }
 }
 

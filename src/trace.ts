@@ -63,6 +63,12 @@ export interface TraceOpRecord {
   duration_ms: number;
   /** True when the op produced an error (captured in TraceRecord.errors). */
   errored: boolean;
+  /**
+   * Connector instance this op dispatched through. Present for `$`/`~`/`>`
+   * ops; absent for `@`/`!`/`??`/`$set`/`foreach`/`if` (no connector
+   * involvement). Used by `healthMetrics()` for per-connector aggregation.
+   */
+  connector?: string;
 }
 
 export interface TraceQueryFilter {
