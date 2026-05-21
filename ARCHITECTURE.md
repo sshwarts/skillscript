@@ -39,7 +39,7 @@ Target: 13 source files written + 2 more planned (scheduler.ts in T5, output.ts 
 | `output.ts` | Routes the goal target's output by `# Output:` header. Kinds: `text` (stdout), `prompt-context` (returns to caller), `none`. |
 | `connectors/types.ts` | The four contract interfaces. The integration boundary — every external system (skill storage, memory, local model, MCP) plugs in through one of these. |
 | `connectors/registry.ts` | Maps connector names to instances. Three-layer resolution: per-call override > skill-declared > primary default. Multi-instance support. |
-| `connectors/skill-store.ts` | Filesystem-backed `SkillStore`. Reads/writes skills as `*.skill` files under `~/.skillscript/skills/`. Status transitions produce git-friendly file history. |
+| `connectors/skill-store.ts` | Filesystem-backed `SkillStore`. Reads/writes skills as `*.skill.md` files under `~/.skillscript/skills/` (the `.skill` extension is reserved for compiled artifacts). Status transitions produce git-friendly file history. |
 | `connectors/memory-store.ts` | SQLite-backed `MemoryStore` with FTS5. Schema: `memories(id, summary, detail, tags, created_at)`. PortableMemory shape + metadata bag. |
 | `connectors/local-model.ts` | Ollama HTTP client. Bundled instances: `default` and `gemma2` (both `gemma2:9b`), `qwen` (`qwen2.5:7b`). |
 | `connectors/mcp.ts` | MCP connector scaffold. v1: no servers wired by default; `connectors.json` has commented example. |
@@ -48,7 +48,7 @@ Target: 13 source files written + 2 more planned (scheduler.ts in T5, output.ts 
 
 ```
 docs/                   — spec documentation (PRD, Language Reference, ERD)
-examples/               — bundled example skills (incl. `hello.skill`)
+examples/               — bundled example skills (incl. `hello.skill.md`)
 scaffold/               — files copied by `skillfile init` into ~/.skillscript/
 scripts/loc-ceiling.mjs — CI check; fails if core exceeds budget
 tests/                  — vitest specs

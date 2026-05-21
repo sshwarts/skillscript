@@ -16,7 +16,7 @@ import { SkillNotFoundError, VersionNotFoundError, StorageConflictError } from "
 const CONTRACT_VERSION = "1.0.0";
 
 /**
- * Filesystem-backed SkillStore. Skills live as `*.skill` files under a
+ * Filesystem-backed SkillStore. Skills live as `*.skill.md` files under a
  * directory. Per-skill version history lives in a sidecar `*.versions.jsonl`
  * (append-only, one JSON object per line).
  *
@@ -99,8 +99,11 @@ export class FilesystemSkillStore implements SkillStore {
     }
     const metas: SkillMeta[] = [];
     for (const entry of entries) {
-      if (extname(entry) !== ".skill") continue;
-      const name = basename(entry, ".skill");
+      // `.skill.md` is the source convention (committed, authored). The
+      // bare `.skill` extension is reserved for compiled artifacts emitted
+      // alongside `.skill.provenance.json` sidecars — derived, gitignored.
+      if (!entry.endsWith(".skill.md")) continue;
+      const name = entry.slice(0, -".skill.md".length);
       try {
         const source = await readFile(join(this.rootDir, entry), "utf8");
         metas.push(await this.buildMeta(name, source));
@@ -227,7 +230,7 @@ export class FilesystemSkillStore implements SkillStore {
   }
 
   private pathFor(name: string): string {
-    return join(this.rootDir, `${name}.skill`);
+    return join(this.rootDir, `${name}.skill.md`);
   }
 
   private versionsPathFor(name: string): string {

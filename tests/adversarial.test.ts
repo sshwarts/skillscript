@@ -6,11 +6,12 @@ import { lint } from "../src/lint.js";
 const ADVERSARIAL_DIR = resolve(import.meta.dirname, "adversarial");
 
 /**
- * Adversarial library conformance: every `<rule-id>/positive-*.skill`
- * fixture MUST fire the rule; every `<rule-id>/negative-*.skill` fixture
- * MUST NOT fire it. Rules that depend on SkillStore state (unknown-skill-
- * reference, disabled-skill-reference, reference-to-disabled-skill,
- * duplicate-skill-name) are covered by unit tests, not file fixtures.
+ * Adversarial library conformance: every `<rule-id>/positive-*.skill.md`
+ * fixture MUST fire the rule; every `<rule-id>/negative-*.skill.md`
+ * fixture MUST NOT fire it. Rules that depend on SkillStore state
+ * (unknown-skill-reference, disabled-skill-reference, reference-to-
+ * disabled-skill, duplicate-skill-name) are covered by unit tests, not
+ * file fixtures.
  */
 
 const ruleDirs = readdirSync(ADVERSARIAL_DIR)
@@ -24,7 +25,7 @@ describe("adversarial library conformance", () => {
   for (const ruleId of ruleDirs) {
     const ruleDir = join(ADVERSARIAL_DIR, ruleId);
     const fixtures = readdirSync(ruleDir)
-      .filter((f) => f.endsWith(".skill"))
+      .filter((f) => f.endsWith(".skill.md"))
       .sort();
 
     if (fixtures.length === 0) continue;

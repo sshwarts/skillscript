@@ -98,7 +98,7 @@ async function cmdInit(): Promise<number> {
 
   const scaffoldRoot = locateScaffoldRoot();
   await copyScaffoldFile(join(scaffoldRoot, "config.toml"), join(HOME_DIR, "config.toml"));
-  await copyScaffoldFile(join(scaffoldRoot, "examples", "hello.skill"), join(EXAMPLES_DIR, "hello.skill"));
+  await copyScaffoldFile(join(scaffoldRoot, "examples", "hello.skill.md"), join(EXAMPLES_DIR, "hello.skill.md"));
   await copyScaffoldFile(join(scaffoldRoot, "connectors.json"), join(HOME_DIR, "connectors.json"));
 
   process.stdout.write(`Initialized ${HOME_DIR}
@@ -319,11 +319,17 @@ function parseRunCompileArgs(args: string[]): RunCompileOpts {
   }
   if (opts.skillRef === undefined) return { ...opts, error: "missing skill path or name" };
   // Default sidecar path when not inlining and not explicitly named.
+  // Source `.skill.md` files emit `.skill.provenance.json` (drop the `.md`,
+  // append `.provenance.json` per the source/compiled split convention).
   if (!opts.inlineProvenance && opts.sidecarPath === undefined) {
     const ref = opts.skillRef;
-    opts.sidecarPath = ref.endsWith(".skill")
-      ? ref.replace(/\.skill$/, ".provenance.json")
-      : `${ref}.provenance.json`;
+    if (ref.endsWith(".skill.md")) {
+      opts.sidecarPath = ref.replace(/\.skill\.md$/, ".skill.provenance.json");
+    } else if (ref.endsWith(".skill")) {
+      opts.sidecarPath = ref.replace(/\.skill$/, ".skill.provenance.json");
+    } else {
+      opts.sidecarPath = `${ref}.provenance.json`;
+    }
   }
   return opts;
 }
@@ -337,10 +343,12 @@ function extractFlag(args: string[], name: string): string | undefined {
 /**
  * Resolve a skill reference to source text. Rules:
  *   1. If it's an absolute or relative path that resolves to an existing file, read it.
- *   2. Otherwise, treat it as a name and look up `<SKILLS_DIR>/<name>.skill`.
+ *   2. Otherwise, treat it as a name and look up `<SKILLS_DIR>/<name>.skill.md`.
+ *      (`.skill.md` is the source convention; bare `.skill` is reserved for
+ *      compiled artifacts.)
  *   3. If neither hits, return null.
  *
- * `examples/<name>.skill` paths are resolved against either the working
+ * `examples/<name>.skill.md` paths are resolved against either the working
  * directory or the configured EXAMPLES_DIR — whichever exists.
  */
 async function loadSkillSource(ref: string): Promise<string | null> {
@@ -351,8 +359,8 @@ async function loadSkillSource(ref: string): Promise<string | null> {
     if (ref.startsWith("examples/")) {
       candidates.push(join(HOME_DIR, ref));
     }
-    if (!ref.includes("/") && !ref.endsWith(".skill")) {
-      candidates.push(join(SKILLS_DIR, `${ref}.skill`));
+    if (!ref.includes("/") && !ref.endsWith(".skill") && !ref.endsWith(".skill.md")) {
+      candidates.push(join(SKILLS_DIR, `${ref}.skill.md`));
     }
   }
   for (const c of candidates) {

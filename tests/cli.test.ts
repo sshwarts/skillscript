@@ -29,26 +29,26 @@ describe("skillfile CLI", () => {
   });
 
   it("runs hello.skill end-to-end with bundled example", () => {
-    const r = runCli(["run", "examples/hello.skill"]);
+    const r = runCli(["run", "examples/hello.skill.md"]);
     expect(r.code).toBe(0);
     expect(r.stdout).toMatch(/Hello, world!/);
   });
 
   it("threads --input overrides", () => {
-    const r = runCli(["run", "examples/hello.skill", "--input", "WHO=Scott"]);
+    const r = runCli(["run", "examples/hello.skill.md", "--input", "WHO=Scott"]);
     expect(r.code).toBe(0);
     expect(r.stdout).toMatch(/Hello, Scott!/);
   });
 
   it("compile emits the rendered artifact", () => {
-    const r = runCli(["compile", "examples/hello.skill"]);
+    const r = runCli(["compile", "examples/hello.skill.md"]);
     expect(r.code).toBe(0);
     expect(r.stdout).toMatch(/# Skill: hello/);
     expect(r.stdout).toMatch(/Tell the user: Hello, world!/);
   });
 
   it("lint reports no findings on the bundled example", () => {
-    const r = runCli(["lint", "examples/hello.skill"]);
+    const r = runCli(["lint", "examples/hello.skill.md"]);
     expect(r.code).toBe(0);
     expect(r.stdout).toMatch(/OK: no findings/);
   });
@@ -59,7 +59,7 @@ describe("skillfile CLI", () => {
     expect(r.code).toBe(0);
     expect(r.stdout).toMatch(/Initialized/);
     // hello.skill should be discoverable after init.
-    const r2 = runCli(["run", "examples/hello.skill"], { SKILLSCRIPT_HOME: home });
+    const r2 = runCli(["run", "examples/hello.skill.md"], { SKILLSCRIPT_HOME: home });
     expect(r2.code).toBe(0);
     expect(r2.stdout).toMatch(/Hello, world!/);
   });
@@ -74,7 +74,7 @@ describe("skillfile CLI", () => {
     // Write a data-skill and a caller that references it.
     const fs = require("node:fs") as typeof import("node:fs");
     const path = require("node:path") as typeof import("node:path");
-    fs.writeFileSync(path.join(home, "skills", "voice.skill"), `# Skill: voice
+    fs.writeFileSync(path.join(home, "skills", "voice.skill.md"), `# Skill: voice
 # Type: data
 
 t:
@@ -82,7 +82,7 @@ t:
 
 default: t
 `);
-    fs.writeFileSync(path.join(home, "skills", "caller.skill"), `# Skill: caller
+    fs.writeFileSync(path.join(home, "skills", "caller.skill.md"), `# Skill: caller
 t:
     & voice
     ! ok
