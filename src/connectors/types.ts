@@ -1,7 +1,8 @@
 // Connector contracts — the integration boundary between the runtime and
-// external state. Four kinds: SkillStore (where skills live), MemoryStore
+// external state. Five kinds: SkillStore (where skills live), MemoryStore
 // (queryable knowledge), LocalModel (local LLM inference), McpConnector
-// (MCP tool dispatch).
+// (MCP tool dispatch), AgentConnector (deliver to / wake a frontier agent;
+// T7.1).
 //
 // Capabilities are split into two surfaces:
 //
@@ -17,8 +18,8 @@
 //     version when manifest *content* changes (new tool wired, new model
 //     loaded), NOT on every dispatch.
 
-/** The four connector kinds. */
-export type ConnectorType = "skill_store" | "memory_store" | "local_model" | "mcp_connector";
+/** The five connector kinds. */
+export type ConnectorType = "skill_store" | "memory_store" | "local_model" | "mcp_connector" | "agent_connector";
 
 /**
  * Static capabilities — declared by the connector class, consumed by the

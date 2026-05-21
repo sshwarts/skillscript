@@ -25,7 +25,18 @@ describe("skillfile CLI", () => {
     const r = runCli(["--help"]);
     expect(r.code).toBe(0);
     expect(r.stdout).toMatch(/Usage:/);
-    expect(r.stdout).toMatch(/skillfile init/);
+    expect(r.stdout).toMatch(/Commands:/);
+    expect(r.stdout).toMatch(/^\s+init\s+Scaffold/m);
+  });
+
+  it("prints per-command help on `skillfile <cmd> --help`", () => {
+    const r = runCli(["run", "--help"]);
+    expect(r.code).toBe(0);
+    expect(r.stdout).toMatch(/skillfile run — /);
+    expect(r.stdout).toMatch(/Arguments:/);
+    expect(r.stdout).toMatch(/Options:/);
+    expect(r.stdout).toMatch(/Examples:/);
+    expect(r.stdout).toMatch(/--input KEY=value/);
   });
 
   it("runs hello.skill end-to-end with bundled example", () => {

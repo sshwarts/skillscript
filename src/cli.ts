@@ -36,65 +36,254 @@ const EXAMPLES_DIR = join(HOME_DIR, "examples");
 const PLUGINS_DIR = join(HOME_DIR, "plugins");
 const TRACE_DIR = join(HOME_DIR, "traces");
 
-const VERSION = "0.1.0-dev";
+const VERSION = "0.2.0";
+
+interface CommandHelp {
+  description: string;
+  usage: string;
+  args?: ReadonlyArray<{ name: string; description: string }>;
+  options?: ReadonlyArray<{ flag: string; description: string }>;
+  examples?: ReadonlyArray<string>;
+}
+
+const COMMAND_HELP: Readonly<Record<string, CommandHelp>> = {
+  init: {
+    description: "Scaffold ~/.skillscript/ tree + bundled example",
+    usage: "skillfile init",
+    examples: ["skillfile init"],
+  },
+  run: {
+    description: "Compile + execute a skill end-to-end",
+    usage: "skillfile run <path|name> [options]",
+    args: [{ name: "<path|name>", description: "Path to .skill.md file OR name registered in SkillStore" }],
+    options: [
+      { flag: "--input KEY=value", description: "Provide a value for a declared input (repeatable)" },
+      { flag: "--format prompt|prose", description: "Render format (default: prompt)" },
+      { flag: "--mechanical", description: "Preview mode — `$`/`~`/`>` ops don't dispatch" },
+      { flag: "--trace on|off|sample", description: "Record execution trace via FilesystemTraceStore" },
+    ],
+    examples: [
+      "skillfile run examples/hello.skill.md",
+      "skillfile run hello --input WHO=Scott",
+      "skillfile run hello --mechanical --trace on",
+    ],
+  },
+  compile: {
+    description: "Render the compiled artifact (no execution)",
+    usage: "skillfile compile <path|name> [options]",
+    args: [{ name: "<path|name>", description: "Path to .skill.md file OR name registered in SkillStore" }],
+    options: [
+      { flag: "--input KEY=value", description: "Provide a value for a declared input (repeatable)" },
+      { flag: "--format prompt|prose", description: "Render format (default: prompt)" },
+      { flag: "--inline-provenance", description: "Embed provenance block in artifact (default: sidecar)" },
+      { flag: "--sidecar <path>", description: "Write provenance to this path (default: <output>.provenance.json)" },
+    ],
+    examples: [
+      "skillfile compile examples/hello.skill.md",
+      "skillfile compile hello --format prose",
+      "skillfile compile hello --inline-provenance",
+    ],
+  },
+  audit: {
+    description: "Detect recompile-staleness via .provenance.json sidecar",
+    usage: "skillfile audit <provenance-path> [--json]",
+    args: [{ name: "<provenance-path>", description: "Path to a .provenance.json sidecar file" }],
+    options: [{ flag: "--json", description: "Emit structured JSON instead of pretty-printed text" }],
+    examples: [
+      "skillfile audit examples/hello.skill.provenance.json",
+      "skillfile audit support-response.provenance.json --json",
+    ],
+  },
+  lint: {
+    description: "Run static validation, print findings",
+    usage: "skillfile lint <path|name> [--json|--human]",
+    args: [{ name: "<path|name>", description: "Path to .skill.md file OR name registered in SkillStore" }],
+    options: [
+      { flag: "--json", description: "Emit structured JSON instead of pretty-printed text" },
+      { flag: "--human", description: "Pretty-print findings (default when --json absent)" },
+    ],
+    examples: [
+      "skillfile lint examples/hello.skill.md",
+      "skillfile lint hello --json",
+    ],
+  },
+  list: {
+    description: "List available skills in the configured SkillStore",
+    usage: "skillfile list [--status STATUS]",
+    options: [{ flag: "--status STATUS", description: "Filter by status: Draft, Approved, or Disabled" }],
+    examples: ["skillfile list", "skillfile list --status Approved"],
+  },
+  fires: {
+    description: "List recent trace records for a skill",
+    usage: "skillfile fires <skill> [--limit N] [--human]",
+    args: [{ name: "<skill>", description: "Skill name to query trace records for" }],
+    options: [
+      { flag: "--limit N", description: "Cap results (default: 20)" },
+      { flag: "--human", description: "Pretty-print summary instead of JSON" },
+    ],
+    examples: [
+      "skillfile fires hello --limit 10",
+      "skillfile fires hello --human",
+    ],
+  },
+  diagram: {
+    description: "Emit mermaid graph of the skill's control flow",
+    usage: "skillfile diagram <path|name>",
+    args: [{ name: "<path|name>", description: "Path to .skill.md file OR name registered in SkillStore" }],
+    examples: [
+      "skillfile diagram hello",
+      "skillfile diagram hello > docs/hello-graph.md",
+    ],
+  },
+  sign: {
+    description: "Content-hash sign the skill source (SHA-256)",
+    usage: "skillfile sign <path|name>",
+    args: [{ name: "<path|name>", description: "Path to .skill.md file OR name registered in SkillStore" }],
+    examples: ["skillfile sign hello"],
+  },
+  verify: {
+    description: "Verify the skill matches a signature",
+    usage: "skillfile verify <path|name> <hash>",
+    args: [
+      { name: "<path|name>", description: "Path to .skill.md file OR name registered in SkillStore" },
+      { name: "<hash>", description: "Expected SHA-256 hash (from skillfile sign)" },
+    ],
+    examples: ["skillfile verify hello abc123..."],
+  },
+  replay: {
+    description: "Re-run a recorded trace mechanically",
+    usage: "skillfile replay <trace_id> [--connectors current]",
+    args: [{ name: "<trace_id>", description: "Trace ID from skillfile fires output" }],
+    options: [
+      { flag: "--connectors current", description: "Re-run against today's wired connectors (default; debug)" },
+    ],
+    examples: ["skillfile replay tr-abc123", "skillfile replay tr-abc123 --connectors current"],
+  },
+  health: {
+    description: "Aggregate runtime metrics across all traces",
+    usage: "skillfile health [options]",
+    options: [
+      { flag: "--skill X", description: "Restrict to one skill" },
+      { flag: "--connector Y", description: "Restrict to one connector" },
+      { flag: "--since-ms N", description: "Window start (default: 24h ago)" },
+      { flag: "--human", description: "Pretty-print instead of JSON" },
+    ],
+    examples: [
+      "skillfile health",
+      "skillfile health --skill hello --human",
+      "skillfile health --connector memory-store --since-ms 3600000",
+    ],
+  },
+  dashboard: {
+    description: "Start the browser dashboard (localhost-only by default)",
+    usage: "skillfile dashboard [--port N] [--host ADDR]",
+    options: [
+      { flag: "--port N", description: "TCP port (default: 7878)" },
+      { flag: "--host ADDR", description: "Bind address (default: 127.0.0.1; container deploys override to 0.0.0.0)" },
+    ],
+    examples: [
+      "skillfile dashboard",
+      "skillfile dashboard --port 8080",
+      "skillfile dashboard --host 0.0.0.0 --port 7878   # container only",
+    ],
+  },
+  "register-trigger": {
+    description: "Register a trigger for a skill (CLI-only; not exposed in SPA write path)",
+    usage: "skillfile register-trigger <skill> --source <kind> --name <expr> [--expires-at MS]",
+    args: [{ name: "<skill>", description: "Name of an Approved skill" }],
+    options: [
+      { flag: "--source KIND", description: "Trigger source: session, cron, event, agent-event, file-watch, sensor" },
+      { flag: "--name EXPR", description: "Source-specific expression (e.g. '*/5 * * * *' for cron)" },
+      { flag: "--expires-at MS", description: "Unix-ms expiration timestamp (optional)" },
+    ],
+    examples: [
+      `skillfile register-trigger hello --source cron --name '*/5 * * * *'`,
+      `skillfile register-trigger morning-brief --source session --name on-resume`,
+    ],
+  },
+  "unregister-trigger": {
+    description: "Unregister a trigger by id",
+    usage: "skillfile unregister-trigger <trigger_id>",
+    args: [{ name: "<trigger_id>", description: "Trigger ID from skillfile list-triggers output" }],
+    examples: ["skillfile unregister-trigger trig-abc123"],
+  },
+  "list-triggers": {
+    description: "List registered triggers",
+    usage: "skillfile list-triggers [--skill X] [--source Y]",
+    options: [
+      { flag: "--skill X", description: "Filter by skill name" },
+      { flag: "--source Y", description: "Filter by source kind (session/cron/event/...)" },
+    ],
+    examples: [
+      "skillfile list-triggers",
+      "skillfile list-triggers --skill hello",
+      "skillfile list-triggers --source cron",
+    ],
+  },
+};
+
+const COMMAND_ORDER: ReadonlyArray<string> = [
+  "init", "run", "compile", "audit", "lint", "list",
+  "fires", "diagram", "sign", "verify", "replay", "health",
+  "dashboard", "register-trigger", "unregister-trigger", "list-triggers",
+];
 
 function usage(): string {
-  return `skillfile v${VERSION} — Skillscript runtime + compiler CLI
+  const lines: string[] = [
+    `skillfile v${VERSION} — Skillscript runtime + compiler CLI`,
+    ``,
+    `Usage:`,
+    `  skillfile <command> [options]`,
+    `  skillfile <command> --help`,
+    `  skillfile --version`,
+    ``,
+    `Commands:`,
+  ];
+  const widest = Math.max(...COMMAND_ORDER.map((c) => c.length));
+  for (const cmd of COMMAND_ORDER) {
+    const help = COMMAND_HELP[cmd]!;
+    lines.push(`  ${cmd.padEnd(widest + 2)}${help.description}`);
+  }
+  lines.push(
+    ``,
+    `Run \`skillfile <command> --help\` for command-specific options + examples.`,
+    ``,
+    `Environment:`,
+    `  SKILLSCRIPT_HOME    Override config root (default ~/.skillscript)`,
+    `  OLLAMA_BASE_URL     Override Ollama endpoint (default http://localhost:11434)`,
+    ``,
+  );
+  return lines.join("\n");
+}
 
-Usage:
-  skillfile init                        Scaffold ~/.skillscript/ tree + bundled example
-  skillfile run <path|name> [opts]      Compile + execute a skill end-to-end
-  skillfile compile <path|name> [opts]  Render the compiled artifact (no execution)
-  skillfile audit <provenance-path>     Detect recompile-staleness via .provenance.json sidecar
-  skillfile lint <path|name>            Run static validation, print findings
-  skillfile list [--status STATUS]      List available skills in the configured SkillStore
-  skillfile fires <skill> [opts]        List recent trace records for a skill
-  skillfile diagram <skill>             Emit mermaid graph of the skill's control flow
-  skillfile sign <skill>                Content-hash sign the skill source
-  skillfile verify <skill> <hash>       Verify the skill matches a signature
-  skillfile replay <trace_id> [opts]    Re-run a recorded trace
-  skillfile health [opts]               Aggregate metrics across all traces
-  skillfile dashboard [--port N]        Start the browser dashboard (localhost-only)
-  skillfile register-trigger <skill> --source <kind> --name <expr>
-                                        Register a trigger (CLI-only for safety)
-  skillfile unregister-trigger <id>     Unregister a trigger by id
-  skillfile list-triggers [--skill X] [--source Y]
-                                        List registered triggers
-
-Run/compile options:
-  --input KEY=value (repeatable)        Provide a value for a declared input
-  --format prompt|prose                 Render format (default: prompt)
-  --mechanical                          Preview mode — \`$\`/\`~\`/\`>\` ops don't dispatch (run only)
-  --inline-provenance                   Embed provenance block in artifact (compile only; default: sidecar)
-  --sidecar <path>                      Write provenance to this path (compile only; default: <output>.provenance.json)
-
-Fires options:
-  --limit N                             Cap results (default: 20)
-  --human                               Pretty-print summary instead of JSON
-
-Replay options:
-  --connectors current                  Re-run against today's wired connectors (default; debug)
-
-Health options:
-  --skill X                             Restrict to one skill
-  --connector Y                         Restrict to one connector
-  --since-ms N                          Window start (default: 24h ago)
-  --human                               Pretty-print instead of JSON
-
-Audit options:
-  --json                                Emit structured JSON instead of pretty-printed text
-
-Examples:
-  skillfile init
-  skillfile run examples/hello.skill.md
-  skillfile run hello --input WHO=Scott
-  skillfile compile examples/hello.skill.md --format prose
-  skillfile audit support-response.provenance.json
-
-Config:
-  SKILLSCRIPT_HOME    Override config root (default ~/.skillscript)
-  OLLAMA_BASE_URL     Override Ollama endpoint (default http://localhost:11434)
-`;
+function commandUsage(cmd: string): string {
+  const help = COMMAND_HELP[cmd];
+  if (help === undefined) return usage();
+  const lines: string[] = [
+    `skillfile ${cmd} — ${help.description}`,
+    ``,
+    `Usage:`,
+    `  ${help.usage}`,
+    ``,
+  ];
+  if (help.args !== undefined && help.args.length > 0) {
+    lines.push(`Arguments:`);
+    const widest = Math.max(...help.args.map((a) => a.name.length));
+    for (const a of help.args) lines.push(`  ${a.name.padEnd(widest + 2)}${a.description}`);
+    lines.push(``);
+  }
+  if (help.options !== undefined && help.options.length > 0) {
+    lines.push(`Options:`);
+    const widest = Math.max(...help.options.map((o) => o.flag.length));
+    for (const o of help.options) lines.push(`  ${o.flag.padEnd(widest + 2)}${o.description}`);
+    lines.push(``);
+  }
+  if (help.examples !== undefined && help.examples.length > 0) {
+    lines.push(`Examples:`);
+    for (const ex of help.examples) lines.push(`  ${ex}`);
+    lines.push(``);
+  }
+  return lines.join("\n");
 }
 
 async function main(): Promise<number> {
@@ -109,6 +298,15 @@ async function main(): Promise<number> {
   if (cmd === "--version" || cmd === "-v") {
     process.stdout.write(`${VERSION}\n`);
     return 0;
+  }
+
+  // Per-command help: `skillfile <cmd> --help` (or -h) renders the
+  // command-specific spec from COMMAND_HELP before the cmd handler runs.
+  if (rest.includes("--help") || rest.includes("-h")) {
+    if (COMMAND_HELP[cmd] !== undefined) {
+      process.stdout.write(commandUsage(cmd));
+      return 0;
+    }
   }
 
   switch (cmd) {

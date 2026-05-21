@@ -1,7 +1,7 @@
 {
   "name": "skillscript-runtime",
-  "version": "0.1.0-dev",
-  "description": "Runtime, compiler, and CLI for Skillscript — a small declarative language for authoring agent workflows.",
+  "version": "0.2.0",
+  "description": "Runtime, compiler, lint, CLI, and dashboard for Skillscript — a small declarative language for authoring agent workflows.",
   "license": "MIT",
   "author": "Scott Shwarts <scotts@pobox.com>",
   "homepage": "https://github.com/sshwarts/skillscript-runtime",
@@ -20,10 +20,39 @@
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js"
     },
+    "./connectors": {
+      "types": "./dist/connectors/index.d.ts",
+      "import": "./dist/connectors/index.js"
+    },
+    "./errors": {
+      "types": "./dist/errors.d.ts",
+      "import": "./dist/errors.js"
+    },
+    "./runtime": {
+      "types": "./dist/runtime.d.ts",
+      "import": "./dist/runtime.js"
+    },
+    "./trace": {
+      "types": "./dist/trace.d.ts",
+      "import": "./dist/trace.js"
+    },
+    "./metrics": {
+      "types": "./dist/metrics.d.ts",
+      "import": "./dist/metrics.js"
+    },
+    "./scheduler": {
+      "types": "./dist/scheduler.d.ts",
+      "import": "./dist/scheduler.js"
+    },
+    "./mcp-server": {
+      "types": "./dist/mcp-server.d.ts",
+      "import": "./dist/mcp-server.js"
+    },
     "./testing": {
       "types": "./dist/testing/index.d.ts",
       "import": "./dist/testing/index.js"
-    }
+    },
+    "./package.json": "./package.json"
   },
   "bin": {
     "skillfile": "./dist/cli.js"
@@ -47,15 +76,18 @@
     "typecheck": "tsc --noEmit",
     "loc-check": "node scripts/loc-ceiling.mjs",
     "lint": "tsc --noEmit && vitest run",
-    "prepublishOnly": "pnpm run build && pnpm run loc-check"
+    "prepublishOnly": "pnpm run build && pnpm run loc-check && pnpm run test"
   },
   "keywords": [
     "skillscript",
     "agent",
+    "agent-workflow",
     "dsl",
+    "declarative",
     "workflow",
     "llm",
-    "mcp"
+    "mcp",
+    "model-context-protocol"
   ],
   "dependencies": {
     "cron-parser": "^4.9.0"

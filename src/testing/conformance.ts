@@ -41,6 +41,7 @@ import type {
   StaticCapabilities,
   ConnectorType,
 } from "../connectors/types.js";
+import type { AgentConnector, AgentConnectorClass } from "../connectors/agent.js";
 import { SkillNotFoundError, ConnectorError } from "../errors.js";
 
 export interface ConformanceTest {
@@ -282,6 +283,72 @@ export const McpConnectorConformance = {
         }),
       },
     ];
+  },
+};
+
+// ─── AgentConnector (T7.1) ─────────────────────────────────────────────────
+
+export interface AgentConnectorFixture {
+  build(): AgentConnector;
+  ctor: AgentConnectorClass;
+  /** Optional id the connector treats as reachable; used in deliver/wake tests. */
+  testAgentId?: string;
+  teardown?(instance: AgentConnector): Promise<void>;
+}
+
+export const AgentConnectorConformance = {
+  buildTests(fixture: AgentConnectorFixture): ConformanceTest[] {
+    const tests: ConformanceTest[] = [
+      ...staticCapabilitiesTests(fixture.ctor, "agent_connector"),
+      methodExistence("AgentConnector.list_agents present", fixture, "list_agents"),
+      methodExistence("AgentConnector.deliver present", fixture, "deliver"),
+      methodExistence("AgentConnector.wake present", fixture, "wake"),
+      methodExistence("AgentConnector.manifest present", fixture, "manifest"),
+      {
+        category: "return-type",
+        name: "list_agents returns an array",
+        run: withInstance(fixture, async (connector) => {
+          const r = await connector.list_agents();
+          assert(Array.isArray(r), `list_agents must return an array (got ${typeof r})`);
+        }),
+      },
+      {
+        category: "return-type",
+        name: "manifest returns capabilities_version + manifest fields",
+        run: withInstance(fixture, async (connector) => {
+          const m = await connector.manifest();
+          assert(typeof m.capabilities_version === "string", "manifest.capabilities_version must be string");
+        }),
+      },
+    ];
+    const testAgentId = fixture.testAgentId;
+    if (testAgentId !== undefined) {
+      tests.push({
+        category: "feature-behavior",
+        name: "deliver(kind=augment) returns DeliveryReceipt with delivered_at",
+        run: withInstance(fixture, async (connector) => {
+          const receipt = await connector.deliver(testAgentId, { kind: "augment", content: "conformance" });
+          assert(typeof receipt.delivered_at === "number", "DeliveryReceipt.delivered_at must be number");
+        }),
+      });
+      tests.push({
+        category: "feature-behavior",
+        name: "deliver(kind=template) returns DeliveryReceipt with delivered_at",
+        run: withInstance(fixture, async (connector) => {
+          const receipt = await connector.deliver(testAgentId, { kind: "template", prompt: "conformance" });
+          assert(typeof receipt.delivered_at === "number", "DeliveryReceipt.delivered_at must be number");
+        }),
+      });
+      tests.push({
+        category: "feature-behavior",
+        name: "wake returns WakeReceipt with woken_at",
+        run: withInstance(fixture, async (connector) => {
+          const receipt = await connector.wake(testAgentId);
+          assert(typeof receipt.woken_at === "number", "WakeReceipt.woken_at must be number");
+        }),
+      });
+    }
+    return tests;
   },
 };
 

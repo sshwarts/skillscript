@@ -1,4 +1,5 @@
 import type { ParsedSkill, SkillOp, OutputDecl } from "./parser.js";
+import type { DeliveryReceipt } from "./connectors/agent.js";
 import { tokenizeKeywordArgs, processSetValue } from "./parser.js";
 import { applyFilter } from "./filters.js";
 import type { Registry } from "./connectors/registry.js";
@@ -107,6 +108,21 @@ export interface ExecuteResult {
   outputs: Record<string, unknown>;
   errors: ExecutionError[];
   targetOrder: string[];
+  /**
+   * Delivery receipts from `AgentConnector.deliver` calls fired after the
+   * skill completes. Populated when the skill declares
+   * `# Output: prompt-context: <agent>` or `# Output: template: <agent>`.
+   * Empty array (not undefined) when no agent-targeted output decls fired.
+   * Skipped in `mechanical` mode — placeholders aren't delivered to real
+   * substrates during previews.
+   */
+  agentDeliveryReceipts: AgentDeliveryReceiptRecord[];
+}
+
+export interface AgentDeliveryReceiptRecord {
+  agent_id: string;
+  output_kind: "prompt-context" | "template";
+  receipt: DeliveryReceipt;
 }
 
 interface ExecOpsResult {
@@ -215,19 +231,70 @@ export async function execute(
   //     (structured), fall back to emissions array. Callers consuming
   //     `outputs.text` typically want the structured return value.
   //   - `none`: no-op marker; value irrelevant.
-  const TEXT_SHAPED_KINDS = new Set<OutputDecl["kind"]>(["prompt-context", "slack", "card"]);
+  // Output payload-shape coercion: when the output kind is text-shaped
+  // (joined emissions are the natural delivery payload) we publish the
+  // string in `outputs[key]`; otherwise we pass the last bound variable
+  // through structurally. Membership here is about payload shape, not
+  // semantic destination — `slack` and `card` are listed because their
+  // delivery payloads are text, NOT because the runtime knows anything
+  // about Slack or card UIs. (v1.x: move this to connector-registered
+  // metadata via the EmissionConnector design so adopters can register
+  // new text-shaped destinations without a runtime code change.)
+  const TEXT_COERCED_OUTPUT_KINDS = new Set<OutputDecl["kind"]>(["prompt-context", "template", "slack", "card"]);
+  // Agent-bound dispatch uses literal kind checks below so TS can narrow
+  // `decl.kind` to the discriminated `DeliveryPayload.kind` automatically;
+  // a runtime Set forces a type predicate. Keep the literals colocated
+  // with the dispatch loop so the agent-bound semantic set is one-line
+  // grep-able.
   const outputDecls: OutputDecl[] = parsed.outputs.length > 0
     ? parsed.outputs
     : [{ kind: "text" }];
   const outputs: Record<string, unknown> = {};
   for (const decl of outputDecls) {
     const key = decl.target !== undefined ? `${decl.kind}:${decl.target}` : decl.kind;
-    if (TEXT_SHAPED_KINDS.has(decl.kind)) {
+    if (TEXT_COERCED_OUTPUT_KINDS.has(decl.kind)) {
       outputs[key] = emissions.join("\n");
     } else if (lastBoundVar !== null && vars.has(lastBoundVar)) {
       outputs[key] = vars.get(lastBoundVar);
     } else {
       outputs[key] = emissions.slice();
+    }
+  }
+
+  // Dispatch agent-targeted output decls through AgentConnector.deliver
+  // (T7.1). `prompt-context: <agent>` routes as `kind: "augment"`,
+  // `template: <agent>` as `kind: "template"`. Skipped in mechanical mode
+  // so previews don't deliver placeholder content to real substrates.
+  // Connector fallback: Registry.getAgentConnector() returns a transparent
+  // NoOpAgentConnector when no adapter is wired, so the dispatch loop
+  // never throws on missing-substrate; the no-op logs to stderr.
+  const agentDeliveryReceipts: AgentDeliveryReceiptRecord[] = [];
+  if (ctx.mechanical !== true) {
+    for (const decl of outputDecls) {
+      if (decl.target === undefined) continue;
+      // Agent-bound output kinds: literal `===` so TS narrows decl.kind
+      // for the deliver() payload discriminator below.
+      if (decl.kind !== "prompt-context" && decl.kind !== "template") continue;
+      const key = `${decl.kind}:${decl.target}`;
+      const body = String(outputs[key] ?? emissions.join("\n"));
+      const agent = ctx.registry.getAgentConnector();
+      try {
+        const receipt = decl.kind === "prompt-context"
+          ? await agent.deliver(decl.target, { kind: "augment", content: body })
+          : await agent.deliver(decl.target, {
+              kind: "template",
+              prompt: body,
+              ...(parsed.name !== null ? { source_skill: parsed.name } : {}),
+            });
+        agentDeliveryReceipts.push({ agent_id: decl.target, output_kind: decl.kind, receipt });
+      } catch (err) {
+        // Delivery failure is non-fatal — record alongside other errors so
+        // the dashboard surfaces it, but don't propagate. Skill execution
+        // already succeeded by this point.
+        process.stderr.write(
+          `[agent-deliver] ${decl.kind}:${decl.target} failed: ${(err as Error).message}\n`,
+        );
+      }
     }
   }
 
@@ -251,6 +318,7 @@ export async function execute(
     outputs,
     errors,
     targetOrder: order,
+    agentDeliveryReceipts,
   };
 }
 

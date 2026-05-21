@@ -7,6 +7,7 @@ export {
   MemoryStoreConformance,
   LocalModelConformance,
   McpConnectorConformance,
+  AgentConnectorConformance,
 } from "./conformance.js";
 
 export type {
@@ -16,4 +17,5 @@ export type {
   MemoryStoreFixture,
   LocalModelFixture,
   McpConnectorFixture,
+  AgentConnectorFixture,
 } from "./conformance.js";

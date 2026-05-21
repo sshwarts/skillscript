@@ -107,7 +107,7 @@ export interface TriggerDecl {
   name: string;
 }
 
-export type OutputKind = "text" | "slack" | "prompt-context" | "file" | "card" | "none";
+export type OutputKind = "text" | "slack" | "prompt-context" | "template" | "file" | "card" | "none";
 
 export interface OutputDecl {
   kind: OutputKind;
@@ -173,7 +173,7 @@ const REQUIRES_LINE = /^(user-var|system-var):([A-Za-z0-9_-]+)\s*(?:→|->)\s*([
 /** Capability token: `connector_type.feature_flag`. Matches one space-separated token of a capability `# Requires:` line. */
 const CAPABILITY_TOKEN = /^[a-z_][a-z0-9_]*\.[a-z_][a-z0-9_]*$/;
 /** `&` op: `& skill-name [arg=value ...] [-> VARNAME]`. Skill names follow the same charset as filesystem-safe identifiers (alphanumeric, hyphen, underscore). */
-const AMP_OP_REGEX = /^&\s+([A-Za-z0-9][\w-]*)\s*(.*?)(?:\s*->\s*([A-Za-z_]\w*))?\s*$/;
+const AMPERSAND_OP_REGEX = /^&\s+([A-Za-z0-9][\w-]*)\s*(.*?)(?:\s*->\s*([A-Za-z_]\w*))?\s*$/;
 const SET_OP_REGEX = /^\$set\s+([A-Za-z_]\w*)\s*=\s*(.*)$/;
 const FOREACH_OP_REGEX = /^foreach\s+([A-Za-z_]\w*)\s+in\s+(.+?):\s*$/;
 const IF_OP_REGEX = /^if\s+(.+?):\s*$/;
@@ -607,14 +607,14 @@ export function parse(source: string): ParsedSkill {
         for (const raw of splitVarsLine(value)) {
           const decl = raw.trim();
           if (decl === "") continue;
-          const allowedKinds = ["text", "slack", "prompt-context", "file", "card", "none"] as const;
+          const allowedKinds = ["text", "slack", "prompt-context", "template", "file", "card", "none"] as const;
           const colon = decl.indexOf(":");
           if (colon === -1) {
             const bareKind = normalizeEnumValue(decl, allowedKinds);
             if (bareKind === "text" || bareKind === "none") {
               result.outputs.push({ kind: bareKind });
             } else {
-              result.parseErrors.push(`\`# Output:\` kind '${decl}' missing target — kinds 'slack', 'prompt-context', 'file', 'card' require '<kind>: <target>'. Only 'text' and 'none' are bare-only.`);
+              result.parseErrors.push(`\`# Output:\` kind '${decl}' missing target — kinds 'slack', 'prompt-context', 'template', 'file', 'card' require '<kind>: <target>'. Only 'text' and 'none' are bare-only.`);
             }
             continue;
           }
@@ -868,7 +868,7 @@ export function parse(source: string): ParsedSkill {
       continue;
     }
     if (stripped0.startsWith("& ")) {
-      const match = AMP_OP_REGEX.exec(stripped0);
+      const match = AMPERSAND_OP_REGEX.exec(stripped0);
       if (!match) {
         result.parseErrors.push(`Malformed \`&\` op in target '${currentTarget.name}' — expected \`& skill-name [key=value ...] [-> VARNAME]\``);
         continue;

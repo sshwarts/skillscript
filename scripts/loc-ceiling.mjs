@@ -1,35 +1,50 @@
 #!/usr/bin/env node
-// Enforces ERD §1's small-codebase property. The spec calls out "parser +
-// compiler + executor + connector registry + lint together ≤ ~5K LOC for
-// the core" plus "fewer than 20 source files in the core."
+// Enforces ERD §1's small-codebase property. The spec calls out:
 //
-// This script counts ALL of src/ (not just the named core components) for
-// simplicity — broader than the spec calls for but a useful overall
-// constraint. T4 raised the original 5K to 5500 for the lint engine +
-// adversarial-library shape. T5 (runtime + 7 footgun acceptance criteria
-// per memory 59f6aa76) raises again to 6500 / 22 files per the T5 kickoff
-// criterion #9. ERD §1's strict 5K interpretation still applies narrowly
-// to parser + compiler + executor + connector registry + lint — those
-// remain well under that even at T5.
+//   "parser + compiler + executor + connector registry + lint together
+//    ≤ ~5K LOC for the core" plus "fewer than 20 source files in the core."
 //
-// T6 raises the ceiling again to accommodate Phase 1 (error contract +
-// remediation strings, ~250 LOC), Phase 2 (trace recording, ~400 LOC),
-// Phase 3 (health metrics aggregation, ~200 LOC), and Phase 4 (5 new CLI
-// commands, ~500 LOC). T6b (dashboard) lands separately on its own
-// ceiling budget.
+// This script counts the NARROW core set (the five named components) against
+// the ERD ceiling, and reports the BROAD count (all of src/) for transparency.
+// Auxiliary surfaces — CLI, dashboard, MCP server, observability/trace store,
+// metrics aggregator, error classes, provenance, scheduler, skill-manager,
+// testing helpers — sit outside the narrow ceiling but are visible in the
+// report so growth on the auxiliary surface is still tracked.
 //
-// T7 distribution polish: tighten the script's scope to the 5 named core
-// components rather than all of src/, per Perry's T4 acceptance note.
+// History:
+//   T1-T3: counted all of src/ against 5K-5500 ceiling
+//   T4:    raised to 5500 for the rule engine
+//   T5:    raised to 6500/22 for runtime + footgun rules
+//   T6:    raised to 7500/24 for error contract + trace + metrics + CLI
+//   T6b:   raised to 9500/28 for dashboard + MCP server
+//   T7:    tightened the scope to the named ERD §1 core set; auxiliary
+//          src/ is reported informationally rather than budgeted
 //
-// Run: `pnpm run loc-check`. CI fails the build if the ceiling is breached.
+// Run: `pnpm run loc-check`. CI fails the build if the narrow ceiling is
+// breached. The broad count is reported but does NOT fail the build.
 
-import { readdir, readFile, stat } from "node:fs/promises";
-import { join } from "node:path";
+import { readdir, readFile } from "node:fs/promises";
+import { join, posix } from "node:path";
 import { fileURLToPath } from "node:url";
 
-const SRC_DIR = join(fileURLToPath(new URL(".", import.meta.url)), "..", "src");
-const MAX_LOC = 9500;
-const MAX_FILES = 28;
+const ROOT = join(fileURLToPath(new URL(".", import.meta.url)), "..");
+const SRC_DIR = join(ROOT, "src");
+
+// ERD §1 narrow core: parser + compiler + executor + connector registry + lint.
+// Per T7 kickoff: src/connectors/* is treated as the connector registry
+// surface (registry + bundled reference implementations + type contracts).
+const CORE_PATHS = [
+  "parser.ts",
+  "compile.ts",
+  "runtime.ts",
+  "lint.ts",
+  "connectors/",
+];
+
+const NARROW_MAX_LOC = 5000;
+const NARROW_MAX_FILES = 20;
+const BROAD_INFO_LOC = 9500;
+const BROAD_INFO_FILES = 28;
 
 async function walk(dir) {
   const entries = await readdir(dir, { withFileTypes: true });
@@ -45,35 +60,60 @@ async function walk(dir) {
   return files;
 }
 
-const files = await walk(SRC_DIR);
-let totalLoc = 0;
+function isCore(relPath) {
+  const norm = relPath.split(/[\\/]/).join("/");
+  return CORE_PATHS.some((p) => p.endsWith("/") ? norm.startsWith(p) : norm === p);
+}
+
+const allFiles = await walk(SRC_DIR);
 const rows = [];
 
-for (const f of files) {
+for (const f of allFiles) {
   const body = await readFile(f, "utf8");
   const loc = body.split("\n").filter((l) => l.trim() && !l.trim().startsWith("//")).length;
-  totalLoc += loc;
-  rows.push({ file: f.slice(SRC_DIR.length + 1), loc });
+  const rel = posix.normalize(f.slice(SRC_DIR.length + 1).split(/[\\/]/).join("/"));
+  rows.push({ file: rel, loc, core: isCore(rel) });
 }
 
 rows.sort((a, b) => b.loc - a.loc);
 
-console.log("File LOC budget — core source only (tests excluded):\n");
-for (const { file, loc } of rows) {
+const coreRows = rows.filter((r) => r.core);
+const auxRows = rows.filter((r) => !r.core);
+const coreLoc = coreRows.reduce((acc, r) => acc + r.loc, 0);
+const auxLoc = auxRows.reduce((acc, r) => acc + r.loc, 0);
+const totalLoc = coreLoc + auxLoc;
+
+console.log("ERD §1 narrow core (parser + compile + runtime + lint + connectors/):\n");
+for (const { file, loc } of coreRows) {
   console.log(`  ${String(loc).padStart(5)}  ${file}`);
 }
-console.log(`\n  TOTAL  ${totalLoc} LOC across ${files.length} files`);
-console.log(`  BUDGET ≤ ${MAX_LOC} LOC across < ${MAX_FILES} files\n`);
+console.log(`\n  CORE   ${coreLoc} LOC across ${coreRows.length} files`);
+console.log(`  BUDGET ≤ ${NARROW_MAX_LOC} LOC across < ${NARROW_MAX_FILES} files (enforced)\n`);
+
+console.log("Auxiliary src/ (CLI, dashboard, MCP server, trace, metrics, etc.):\n");
+for (const { file, loc } of auxRows) {
+  console.log(`  ${String(loc).padStart(5)}  ${file}`);
+}
+console.log(`\n  AUX    ${auxLoc} LOC across ${auxRows.length} files`);
+console.log(`  TOTAL  ${totalLoc} LOC across ${rows.length} files`);
+console.log(`  INFO   broad ceiling ≤ ${BROAD_INFO_LOC} LOC / < ${BROAD_INFO_FILES} files (reported only)\n`);
 
 let failed = false;
-if (totalLoc > MAX_LOC) {
-  console.error(`FAIL: core LOC ${totalLoc} exceeds ceiling ${MAX_LOC}`);
+if (coreLoc > NARROW_MAX_LOC) {
+  console.error(`FAIL: narrow core LOC ${coreLoc} exceeds ERD §1 ceiling ${NARROW_MAX_LOC}`);
   failed = true;
 }
-if (files.length >= MAX_FILES) {
-  console.error(`FAIL: core file count ${files.length} hits or exceeds ceiling ${MAX_FILES}`);
+if (coreRows.length >= NARROW_MAX_FILES) {
+  console.error(`FAIL: narrow core file count ${coreRows.length} hits or exceeds ceiling ${NARROW_MAX_FILES}`);
   failed = true;
+}
+
+if (totalLoc > BROAD_INFO_LOC) {
+  console.warn(`WARN: total src/ LOC ${totalLoc} exceeds informational broad ceiling ${BROAD_INFO_LOC} (not a build failure; consider whether auxiliary surface needs tightening)`);
+}
+if (rows.length >= BROAD_INFO_FILES) {
+  console.warn(`WARN: total src/ file count ${rows.length} hits or exceeds informational broad ceiling ${BROAD_INFO_FILES} (not a build failure)`);
 }
 
 if (failed) process.exit(1);
-console.log("OK: within ERD §1 ceiling.");
+console.log("OK: within ERD §1 narrow core ceiling.");

@@ -59,6 +59,17 @@ export { SqliteMemoryStore } from "./connectors/memory-store.js";
 export type { SqliteMemoryStoreConfig } from "./connectors/memory-store.js";
 export { CallbackMcpConnector } from "./connectors/mcp.js";
 export type { DispatchFn } from "./connectors/mcp.js";
+export { NoOpAgentConnector } from "./connectors/agent-noop.js";
+export type {
+  AgentConnector,
+  AgentConnectorClass,
+  AgentDescriptor,
+  AgentStatus,
+  DeliveryPayload,
+  DeliveryReceipt,
+  WakeOpts,
+  WakeReceipt,
+} from "./connectors/agent.js";
 
 export type {
   SkillStore,

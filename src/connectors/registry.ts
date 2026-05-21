@@ -9,6 +9,8 @@ import type {
   McpConnectorClass,
   StaticCapabilities,
 } from "./types.js";
+import type { AgentConnector, AgentConnectorClass } from "./agent.js";
+import { NoOpAgentConnector } from "./agent-noop.js";
 
 /**
  * Per-kind registry — maps a connector name to an instance + its class.
@@ -40,6 +42,7 @@ export class Registry {
   private memoryStores = new Map<string, Entry<MemoryStore, MemoryStoreClass>>();
   private localModels = new Map<string, Entry<LocalModel, LocalModelClass>>();
   private mcpConnectors = new Map<string, Entry<McpConnector, McpConnectorClass>>();
+  private agentConnectors = new Map<string, Entry<AgentConnector, AgentConnectorClass>>();
 
   // ─── Register ───────────────────────────────────────────────────────────
 
@@ -59,6 +62,10 @@ export class Registry {
     this.mcpConnectors.set(name, { instance, ctor: ctorOf(instance) as McpConnectorClass });
   }
 
+  registerAgentConnector(name: string, instance: AgentConnector): void {
+    this.agentConnectors.set(name, { instance, ctor: ctorOf(instance) as AgentConnectorClass });
+  }
+
   // ─── Get instance (runtime dispatch) ────────────────────────────────────
 
   getSkillStore(name = "primary"): SkillStore {
@@ -72,6 +79,18 @@ export class Registry {
   }
   getMcpConnector(name = "primary"): McpConnector {
     return must(this.mcpConnectors, name, "McpConnector").instance;
+  }
+  /**
+   * Returns the registered AgentConnector or a transparent `NoOpAgentConnector`
+   * when none is wired. Unlike the other `get*` methods, this never throws —
+   * the no-op fallback lets `# Output: prompt-context:` dispatch resolve
+   * cleanly in test/dev environments without an explicit substrate setup.
+   * Adopters wire a real impl for production via `registerAgentConnector`.
+   */
+  getAgentConnector(name = "primary"): AgentConnector {
+    const entry = this.agentConnectors.get(name);
+    if (entry !== undefined) return entry.instance;
+    return DEFAULT_AGENT_CONNECTOR;
   }
 
   // ─── Get class (linter offline lookup) ──────────────────────────────────
@@ -88,6 +107,11 @@ export class Registry {
   getMcpConnectorClass(name = "primary"): McpConnectorClass {
     return must(this.mcpConnectors, name, "McpConnector").ctor;
   }
+  getAgentConnectorClass(name = "primary"): AgentConnectorClass {
+    const entry = this.agentConnectors.get(name);
+    if (entry !== undefined) return entry.ctor;
+    return NoOpAgentConnector as unknown as AgentConnectorClass;
+  }
 
   // ─── List distinct classes per kind ─────────────────────────────────────
 
@@ -95,6 +119,7 @@ export class Registry {
   listMemoryStoreClasses(): MemoryStoreClass[] { return distinct(this.memoryStores); }
   listLocalModelClasses(): LocalModelClass[] { return distinct(this.localModels); }
   listMcpConnectorClasses(): McpConnectorClass[] { return distinct(this.mcpConnectors); }
+  listAgentConnectorClasses(): AgentConnectorClass[] { return distinct(this.agentConnectors); }
 
   // ─── Aggregate view for the linter ──────────────────────────────────────
 
@@ -110,6 +135,7 @@ export class Registry {
       ...this.listMemoryStoreClasses().map((c) => c.staticCapabilities()),
       ...this.listLocalModelClasses().map((c) => c.staticCapabilities()),
       ...this.listMcpConnectorClasses().map((c) => c.staticCapabilities()),
+      ...this.listAgentConnectorClasses().map((c) => c.staticCapabilities()),
     ];
   }
 
@@ -119,7 +145,10 @@ export class Registry {
   hasMemoryStore(name = "primary"): boolean { return this.memoryStores.has(name); }
   hasLocalModel(name = "default"): boolean { return this.localModels.has(name); }
   hasMcpConnector(name = "primary"): boolean { return this.mcpConnectors.has(name); }
+  hasAgentConnector(name = "primary"): boolean { return this.agentConnectors.has(name); }
 }
+
+const DEFAULT_AGENT_CONNECTOR: AgentConnector = new NoOpAgentConnector();
 
 function ctorOf(instance: object): unknown {
   return instance.constructor;
