@@ -379,6 +379,70 @@ default: t
     expect(result.errors[0]!.message).toMatch(/timed out after 500ms/);
   });
 
+  it("missing LocalModel connector surfaces clean error", async () => {
+    const src = `t:
+    ~ prompt="hi" model=nonexistent -> R
+
+default: t
+`;
+    const result = await run(src);
+    expect(result.errors.length).toBe(1);
+    expect(result.errors[0]!.opKind).toBe("~");
+    expect(result.errors[0]!.message).toMatch(/nonexistent/);
+  });
+
+  it("foreach over empty array → zero iterations, downstream OK", async () => {
+    const src = `t:
+    $set ITEMS = []
+    foreach I in $(ITEMS):
+        ! item $(I)
+    ! after loop
+
+default: t
+`;
+    const result = await run(src);
+    expect(result.errors).toEqual([]);
+    expect(result.emissions).toEqual(["after loop"]);
+  });
+
+  it("conditional false path → else branch fires, true body doesn't", async () => {
+    const src = `t:
+    $set MODE = no
+    if $(MODE) == "yes":
+        ! ran-true
+    else:
+        ! ran-else
+
+default: t
+`;
+    const result = await run(src);
+    expect(result.errors).toEqual([]);
+    expect(result.emissions).toEqual(["ran-else"]);
+  });
+
+  it("multiple skills with overlapping execution run independently (concurrency)", async () => {
+    const src1 = `# Skill: a
+a:
+    $set X = first
+    ! a-emission
+
+default: a
+`;
+    const src2 = `# Skill: b
+b:
+    $set X = second
+    ! b-emission
+
+default: b
+`;
+    const [r1, r2] = await Promise.all([run(src1), run(src2)]);
+    expect(r1.emissions).toEqual(["a-emission"]);
+    expect(r2.emissions).toEqual(["b-emission"]);
+    // No shared mutable state — each execution has its own vars Map.
+    expect(r1.finalVars["X"]).toBe("first");
+    expect(r2.finalVars["X"]).toBe("second");
+  });
+
   it("mechanical mode skips $/~/> dispatch", async () => {
     const src = `t:
     $ would_dispatch x=1

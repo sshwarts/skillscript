@@ -185,6 +185,11 @@ export class Scheduler {
    * tests. Status-state is checked at dispatch time (not registration) per
    * spec — when a skill transitions Draft → Approved, its triggers
    * activate without re-registration.
+   *
+   * Auto-populates `$(EVENT.fired_at_*_unix)` and `$(TRIGGER_TYPE)` from
+   * the current clock unless the caller's eventPayload overrides them.
+   * Callers invoking dispatchSkill directly (without going through a
+   * registered trigger) still get clock-time ambient refs out of the box.
    */
   async dispatchSkill(skillName: string, eventPayload?: Record<string, unknown>): Promise<ExecuteResult | null> {
     let meta;
@@ -205,12 +210,27 @@ export class Scheduler {
       enableUnsafeShell: this.enableUnsafeShell,
       ...(this.absoluteTimeoutMs !== undefined ? { absoluteTimeoutMs: this.absoluteTimeoutMs } : {}),
     };
+    const defaults = this.buildEventDefaults();
     return execute(
       compiled.parsed,
-      { ...compiled.resolvedVariables, ...(eventPayload ?? {}) },
+      { ...compiled.resolvedVariables, ...defaults, ...(eventPayload ?? {}) },
       compiled.targetOrder,
       ctx,
     );
+  }
+
+  /** Default EVENT.* ambient refs at the current clock; caller may override. */
+  private buildEventDefaults(): Record<string, unknown> {
+    const nowMs = this.now();
+    const nowSec = Math.floor(nowMs / 1000);
+    return {
+      TRIGGER_TYPE: "manual",
+      "EVENT.fired_at": nowMs,
+      "EVENT.fired_at_unix": nowSec,
+      "EVENT.fired_at_plus_1h_unix": nowSec + 3600,
+      "EVENT.fired_at_plus_1d_unix": nowSec + 86_400,
+      "EVENT.fired_at_plus_7d_unix": nowSec + 604_800,
+    };
   }
 
   // ─── Internals ────────────────────────────────────────────────────────────
