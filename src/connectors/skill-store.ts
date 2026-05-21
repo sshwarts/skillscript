@@ -167,7 +167,7 @@ export class FilesystemSkillStore implements SkillStore {
     await mkdir(this.rootDir, { recursive: true });
     const content_hash = hashSource(source);
     const version = shortHash(content_hash);
-    const status = metadata?.status ?? extractStatus(source) ?? "draft";
+    const status = metadata?.status ?? extractStatus(source) ?? "Draft";
     const nowSec = Math.floor(Date.now() / 1000);
 
     await writeFile(this.pathFor(name), source, "utf8");
@@ -209,7 +209,7 @@ export class FilesystemSkillStore implements SkillStore {
       }
       throw err;
     }
-    const previous_status = extractStatus(source) ?? "draft";
+    const previous_status = extractStatus(source) ?? "Draft";
     const updated = rewriteStatusHeader(source, status);
     await writeFile(path, updated, "utf8");
     const content_hash = hashSource(updated);
@@ -237,7 +237,7 @@ export class FilesystemSkillStore implements SkillStore {
   private async buildMeta(name: string, source: string): Promise<SkillMeta> {
     const content_hash = hashSource(source);
     const version = shortHash(content_hash);
-    const status = extractStatus(source) ?? "draft";
+    const status = extractStatus(source) ?? "Draft";
     const description = extractHeader(source, "Description");
     const fileStat = await stat(this.pathFor(name)).catch(() => null);
     const updated_at = fileStat ? Math.floor(fileStat.mtimeMs / 1000) : 0;
@@ -271,8 +271,10 @@ function extractHeader(body: string, key: string): string | null {
 function extractStatus(source: string): SkillStatus | null {
   const raw = extractHeader(source, "Status");
   if (raw === null) return null;
-  const norm = raw.toLowerCase();
-  if (norm === "draft" || norm === "approved" || norm === "disabled") return norm;
+  const lower = raw.toLowerCase();
+  if (lower === "draft") return "Draft";
+  if (lower === "approved") return "Approved";
+  if (lower === "disabled") return "Disabled";
   return null;
 }
 

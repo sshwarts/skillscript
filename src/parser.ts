@@ -79,7 +79,21 @@ export interface OutputDecl {
 }
 
 export type SkillType = "procedural" | "data";
-export type SkillStatusLiteral = "draft" | "approved" | "disabled";
+export type SkillStatusLiteral = "Draft" | "Approved" | "Disabled";
+
+/**
+ * Case-insensitive accept, canonical-form return. The `allowed` list defines
+ * canonical form (the first match for any case-folded input). Returns `null`
+ * when the input doesn't match any canonical entry. Used uniformly across
+ * every enumerated frontmatter field per Section 1 Lexical conventions.
+ */
+function normalizeEnumValue<T extends string>(raw: string, allowed: readonly T[]): T | null {
+  const lower = raw.toLowerCase();
+  for (const candidate of allowed) {
+    if (candidate.toLowerCase() === lower) return candidate;
+  }
+  return null;
+}
 
 export interface ParsedSkill {
   name: string | null;
@@ -90,7 +104,7 @@ export interface ParsedSkill {
    * inlines at every `& <name>` reference site at compile time.
    */
   type: SkillType;
-  /** `# Status:` header value. Null when omitted; lint defaults to "draft" semantics. */
+  /** `# Status:` header value. Null when omitted; lint defaults to `Draft` semantics. */
   status: SkillStatusLiteral | null;
   vars: SkillVar[];
   /** Variable resolution declarations — `user-var:key -> VAR (fallback: X)` shape. */
@@ -135,11 +149,71 @@ function validateCondition(cond: string): boolean {
   return COND_TRUTHY.test(cond) || COND_EQ.test(cond) || COND_IN.test(cond);
 }
 
+/** Detects `$(REF) = "literal"` — a single `=` in condition position. */
+const SINGLE_EQ_IN_COND = /\$\([^)]+\)\s*=(?!=)\s*"[^"]*"/;
+
+/**
+ * If the condition contains `$(REF) = "..."` (single `=`), emit a specific
+ * diagnostic suggesting `==`. Returns the diagnostic string when matched,
+ * `null` otherwise. The grammar rejects single-`=` in condition position;
+ * this surfaces the JS-shaped-bug pattern as a specific error rather than
+ * the generic "unsupported condition" fallback.
+ */
+function detectSingleEqualsInCondition(cond: string): string | null {
+  const m = SINGLE_EQ_IN_COND.exec(cond);
+  if (m === null) return null;
+  const fixed = cond.replace(/\$\(([^)]+)\)\s*=(?!=)\s*"([^"]*)"/, '$($1) == "$2"');
+  return `\`=\` is not valid in a condition; use \`==\` for equality. rewrite as: \`${fixed}\``;
+}
+
+/**
+ * Reserved identifiers per Section 1 Lexical conventions. Rejected as
+ * variable names, target names (other than the special `default:` goal
+ * declaration), skill names, and foreach iterator IDENTs. Case-sensitive
+ * exact match — `default` is reserved; `Default` is allowed.
+ */
+const RESERVED_KEYWORDS_CURRENT = new Set([
+  "default", "needs", "if", "elif", "else", "foreach", "in", "not", "unsafe",
+]);
+/**
+ * Future-reserved — no current semantics. Reserved so v2 grammar additions
+ * stay non-breaking.
+ */
+const RESERVED_KEYWORDS_FUTURE = new Set([
+  "while", "for", "match", "try", "catch", "return",
+]);
+const ALL_RESERVED = new Set([...RESERVED_KEYWORDS_CURRENT, ...RESERVED_KEYWORDS_FUTURE]);
+
+function checkReserved(name: string, positionLabel: string, suggestionExample: string): string | null {
+  if (!ALL_RESERVED.has(name)) return null;
+  const futureNote = RESERVED_KEYWORDS_FUTURE.has(name) ? " (future-reserved for v2 grammar)" : "";
+  return `'${name}' is a reserved keyword${futureNote} and cannot be used as ${positionLabel}. Rename (e.g., ${suggestionExample}).`;
+}
+
 const INDENT_STEP = 4;
 
 function leadingSpaces(rawLine: string): number {
   const m = /^( *)/.exec(rawLine);
   return m ? m[1]!.length : 0;
+}
+
+/**
+ * Detect tab characters in indentation. Tabs are a parse error per Section 1
+ * Lexical conventions — the language enforces spaces-only block structure
+ * to eliminate editor-config debates. Returns the 1-indexed line numbers
+ * where tabs appear in leading whitespace.
+ */
+function findTabIndentedLines(source: string): number[] {
+  const offenders: number[] = [];
+  const lines = source.split("\n");
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i]!;
+    const match = /^[\t ]*/.exec(line);
+    if (match !== null && match[0].includes("\t")) {
+      offenders.push(i + 1);
+    }
+  }
+  return offenders;
 }
 
 // Top-level comma split — preserves commas inside `[...]` list literals.
@@ -357,6 +431,14 @@ export function parse(source: string): ParsedSkill {
     outputs: [],
     parseErrors: [],
   };
+  const tabLines = findTabIndentedLines(source);
+  if (tabLines.length > 0) {
+    const shown = tabLines.slice(0, 3).join(", ");
+    const more = tabLines.length > 3 ? ` (+${tabLines.length - 3} more)` : "";
+    result.parseErrors.push(
+      `Tab characters in indentation at line ${shown}${more}. Skillscript requires spaces-only indentation — replace tabs with spaces (conventional indent is 4 spaces).`,
+    );
+  }
   let currentTarget: SkillTarget | null = null;
   let scopeStack: ScopeFrame[] = [];
 
@@ -374,22 +456,24 @@ export function parse(source: string): ParsedSkill {
       const key = stripped.slice(0, colonIdx).trim().toLowerCase();
       const value = stripped.slice(colonIdx + 1).trim();
       if (key === "skill") {
+        const diag = checkReserved(value, "a skill name", `${value}-task`);
+        if (diag !== null) result.parseErrors.push(diag);
         result.name = value;
       } else if (key === "description") {
         result.description = value;
       } else if (key === "type") {
-        const norm = value.toLowerCase();
-        if (norm === "procedural" || norm === "data") {
+        const norm = normalizeEnumValue(value, ["procedural", "data"] as const);
+        if (norm !== null) {
           result.type = norm;
         } else {
           result.parseErrors.push(`\`# Type:\` value must be 'procedural' or 'data' (got '${value}')`);
         }
       } else if (key === "status") {
-        const norm = value.toLowerCase();
-        if (norm === "draft" || norm === "approved" || norm === "disabled") {
+        const norm = normalizeEnumValue(value, ["Draft", "Approved", "Disabled"] as const);
+        if (norm !== null) {
           result.status = norm;
         } else {
-          result.parseErrors.push(`\`# Status:\` value must be 'draft', 'approved', or 'disabled' (got '${value}')`);
+          result.parseErrors.push(`\`# Status:\` value must be 'Draft', 'Approved', or 'Disabled' (got '${value}')`);
         }
       } else if (key === "vars") {
         if (value.toLowerCase() === "(none)" || value === "") {
@@ -398,11 +482,14 @@ export function parse(source: string): ParsedSkill {
           result.vars = splitVarsLine(value).map((entry) => {
             const trimmed = entry.trim();
             const eq = trimmed.indexOf("=");
+            const varName = eq === -1 ? trimmed : trimmed.slice(0, eq).trim();
+            const diag = checkReserved(varName, "a variable name", `${varName}_value`);
+            if (diag !== null) result.parseErrors.push(diag);
             if (eq === -1) {
-              return { name: trimmed, required: true };
+              return { name: varName, required: true };
             }
             return {
-              name: trimmed.slice(0, eq).trim(),
+              name: varName,
               default: trimmed.slice(eq + 1).trim(),
               required: false,
             };
@@ -422,38 +509,41 @@ export function parse(source: string): ParsedSkill {
             result.parseErrors.push(`Malformed \`# Triggers:\` declaration '${decl}' — expected '<source>: <name>'`);
             continue;
           }
-          const source = decl.slice(0, colon).trim().toLowerCase();
+          const rawSource = decl.slice(0, colon).trim();
           const name = decl.slice(colon + 1).trim();
-          const allowed: TriggerSource[] = ["session", "cron", "event", "agent-event", "file-watch", "sensor"];
-          if (!allowed.includes(source as TriggerSource)) {
-            result.parseErrors.push(`Unsupported trigger source '${source}' — allowed: ${allowed.join(", ")}`);
+          const allowed = ["session", "cron", "event", "agent-event", "file-watch", "sensor"] as const;
+          const source = normalizeEnumValue(rawSource, allowed);
+          if (source === null) {
+            result.parseErrors.push(`Unsupported trigger source '${rawSource}' — allowed: ${allowed.join(", ")}`);
             continue;
           }
           if (name === "") {
             result.parseErrors.push(`\`# Triggers:\` declaration '${decl}' has empty name`);
             continue;
           }
-          result.triggers.push({ source: source as TriggerSource, name });
+          result.triggers.push({ source, name });
         }
       } else if (key === "output") {
         if (value.toLowerCase() === "(none)" || value === "") continue;
         for (const raw of splitVarsLine(value)) {
           const decl = raw.trim();
           if (decl === "") continue;
-          const allowedKinds: OutputKind[] = ["text", "slack", "prompt-context", "file", "card", "none"];
+          const allowedKinds = ["text", "slack", "prompt-context", "file", "card", "none"] as const;
           const colon = decl.indexOf(":");
           if (colon === -1) {
-            if (decl === "text" || decl === "none") {
-              result.outputs.push({ kind: decl as OutputKind });
+            const bareKind = normalizeEnumValue(decl, allowedKinds);
+            if (bareKind === "text" || bareKind === "none") {
+              result.outputs.push({ kind: bareKind });
             } else {
               result.parseErrors.push(`\`# Output:\` kind '${decl}' missing target — kinds 'slack', 'prompt-context', 'file', 'card' require '<kind>: <target>'. Only 'text' and 'none' are bare-only.`);
             }
             continue;
           }
-          const kind = decl.slice(0, colon).trim().toLowerCase();
+          const rawKind = decl.slice(0, colon).trim();
           const target = decl.slice(colon + 1).trim();
-          if (!allowedKinds.includes(kind as OutputKind)) {
-            result.parseErrors.push(`Unsupported output kind '${kind}' — allowed: ${allowedKinds.join(", ")}`);
+          const kind = normalizeEnumValue(rawKind, allowedKinds);
+          if (kind === null) {
+            result.parseErrors.push(`Unsupported output kind '${rawKind}' — allowed: ${allowedKinds.join(", ")}`);
             continue;
           }
           if (kind === "text" || kind === "none") {
@@ -464,7 +554,7 @@ export function parse(source: string): ParsedSkill {
             result.parseErrors.push(`\`# Output:\` kind '${kind}' requires a target after the colon`);
             continue;
           }
-          result.outputs.push({ kind: kind as OutputKind, target });
+          result.outputs.push({ kind, target });
         }
       } else if (key === "requires") {
         if (value.toLowerCase() === "(none)" || value === "") continue;
@@ -526,6 +616,8 @@ export function parse(source: string): ParsedSkill {
         scopeStack = [];
         continue;
       }
+      const targetReserved = checkReserved(name, "a target name", `${name}_target`);
+      if (targetReserved !== null) result.parseErrors.push(targetReserved);
       currentTarget = { name, deps, ops: [] };
       scopeStack = [{
         kind: "main",
@@ -558,6 +650,11 @@ export function parse(source: string): ParsedSkill {
           continue;
         }
         const cond = elifMatch[1]!.trim();
+        const eqDiag = detectSingleEqualsInCondition(cond);
+        if (eqDiag !== null) {
+          result.parseErrors.push(`\`elif\` in target '${currentTarget.name}': ${eqDiag}`);
+          continue;
+        }
         if (!validateCondition(cond)) {
           result.parseErrors.push(`Unsupported condition in \`elif\` (target '${currentTarget.name}'): \`${cond}\` — v1 grammar is truthy / \`==\` / \`!=\` against quoted literals, or \`in\` / \`not in\` between two \`$(NAME)\` refs`);
           continue;
@@ -586,7 +683,12 @@ export function parse(source: string): ParsedSkill {
     popToDepth(scopeStack, lineIndent);
     if (scopeStack.length === 0) continue;
     const topFrame = scopeStack[scopeStack.length - 1]!;
-    if (topFrame.depth !== lineIndent) continue;
+    if (topFrame.depth !== lineIndent) {
+      result.parseErrors.push(
+        `Mid-block indent change in target '${currentTarget.name}': line indented to ${lineIndent} spaces but enclosing block expects ${topFrame.depth}. Use consistent indentation within a block.`,
+      );
+      continue;
+    }
     const opBucket = topFrame.opsBucket;
     if (stripped0.startsWith("elif ")) {
       result.parseErrors.push(`\`elif\` without preceding \`if:\` in target '${currentTarget.name}'`);
@@ -599,6 +701,11 @@ export function parse(source: string): ParsedSkill {
         continue;
       }
       const cond = ifMatch[1]!.trim();
+      const eqDiag = detectSingleEqualsInCondition(cond);
+      if (eqDiag !== null) {
+        result.parseErrors.push(`\`if\` in target '${currentTarget.name}': ${eqDiag}`);
+        continue;
+      }
       if (!validateCondition(cond)) {
         result.parseErrors.push(`Unsupported condition in \`if\` (target '${currentTarget.name}'): \`${cond}\` — v1 grammar is truthy / \`==\` / \`!=\` against quoted literals, or \`in\` / \`not in\` between two \`$(NAME)\` refs`);
         continue;
@@ -695,6 +802,8 @@ export function parse(source: string): ParsedSkill {
         continue;
       }
       const [, iter, listExpr] = fmatch;
+      const iterReserved = checkReserved(iter!, "a foreach iterator", `${iter}_item`);
+      if (iterReserved !== null) result.parseErrors.push(iterReserved);
       const foreachOp: SkillOp = {
         kind: "foreach",
         body: stripped0,

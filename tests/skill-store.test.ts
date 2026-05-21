@@ -19,7 +19,7 @@ afterEach(() => {
 
 const SAMPLE = `# Skill: hello
 # Description: greets
-# Status: draft
+# Status: Draft
 
 greet:
     ! hi
@@ -32,12 +32,12 @@ describe("FilesystemSkillStore", () => {
     const v = await store.store("hello", SAMPLE);
     expect(v.content_hash).toMatch(/^[a-f0-9]{64}$/);
     expect(v.version).toBe(v.content_hash.slice(0, 12));
-    expect(v.status).toBe("draft");
+    expect(v.status).toBe("Draft");
 
     const loaded = await store.load("hello");
     expect(loaded.source).toBe(SAMPLE);
     expect(loaded.content_hash).toBe(v.content_hash);
-    expect(loaded.metadata.status).toBe("draft");
+    expect(loaded.metadata.status).toBe("Draft");
   });
 
   it("load throws SkillNotFoundError for missing skill", async () => {
@@ -58,35 +58,35 @@ describe("FilesystemSkillStore", () => {
 
   it("query filter narrows by status", async () => {
     await store.store("a", SAMPLE);
-    await store.store("b", SAMPLE.replace("# Status: draft", "# Status: approved"));
-    const drafts = await store.query({ status: "draft" });
+    await store.store("b", SAMPLE.replace("# Status: Draft", "# Status: Approved"));
+    const drafts = await store.query({ status: "Draft" });
     expect(drafts.map((m) => m.name)).toEqual(["a"]);
-    const approved = await store.query({ status: "approved" });
+    const approved = await store.query({ status: "Approved" });
     expect(approved.map((m) => m.name)).toEqual(["b"]);
   });
 
   it("update_status records previous_status in VersionInfo", async () => {
     await store.store("hello", SAMPLE);
-    const v = await store.update_status("hello", "approved");
-    expect(v.previous_status).toBe("draft");
-    expect(v.status).toBe("approved");
+    const v = await store.update_status("hello", "Approved");
+    expect(v.previous_status).toBe("Draft");
+    expect(v.status).toBe("Approved");
 
     // Verify the file's body was updated.
     const reloaded = await store.load("hello");
-    expect(reloaded.metadata.status).toBe("approved");
+    expect(reloaded.metadata.status).toBe("Approved");
   });
 
   it("versions() returns the audit chain", async () => {
     await store.store("hello", SAMPLE);
-    await store.update_status("hello", "approved");
-    await store.update_status("hello", "disabled");
+    await store.update_status("hello", "Approved");
+    await store.update_status("hello", "Disabled");
     const hist = await store.versions("hello");
     expect(hist).toHaveLength(3);
-    expect(hist[0]!.status).toBe("draft");
-    expect(hist[1]!.previous_status).toBe("draft");
-    expect(hist[1]!.status).toBe("approved");
-    expect(hist[2]!.previous_status).toBe("approved");
-    expect(hist[2]!.status).toBe("disabled");
+    expect(hist[0]!.status).toBe("Draft");
+    expect(hist[1]!.previous_status).toBe("Draft");
+    expect(hist[1]!.status).toBe("Approved");
+    expect(hist[2]!.previous_status).toBe("Approved");
+    expect(hist[2]!.status).toBe("Disabled");
   });
 
   it("versions() throws SkillNotFoundError for missing skill", async () => {
@@ -95,7 +95,7 @@ describe("FilesystemSkillStore", () => {
 
   it("delete removes both .skill and .versions.jsonl", async () => {
     await store.store("hello", SAMPLE);
-    await store.update_status("hello", "approved");
+    await store.update_status("hello", "Approved");
     await store.delete("hello");
     await expect(store.load("hello")).rejects.toBeInstanceOf(SkillNotFoundError);
     await expect(store.versions("hello")).rejects.toBeInstanceOf(SkillNotFoundError);
@@ -109,7 +109,7 @@ describe("FilesystemSkillStore", () => {
     await store.store("hello", SAMPLE);
     const meta = await store.metadata("hello");
     expect(meta.name).toBe("hello");
-    expect(meta.status).toBe("draft");
+    expect(meta.status).toBe("Draft");
     expect(meta.description).toBe("greets");
     expect(meta.content_hash).toMatch(/^[a-f0-9]{64}$/);
   });

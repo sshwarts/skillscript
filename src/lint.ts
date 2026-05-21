@@ -381,6 +381,48 @@ const INVALID_CONDITIONAL_SYNTAX: LintRule = {
     })),
 };
 
+const SINGLE_EQUALS: LintRule = {
+  id: "single-equals",
+  severity: "error",
+  description: "An `if:` / `elif:` condition uses single `=` for equality. Skillscript condition equality is `==` (two-character).",
+  remediation: "Replace `=` with `==`. The diagnostic includes the rewritten line.",
+  check: (ctx) => ctx.parsed.parseErrors
+    .filter((msg) => /`=` is not valid in a condition; use `==`/.test(msg))
+    .map((msg) => ({
+      rule: "single-equals",
+      severity: "error" as const,
+      message: msg,
+    })),
+};
+
+const RESERVED_KEYWORD: LintRule = {
+  id: "reserved-keyword",
+  severity: "error",
+  description: "An identifier (skill name, variable name, target name, or foreach iterator) uses a reserved keyword. Reserved words: `default`, `needs`, `if`, `elif`, `else`, `foreach`, `in`, `not`, `unsafe` (current) and `while`, `for`, `match`, `try`, `catch`, `return` (future-reserved).",
+  remediation: "Rename to a non-reserved identifier. The diagnostic includes a suggested rename.",
+  check: (ctx) => ctx.parsed.parseErrors
+    .filter((msg) => / is a reserved keyword/.test(msg))
+    .map((msg) => ({
+      rule: "reserved-keyword",
+      severity: "error" as const,
+      message: msg,
+    })),
+};
+
+const INDENTATION: LintRule = {
+  id: "indentation",
+  severity: "error",
+  description: "Indentation must be spaces-only with consistent depth within a block. Tabs and mid-block indent changes are parse errors.",
+  remediation: "Replace tabs with spaces (conventional indent is 4 spaces). Within a block, every non-sub-block line must use the same indent depth.",
+  check: (ctx) => ctx.parsed.parseErrors
+    .filter((msg) => /Tab characters in indentation|Mid-block indent change/.test(msg))
+    .map((msg) => ({
+      rule: "indentation",
+      severity: "error" as const,
+      message: msg,
+    })),
+};
+
 const UNKNOWN_SKILL_REFERENCE: LintRule = {
   id: "unknown-skill-reference",
   severity: "error",
@@ -426,7 +468,7 @@ const DISABLED_SKILL_REFERENCE: LintRule = {
         checked.add(refName);
         try {
           const meta = await ctx.skillStore.metadata(refName);
-          if (meta.status === "disabled") {
+          if (meta.status === "Disabled") {
             findings.push({
               rule: "disabled-skill-reference",
               severity: "error",
@@ -474,14 +516,14 @@ const CREDENTIAL_IN_ARGS: LintRule = {
 const STATUS_DISABLED: LintRule = {
   id: "status-disabled",
   severity: "error",
-  description: "The skill being compiled is `# Status: disabled`. Disabled skills don't compile.",
+  description: "The skill being compiled is `# Status: Disabled`. Disabled skills don't compile.",
   remediation: "Transition the skill to `approved` or `draft` via `update_status` before compiling, or revisit whether the skill should be disabled.",
   check: (ctx) => {
-    if (ctx.parsed.status !== "disabled") return [];
+    if (ctx.parsed.status !== "Disabled") return [];
     return [{
       rule: "status-disabled",
       severity: "error",
-      message: `Skill '${ctx.parsed.name ?? "(unnamed)"}' is \`# Status: disabled\` and cannot be compiled.`,
+      message: `Skill '${ctx.parsed.name ?? "(unnamed)"}' is \`# Status: Disabled\` and cannot be compiled.`,
     }];
   },
 };
@@ -584,6 +626,30 @@ const MISSING_SKILLSTORE_FOR_DATA_REF: LintRule = {
 
 // ─── Tier-2 rules (warning) ─────────────────────────────────────────────────
 
+const DEPRECATED_QUESTION: LintRule = {
+  id: "deprecated-question",
+  severity: "warning",
+  description: "Skill uses bare `?` (deprecated). The implicit-context reasoning form makes behavior depend on context not visible in the skill source. Compile-error in v1.x.",
+  remediation: "Rewrite as `~ prompt=\"<explicit reasoning task>\" -> VAR`. Use the explicit prompt to capture what the implicit `?` was doing (\"decide whether to escalate\", \"classify this input\", etc.).",
+  check: (ctx) => {
+    const findings: LintFinding[] = [];
+    for (const [targetName, target] of ctx.parsed.targets) {
+      walkOps(target.ops, (op) => {
+        if (op.kind === "?") {
+          const varName = op.outputVar ?? "VAR";
+          findings.push({
+            rule: "deprecated-question",
+            severity: "warning",
+            message: `\`?\` op in target '${targetName}' is deprecated (compile-error in v1.x). rewrite as: \`~ prompt="<explicit reasoning task>" -> ${varName}\``,
+            block: targetName,
+          });
+        }
+      });
+    }
+    return findings;
+  },
+};
+
 const UNSAFE_SHELL_OP: LintRule = {
   id: "unsafe-shell-op",
   severity: "warning",
@@ -676,14 +742,14 @@ const MODEL_CONTENTION: LintRule = {
 const DRAFT_WITH_TRIGGER: LintRule = {
   id: "draft-with-trigger",
   severity: "warning",
-  description: "Skill has `# Status: draft` but declares triggers. Draft skills shouldn't be fire-able autonomously.",
+  description: "Skill has `# Status: Draft` but declares triggers. Draft skills shouldn't be fire-able autonomously.",
   remediation: "Promote to `approved` once tested, or remove the trigger declarations until the skill is ready.",
   check: (ctx) => {
-    if (ctx.parsed.status !== "draft" || ctx.parsed.triggers.length === 0) return [];
+    if (ctx.parsed.status !== "Draft" || ctx.parsed.triggers.length === 0) return [];
     return [{
       rule: "draft-with-trigger",
       severity: "warning",
-      message: `Skill is \`# Status: draft\` but declares ${ctx.parsed.triggers.length} trigger(s). Draft skills won't fire — promote or drop the triggers.`,
+      message: `Skill is \`# Status: Draft\` but declares ${ctx.parsed.triggers.length} trigger(s). Draft skills won't fire — promote or drop the triggers.`,
     }];
   },
 };
@@ -703,7 +769,7 @@ const REFERENCE_TO_DISABLED_SKILL: LintRule = {
         checked.add(refName);
         try {
           const meta = await ctx.skillStore.metadata(refName);
-          if (meta.status === "disabled") {
+          if (meta.status === "Disabled") {
             findings.push({
               rule: "reference-to-disabled-skill",
               severity: "warning",
@@ -783,6 +849,9 @@ const RULES: LintRule[] = [
   UNKNOWN_FILTER,
   MALFORMED_OP_GRAMMAR,
   INVALID_CONDITIONAL_SYNTAX,
+  SINGLE_EQUALS,
+  INDENTATION,
+  RESERVED_KEYWORD,
   UNKNOWN_SKILL_REFERENCE,
   DISABLED_SKILL_REFERENCE,
   CREDENTIAL_IN_ARGS,
@@ -791,6 +860,7 @@ const RULES: LintRule[] = [
   MISSING_DEPENDENCY,
   MISSING_SKILLSTORE_FOR_DATA_REF,
   // Tier-2 (warning)
+  DEPRECATED_QUESTION,
   UNSAFE_SHELL_OP,
   UNCONFIRMED_MUTATION,
   MODEL_CONTENTION,

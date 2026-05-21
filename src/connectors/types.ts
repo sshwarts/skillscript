@@ -46,7 +46,7 @@ export interface ManifestInfo {
 
 // ─── SkillStore ───────────────────────────────────────────────────────────
 
-export type SkillStatus = "draft" | "approved" | "disabled";
+export type SkillStatus = "Draft" | "Approved" | "Disabled";
 
 /**
  * The source bytes of a skill plus its identity metadata. Returned by

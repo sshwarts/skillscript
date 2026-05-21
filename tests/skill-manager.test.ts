@@ -31,7 +31,7 @@ afterEach(() => {
 });
 
 const SAMPLE = `# Skill: hello
-# Status: draft
+# Status: Draft
 
 greet:
     ! hi

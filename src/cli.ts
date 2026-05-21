@@ -260,7 +260,7 @@ async function cmdList(args: string[]): Promise<number> {
   const statusFilter = extractFlag(args, "--status");
   const store = new FilesystemSkillStore(SKILLS_DIR);
   const metas = await store.query(
-    statusFilter !== undefined ? { status: statusFilter as "draft" | "approved" | "disabled" } : undefined,
+    statusFilter !== undefined ? { status: statusFilter as "Draft" | "Approved" | "Disabled" } : undefined,
   );
   if (metas.length === 0) {
     process.stdout.write(`No skills found in ${SKILLS_DIR}.\nRun \`skillfile init\` to scaffold the tree.\n`);

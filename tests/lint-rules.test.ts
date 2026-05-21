@@ -456,8 +456,8 @@ describe("tier-3: duplicate-skill-name", () => {
     const stubStore = {
       ...registry.getSkillStore(),
       query: async () => [
-        { name: "shared", version: "v1", content_hash: "h1", status: "draft" as const, created_at: 0, updated_at: 0 },
-        { name: "shared", version: "v2", content_hash: "h2", status: "approved" as const, created_at: 0, updated_at: 0 },
+        { name: "shared", version: "v1", content_hash: "h1", status: "Draft" as const, created_at: 0, updated_at: 0 },
+        { name: "shared", version: "v2", content_hash: "h2", status: "Approved" as const, created_at: 0, updated_at: 0 },
       ],
     };
     const src = `# Skill: shared\nt:\n    ! hi\ndefault: t\n`;

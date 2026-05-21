@@ -1,5 +1,5 @@
 # Skill: bad
-# Status: draft
+# Status: Draft
 # Triggers: cron: */5 * * * *
 t:
     ! hi

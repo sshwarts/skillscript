@@ -149,9 +149,9 @@ export const SkillStoreConformance = {
           const caps = fixture.ctor.staticCapabilities();
           if (caps.features["supports_audit_trail"] !== true) return; // skip; feature opt-out
           await store.store("conformance-test", SAMPLE_SKILL);
-          const v = await store.update_status("conformance-test", "approved");
+          const v = await store.update_status("conformance-test", "Approved");
           assert(v.previous_status !== undefined, "audit-trail impl must populate previous_status");
-          assert(v.status === "approved", "update_status must persist new status");
+          assert(v.status === "Approved", "update_status must persist new status");
         }),
       },
       {
@@ -162,8 +162,8 @@ export const SkillStoreConformance = {
           if (caps.features["supports_writes"] !== true) return;
           await store.store("draft-a", SAMPLE_SKILL);
           await store.store("approved-b", SAMPLE_SKILL);
-          await store.update_status("approved-b", "approved");
-          const approved = await store.query({ status: "approved" });
+          await store.update_status("approved-b", "Approved");
+          const approved = await store.query({ status: "Approved" });
           assert(approved.length === 1, `expected 1 approved skill, got ${approved.length}`);
           assert(approved[0]!.name === "approved-b", `expected 'approved-b', got '${approved[0]!.name}'`);
         }),

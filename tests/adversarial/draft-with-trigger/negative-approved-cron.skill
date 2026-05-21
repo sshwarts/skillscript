@@ -1,5 +1,5 @@
 # Skill: ok
-# Status: approved
+# Status: Approved
 # Triggers: cron: */5 * * * *
 t:
     ! hi
