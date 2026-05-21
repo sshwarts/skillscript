@@ -258,17 +258,14 @@ function renderTriggers() {
     <h2>Triggers</h2>
 
     <section>
-      <h2>Register new trigger</h2>
-      <form onsubmit="registerTrigger(event); return false;" style="display: grid; grid-template-columns: 1fr 1fr 1fr auto; gap: 8px;">
-        <input name="skill_name" placeholder="skill name" required />
-        <select name="source">
-          <option value="cron">cron</option>
-          <option value="session">session</option>
-          <option value="event">event</option>
-        </select>
-        <input name="name" placeholder="cron expr or hook name" required />
-        <button type="submit" class="primary">Register</button>
-      </form>
+      <div class="remediation" style="border-color: #2a6fb1; background: #eef5fb; color: #1a3d5c;">
+        <strong>Trigger registration is CLI-only.</strong>
+        Creating a new trigger introduces autonomous dispatch surface that doesn't appear
+        in the skill source. To prevent miswired cron expressions on a localhost-no-auth
+        dashboard, register from the terminal where intent is explicit:
+        <pre style="background: transparent; color: inherit; padding: 8px 0; margin-top: 8px;">skillfile register-trigger &lt;skill&gt; --source cron --name '0 9 * * *'</pre>
+        Unregister (safe — removes existing dispatch, doesn't create) stays in the UI below.
+      </div>
     </section>
 
     <section>
@@ -331,20 +328,10 @@ window.updateStatus = async function (name, newState) {
   }
 };
 
-window.registerTrigger = async function (event) {
-  const data = new FormData(event.target);
-  try {
-    await callTool("register_trigger", {
-      skill_name: data.get("skill_name"),
-      source: data.get("source"),
-      name: data.get("name"),
-    });
-    event.target.reset();
-    await refresh();
-  } catch (err) {
-    alert(`Register failed: ${err.message}`);
-  }
-};
+// Note: register-trigger intentionally NOT exposed in the SPA — creates
+// new autonomous dispatch surface that doesn't appear in the skill source.
+// CLI-only (`skillfile register-trigger`) keeps intent explicit. Unregister
+// stays in the UI; it removes existing surface (safety, not weapon).
 
 window.unregisterTrigger = async function (id) {
   if (!confirm("Unregister this trigger?")) return;

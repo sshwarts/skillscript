@@ -55,6 +55,11 @@ Usage:
   skillfile replay <trace_id> [opts]    Re-run a recorded trace
   skillfile health [opts]               Aggregate metrics across all traces
   skillfile dashboard [--port N]        Start the browser dashboard (localhost-only)
+  skillfile register-trigger <skill> --source <kind> --name <expr>
+                                        Register a trigger (CLI-only for safety)
+  skillfile unregister-trigger <id>     Unregister a trigger by id
+  skillfile list-triggers [--skill X] [--source Y]
+                                        List registered triggers
 
 Run/compile options:
   --input KEY=value (repeatable)        Provide a value for a declared input
@@ -119,7 +124,10 @@ async function main(): Promise<number> {
     case "verify":  return await cmdVerify(rest);
     case "replay":  return await cmdReplay(rest);
     case "health":  return await cmdHealth(rest);
-    case "dashboard": return await cmdDashboard(rest);
+    case "dashboard":           return await cmdDashboard(rest);
+    case "register-trigger":    return await cmdRegisterTrigger(rest);
+    case "unregister-trigger":  return await cmdUnregisterTrigger(rest);
+    case "list-triggers":       return await cmdListTriggers(rest);
     default:
       process.stderr.write(`skillfile: unknown command '${cmd}'\n\n${usage()}`);
       return 64;
@@ -462,6 +470,70 @@ async function copyScaffoldFile(src: string, dest: string): Promise<void> {
   await mkdir(dirname(dest), { recursive: true });
   const body = await readFile(src, "utf8");
   await writeFile(dest, body, "utf8");
+}
+
+async function cmdRegisterTrigger(args: string[]): Promise<number> {
+  const skill = args.find((a) => !a.startsWith("--"));
+  const source = extractFlag(args, "--source");
+  const name = extractFlag(args, "--name");
+  const expiresAtStr = extractFlag(args, "--expires-at");
+  if (skill === undefined || source === undefined || name === undefined) {
+    process.stderr.write(`Usage: skillfile register-trigger <skill> --source <cron|session|event|agent-event|file-watch|sensor> --name <expr> [--expires-at <unix-seconds>]\n`);
+    return 64;
+  }
+  const allowedSources = ["cron", "session", "event", "agent-event", "file-watch", "sensor"];
+  if (!allowedSources.includes(source)) {
+    process.stderr.write(`--source must be one of: ${allowedSources.join(", ")} (got '${source}')\n`);
+    return 64;
+  }
+  const skillStore = new FilesystemSkillStore(SKILLS_DIR);
+  const traceStore = new FilesystemTraceStore(TRACE_DIR);
+  const scheduler = new Scheduler({ registry: new Registry(), skillStore, traceStore });
+  const reg = scheduler.registerTrigger({
+    skillName: skill,
+    source: source as Parameters<typeof scheduler.registerTrigger>[0]["source"],
+    name,
+    declarative: false,
+    ...(expiresAtStr !== undefined ? { expiresAt: parseInt(expiresAtStr, 10) } : {}),
+  });
+  // NOTE: registration is in-memory on the Scheduler instance, which dies
+  // when this command exits. For persistent registration across runs,
+  // operators run `skillfile dashboard` (long-lived) or wire their own
+  // Scheduler with persistent storage. v1.x candidate: persistent trigger
+  // registry on disk so CLI register-trigger survives process exit.
+  process.stdout.write(JSON.stringify(reg, null, 2) + "\n");
+  process.stderr.write(`\nnote: trigger lives in-memory; restart with \`skillfile dashboard\` to persist across the session.\n`);
+  return 0;
+}
+
+async function cmdUnregisterTrigger(args: string[]): Promise<number> {
+  const id = args[0];
+  if (id === undefined) {
+    process.stderr.write("Usage: skillfile unregister-trigger <trigger_id>\n");
+    return 64;
+  }
+  const skillStore = new FilesystemSkillStore(SKILLS_DIR);
+  const traceStore = new FilesystemTraceStore(TRACE_DIR);
+  const scheduler = new Scheduler({ registry: new Registry(), skillStore, traceStore });
+  const removed = scheduler.unregisterTrigger(id);
+  process.stdout.write(JSON.stringify({ trigger_id: id, removed }, null, 2) + "\n");
+  return removed ? 0 : 1;
+}
+
+async function cmdListTriggers(args: string[]): Promise<number> {
+  const skill = extractFlag(args, "--skill");
+  const source = extractFlag(args, "--source");
+  const skillStore = new FilesystemSkillStore(SKILLS_DIR);
+  const traceStore = new FilesystemTraceStore(TRACE_DIR);
+  const scheduler = new Scheduler({ registry: new Registry(), skillStore, traceStore });
+  const filter: { skillName?: string; source?: Parameters<typeof scheduler.listTriggers>[0] extends infer F ? F extends { source?: infer S } ? S : never : never } = {};
+  if (skill !== undefined) filter.skillName = skill;
+  if (source !== undefined) {
+    filter.source = source as NonNullable<typeof filter.source>;
+  }
+  const triggers = scheduler.listTriggers(filter);
+  process.stdout.write(JSON.stringify(triggers, null, 2) + "\n");
+  return 0;
 }
 
 async function cmdDashboard(args: string[]): Promise<number> {
