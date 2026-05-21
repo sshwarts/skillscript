@@ -110,3 +110,6 @@ export type { DeleteSkillOptions } from "./skill-manager.js";
 
 export { audit, formatAuditResult } from "./audit.js";
 export type { AuditResult, AuditFinding, AuditRule } from "./audit.js";
+
+export { Scheduler, cronMatches } from "./scheduler.js";
+export type { SchedulerConfig, TriggerRegistration, ResolvableTriggerSource } from "./scheduler.js";
