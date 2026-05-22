@@ -237,6 +237,34 @@ export class UnresolvedVariableError extends OpError {
 }
 
 /**
+ * A numeric comparison (`<` / `>` / `<=` / `>=`) in an `if` / `elif` condition
+ * had a non-numeric operand. v0.2.5 explicit-mismatch class — silent
+ * lexicographic fallback would be the wrong default for the orchestration
+ * carve-out (numeric thresholds + counts). Per Perry's f75477a4.
+ */
+export class TypeMismatchError extends OpError {
+  constructor(
+    public readonly refDesc: string,
+    public readonly operator: string,
+    public readonly lhs: string,
+    public readonly rhs: string,
+    target?: string,
+  ) {
+    const truncLhs = lhs.length > 40 ? `${lhs.slice(0, 40)}...` : lhs;
+    const truncRhs = rhs.length > 40 ? `${rhs.slice(0, 40)}...` : rhs;
+    const message =
+      `Numeric comparison '${operator}' requires numeric operands; got '${truncLhs}' ${operator} '${truncRhs}' (ref: ${refDesc}).`;
+    const remediation =
+      `Both operands of \`<\` / \`>\` / \`<=\` / \`>=\` must coerce to numbers. ` +
+      `If a value comes from a \`~\` op or \`@\` shell output, pre-process with the model to extract a numeric value, ` +
+      `or strip noise via \`|trim\` before comparison. For collection sizes use \`|length\`. ` +
+      `Arithmetic operators are out of scope — that's tool computation, not skill orchestration.`;
+    super(message, "if", remediation, target);
+    this.name = "TypeMismatchError";
+  }
+}
+
+/**
  * Structured JSON shape for entries in `result.errors[]`. Surfaces in
  * dispatch trace records, CLI diagnostics, and dashboard error views.
  */

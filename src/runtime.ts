@@ -11,6 +11,7 @@ import {
   InteractiveOpInAutonomousModeError,
   UnsafeShellDisabledError,
   UnresolvedVariableError,
+  TypeMismatchError,
 } from "./errors.js";
 import { TraceBuilder, shouldTraceFire } from "./trace.js";
 import type { TraceConfig, TraceStore } from "./trace.js";
@@ -1146,6 +1147,8 @@ const TRUTHY = /^\s*\$\(([A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*)(?:\s*\|\s*([A-Za-z_]\w
 const EQ = /^\s*\$\(([A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*)(?:\s*\|\s*([A-Za-z_]\w*))?\)\s*(==|!=)\s*"([^"]*)"\s*$/;
 /** Ref-vs-ref equality (per language reference §5 + 2026-05-21 grammar extension). Filter + dotted-field-access permitted on either side. */
 const EQ_REF = /^\s*\$\(([A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*)(?:\s*\|\s*([A-Za-z_]\w*))?\)\s*(==|!=)\s*\$\(([A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*)(?:\s*\|\s*([A-Za-z_]\w*))?\)\s*$/;
+const CMP = /^\s*\$\(([A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*)(?:\s*\|\s*([A-Za-z_]\w*))?\)\s*(<=|>=|<|>)\s*"([^"]*)"\s*$/;
+const CMP_REF = /^\s*\$\(([A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*)(?:\s*\|\s*([A-Za-z_]\w*))?\)\s*(<=|>=|<|>)\s*\$\(([A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*)(?:\s*\|\s*([A-Za-z_]\w*))?\)\s*$/;
 const IN = /^\s*\$\(([A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*)(?:\s*\|\s*([A-Za-z_]\w*))?\)\s+(not\s+)?in\s+\$\(([A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*)\)\s*$/;
 
 export function evalCondition(cond: string, vars: Map<string, unknown>): boolean {
@@ -1178,6 +1181,26 @@ export function evalCondition(cond: string, vars: Map<string, unknown>): boolean
     const lhsFinal = lhsFilter !== undefined ? applyFilter(lhsStr, lhsFilter) : lhsStr;
     const rhsFinal = rhsFilter !== undefined ? applyFilter(rhsStr, rhsFilter) : rhsStr;
     return op === "==" ? lhsFinal === rhsFinal : lhsFinal !== rhsFinal;
+  }
+  const cmp = CMP.exec(cond);
+  if (cmp) {
+    const [, ref, filter, op, lit] = cmp;
+    const val = resolveRef(ref!, vars);
+    const valStr = val === undefined ? "" : stringifyValue(val);
+    const final = filter !== undefined ? applyFilter(valStr, filter) : valStr;
+    return compareNumeric(final, op as CmpOp, lit!, `$(${ref}${filter !== undefined ? `|${filter}` : ""})`);
+  }
+  const cmpRef = CMP_REF.exec(cond);
+  if (cmpRef) {
+    const [, lhsRef, lhsFilter, op, rhsRef, rhsFilter] = cmpRef;
+    const lhsVal = resolveRef(lhsRef!, vars);
+    const rhsVal = resolveRef(rhsRef!, vars);
+    const lhsStr = lhsVal === undefined ? "" : stringifyValue(lhsVal);
+    const rhsStr = rhsVal === undefined ? "" : stringifyValue(rhsVal);
+    const lhsFinal = lhsFilter !== undefined ? applyFilter(lhsStr, lhsFilter) : lhsStr;
+    const rhsFinal = rhsFilter !== undefined ? applyFilter(rhsStr, rhsFilter) : rhsStr;
+    const refDesc = `$(${lhsRef}) ${op} $(${rhsRef})`;
+    return compareNumeric(lhsFinal, op as CmpOp, rhsFinal, refDesc);
   }
   const i = IN.exec(cond);
   if (i) {
@@ -1220,6 +1243,28 @@ export function evalCondition(cond: string, vars: Map<string, unknown>): boolean
     return notKey !== undefined ? !found : found;
   }
   throw new Error(`Invalid runtime condition (parser should have rejected): ${cond}`);
+}
+
+type CmpOp = "<" | ">" | "<=" | ">=";
+
+/**
+ * Numeric comparison helper for the `<`/`>`/`<=`/`>=` condition operators
+ * (v0.2.5). Both operands coerce via `Number()`; non-finite results raise
+ * a `TypeMismatchError` rather than fall back to lexicographic comparison
+ * (which would silently mis-compare "10" < "9").
+ */
+function compareNumeric(lhs: string, op: CmpOp, rhs: string, refDesc: string): boolean {
+  const lhsNum = Number(lhs);
+  const rhsNum = Number(rhs);
+  if (!Number.isFinite(lhsNum) || !Number.isFinite(rhsNum)) {
+    throw new TypeMismatchError(refDesc, op, lhs, rhs);
+  }
+  switch (op) {
+    case "<":  return lhsNum < rhsNum;
+    case ">":  return lhsNum > rhsNum;
+    case "<=": return lhsNum <= rhsNum;
+    case ">=": return lhsNum >= rhsNum;
+  }
 }
 
 function isTruthy(v: unknown): boolean {

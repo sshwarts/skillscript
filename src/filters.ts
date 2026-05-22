@@ -1,7 +1,7 @@
 // Pipe-filter implementations. `$(NAME|filter)` syntax dispatches here.
 
 /** The names of every registered filter. Lint's `unknown-filter` rule consults this. */
-export const KNOWN_FILTERS = ["url", "shell", "json", "trim"] as const;
+export const KNOWN_FILTERS = ["url", "shell", "json", "trim", "length"] as const;
 export type KnownFilter = (typeof KNOWN_FILTERS)[number];
 //
 // Adding a new filter:
@@ -22,6 +22,9 @@ export type KnownFilter = (typeof KNOWN_FILTERS)[number];
  *   json   — `JSON.stringify`. Produces a quoted JSON string literal.
  *   trim   — strip leading/trailing whitespace. Useful on local-model outputs that
  *            often append a trailing newline that breaks `==` equality checks.
+ *   length — count of items (if the value JSON-parses as an array) or characters
+ *            (otherwise). Read-only projection — pairs with v0.2.5's numeric
+ *            comparison operators for skills like `if $(ITEMS|length) > "0":`.
  *
  * Unknown filter names throw — typos are caught at compile time when the value
  * is already resolved, or at runtime for ambient refs.
@@ -36,7 +39,18 @@ export function applyFilter(value: string, filter: string): string {
       return JSON.stringify(value);
     case "trim":
       return value.trim();
+    case "length": {
+      // Array-shaped JSON → element count. Anything else (including
+      // JSON-parsed-but-not-array, or non-JSON strings) → character count.
+      try {
+        const parsed = JSON.parse(value) as unknown;
+        if (Array.isArray(parsed)) return String(parsed.length);
+      } catch {
+        /* not JSON — fall through to string-length semantics */
+      }
+      return String(value.length);
+    }
     default:
-      throw new Error(`Unknown filter '${filter}' — supported: url, shell, json, trim`);
+      throw new Error(`Unknown filter '${filter}' — supported: url, shell, json, trim, length`);
   }
 }

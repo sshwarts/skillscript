@@ -1,5 +1,45 @@
 # Changelog
 
+## 0.2.5 — 2026-05-22
+
+**Language polish — Item 1 of 5 from v0.2.5 kickoff** (Perry's thread
+`f75477a4`). The "orchestration carve-out" addition: comparison is
+orchestration, arithmetic is tool computation. This patch ships the
+comparison + counting affordances; items 2-5 follow after Perry's
+validation pass.
+
+### Added
+- **Comparison operators `<` / `>` / `<=` / `>=`** in `if` / `elif`
+  conditions. Both ref-vs-literal (`$(N) > "10"`) and ref-vs-ref
+  (`$(A) <= $(B)`) shapes; filters + dotted field access permitted on
+  either side, matching the existing `==`/`!=` surface.
+- **Numeric coercion at runtime.** Both operands pass through `Number()`;
+  non-finite results throw `TypeMismatchError` with structured operands
+  + ref description + canned remediation. Silent lexicographic fallback
+  (which would mis-compare `"9" < "10"` as false) is explicitly rejected.
+- **`|length` filter.** Returns element count when the value JSON-parses
+  as an array; returns character count otherwise. Pairs with the new
+  comparisons for skills like `if $(ITEMS|length) > "0":`.
+- **`TypeMismatchError` class** extending `OpError`. Surfaced via
+  `result.errors[]` with `operator`, `lhs`, `rhs`, `refDesc` fields plus
+  remediation suggesting `|trim` / `|length` / model-output preprocessing.
+
+### Scope
+**In:** comparison operators, `|length` filter, the type-error class.
+**Out:** arithmetic (`+`, `-`, `*`, `/`), aggregates (`min`, `max`,
+`sum`, `mean`). Those stay in tools. The line: *comparison is
+orchestration; arithmetic is computation.*
+
+### Test coverage
+29 new fixtures in `tests/v0.2.5.test.ts` covering: parser grammar
+acceptance, ref-vs-literal evaluation, ref-vs-ref evaluation, numeric-
+vs-lexicographic regression guard, `TypeMismatchError` shape, `|length`
+on arrays + strings + JSON objects, end-to-end compile of the canonical
+threshold + queue-watch skill shapes. 588/588 total green.
+
+### Acknowledgments
+Perry — for the orchestration carve-out framing and the kickoff scope.
+
 ## 0.2.4 — 2026-05-22
 
 **Two more parser bugs from Perry's 6-minion battery via `compile_skill`.**

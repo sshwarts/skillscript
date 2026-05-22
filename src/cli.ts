@@ -35,7 +35,7 @@ const EXAMPLES_DIR = join(HOME_DIR, "examples");
 const PLUGINS_DIR = join(HOME_DIR, "plugins");
 const TRACE_DIR = join(HOME_DIR, "traces");
 
-const VERSION = "0.2.4";
+const VERSION = "0.2.5";
 
 interface CommandHelp {
   description: string;

@@ -461,7 +461,7 @@ Useful inside `else:` blocks to provide a fallback value the rest of the skill c
 - `foreach IDENT in EXPR:` iterator vars are loop-local — `$set` bindings inside the loop don't persist after the loop ends
 - Target outputs (`$(target.output)`) are accessible after the target completes
 
-## Pipe filters — url, shell, json, trim (+ pending head/tail/lines/field/length/summary/pluck)
+## Pipe filters — url, shell, json, trim, length (+ pending head/tail/lines/field/summary/pluck)
 
 Pipe filters apply transforms to resolved variables before substitution. Syntax: `$(VAR|filter)`. Filters operate at compile time for static values; for runtime-bound variables, filters apply at substitution time.
 
@@ -473,6 +473,7 @@ Pipe filters apply transforms to resolved variables before substitution. Syntax:
 | `shell` | POSIX single-quote escape with outer quotes | `$(arg|shell)` for `it's safe` | `'it'\''s safe'` |
 | `json` | `JSON.stringify(value)` | `$(payload|json)` for `{k:"v"}` | `"{\"k\":\"v\"}"` |
 | `trim` | Whitespace trim | `$(VERDICT|trim)` for `"urgent\n"` | `urgent` |
+| `length` | Array element count if JSON-parses as an array; otherwise character count | `$(ITEMS|length)` for `[1,2,3]` / `"hello"` | `3` / `5` |
 
 ## Filter chaining
 
@@ -563,6 +564,28 @@ elif $(M.id) != $(LAST_ID):
 
 The ref-vs-ref form is the canonical change-detection pattern. Both sides resolve to strings at evaluation time; equality is byte-for-byte after filter application. No type coercion — `$(N) == "42"` compares the string form of N against the literal `"42"`, even if N is "numeric" elsewhere in the connector layer.
 
+### Numeric comparison (v0.2.5, shipped 2026-05-22)
+
+`<`, `>`, `<=`, `>=` against either a quoted-numeric literal or another `$(...)` ref. Both operands coerce via `Number()` at evaluation time; non-numeric operands raise `TypeMismatchError` rather than fall back to lexicographic comparison.
+
+```
+if $(DELTA) > "0.05":
+    ! threshold breached
+elif $(N) <= $(THRESHOLD):
+    ! within bounds
+```
+
+Pairs naturally with the `|length` filter for count-based conditions:
+
+```
+if $(ITEMS|length) > "0":
+    ! processing $(ITEMS|length) items
+```
+
+**The orchestration carve-out.** Skillscript supports *comparison* (`<`, `>`, `<=`, `>=`, `==`, `!=`) but not *arithmetic* (`+`, `-`, `*`, `/`) or *aggregates* (`min`, `max`, `sum`, `mean`). The line: comparison is orchestration; arithmetic is tool computation. A skill needs comparison to dispatch on thresholds and counts; it doesn't need to compute those values itself. That belongs in a `$` tool call or `@` shell op whose output the skill then compares against.
+
+**Numeric semantics.** Comparison uses numeric ordering, not lexicographic — `$(N) < "10"` with `N="9"` evaluates to true (because 9 < 10), not false (which lexicographic comparison would give because `'9' > '1'`). This is the regression that lexicographic-by-default would have introduced; the carve-out chooses correctness over the cheaper string-compare default.
+
 ### Set membership (v2, shipped 2026-05-13)
 
 ```
@@ -588,7 +611,8 @@ foreach M in $(MEMORIES):
 
 ### What's NOT supported
 
-- *No arithmetic comparison* — no `>`, `<`, `>=`, `<=`. (Pending: numeric grammar + `|length` filter would unlock this.)
+- *No arithmetic* — no `+`, `-`, `*`, `/`. Comparison shipped in v0.2.5; arithmetic stays in tools per the orchestration carve-out.
+- *No aggregates* — no `min`, `max`, `sum`, `mean`. Tool computation.
 - *No `and`/`or` combinators* — compose via nested `if` blocks instead. The line where composition forces a real parser hasn't been crossed.
 - *No filter math* — filters apply to substitution, not to condition evaluation arithmetic.
 - *No single-`=` assignment-in-condition* — this isn't a feature, it's a parse error. See below.

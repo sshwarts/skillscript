@@ -3,7 +3,7 @@
 *A language for agents to write themselves in.*
 
 [![npm version](https://img.shields.io/npm/v/skillscript-runtime.svg)](https://www.npmjs.com/package/skillscript-runtime)
-[![tests](https://img.shields.io/badge/tests-559%2F559-green)](#)
+[![tests](https://img.shields.io/badge/tests-588%2F588-green)](#)
 [![license](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 [![status](https://img.shields.io/badge/status-pre--1.0-orange)](#status)
 
@@ -259,7 +259,7 @@ Each example is annotated with the language pattern it demonstrates. Authored fr
 
 ## Status
 
-**v0.2.4** — pre-1.0, breaking changes expected. The language is stable enough to author production skills; the surrounding tooling (CLI, dashboard, MCP server contract) may evolve before v1.0.
+**v0.2.5** — pre-1.0, breaking changes expected. The language is stable enough to author production skills; the surrounding tooling (CLI, dashboard, MCP server contract) may evolve before v1.0.
 
 Test coverage: 549/549 passing. Narrow-core LOC under the 5000/20-file ceiling per [ERD §1](#).
 

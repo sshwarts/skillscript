@@ -208,10 +208,20 @@ const COND_EQ = /^\s*\$\([A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*(?:\s*\|\s*[A-Za-z_]\w*)
  * permitted on either side.
  */
 const COND_EQ_REF = /^\s*\$\([A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*(?:\s*\|\s*[A-Za-z_]\w*)?\)\s*(?:==|!=)\s*\$\([A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*(?:\s*\|\s*[A-Za-z_]\w*)?\)\s*$/;
+/**
+ * `$(REF) </>/<=/>= "literal"` and `$(REF) </>/<=/>= $(REF)` — numeric
+ * comparison. v0.2.5 addition per the orchestration carve-out: comparison
+ * is orchestration; arithmetic + aggregates stay in tools. Both sides
+ * coerce to number at runtime; non-numeric → TypeMismatchError. Filters +
+ * dotted field access permitted on either side, matching EQ/EQ_REF shape.
+ */
+const COND_CMP = /^\s*\$\([A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*(?:\s*\|\s*[A-Za-z_]\w*)?\)\s*(?:<=|>=|<|>)\s*"[^"]*"\s*$/;
+const COND_CMP_REF = /^\s*\$\([A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*(?:\s*\|\s*[A-Za-z_]\w*)?\)\s*(?:<=|>=|<|>)\s*\$\([A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*(?:\s*\|\s*[A-Za-z_]\w*)?\)\s*$/;
 const COND_IN = /^\s*\$\([A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*(?:\s*\|\s*[A-Za-z_]\w*)?\)\s+(?:not\s+)?in\s+\$\([A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*\)\s*$/;
 
 function validateCondition(cond: string): boolean {
-  return COND_TRUTHY.test(cond) || COND_EQ.test(cond) || COND_EQ_REF.test(cond) || COND_IN.test(cond);
+  return COND_TRUTHY.test(cond) || COND_EQ.test(cond) || COND_EQ_REF.test(cond) ||
+         COND_CMP.test(cond) || COND_CMP_REF.test(cond) || COND_IN.test(cond);
 }
 
 /** Detects `$(REF) = "literal"` — a single `=` in condition position. */
