@@ -52,20 +52,23 @@ describe("McpServer protocol", () => {
     }
   });
 
-  it("tools/list returns 8 built-in tools (runtime_capabilities added in v0.2.1)", async () => {
+  it("tools/list returns 11 built-in tools (v0.2.3 added lint_skill + compile_skill + skill_write)", async () => {
     const { server, cleanup } = withServer();
     try {
       const resp = await server.handle(rpc("tools/list"));
       const r = (resp as { result: { tools: Array<{ name: string }> } }).result;
       const names = r.tools.map((t) => t.name).sort();
       expect(names).toEqual([
+        "compile_skill",
         "health_metrics",
+        "lint_skill",
         "list_triggers",
         "register_trigger",
         "runtime_capabilities",
         "skill_list",
         "skill_metadata",
         "skill_status",
+        "skill_write",
         "unregister_trigger",
       ]);
     } finally {

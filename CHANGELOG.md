@@ -1,5 +1,46 @@
 # Changelog
 
+## 0.2.3 — 2026-05-22
+
+**Over-the-wire authoring lifecycle.** v0.2.0–v0.2.2 gave foreign MCP clients
+a way to *observe* and *manage* running skills but not to *author* them
+— pushing a new skill required filesystem access to the SkillStore root.
+v0.2.3 closes that gap with three new MCP tools per Perry's design
+(thread `f48b8ef3`).
+
+### Added
+- **`lint_skill({source?|name})` — 9th MCP tool.** Read-only. Returns
+  diagnostics across tier 1/2/3, plus `passes_tier_1/2/3` booleans for
+  cheap pass/fail checks. Accepts a literal source body (inner-loop
+  iteration) or a stored skill name (re-validation).
+- **`compile_skill({source?|name, inputs?})` — 10th MCP tool.** Read-only.
+  Returns the rendered artifact + `target_order` + `resolved_variables`
+  + warnings + errors. Compile failures land in the `errors` array
+  rather than throwing, so cold authors get a diagnostic surface to
+  iterate against instead of opaque tool failures.
+- **`skill_write({name, source, overwrite?})` — 11th MCP tool, write.**
+  Tier-1 lint runs at write time (SkillStore contract). Returns version
+  + content_hash. Always lands as `Draft` — promote to `Approved` via
+  the existing `skill_status` tool to enforce explicit-approval discipline.
+  `overwrite` defaults to `false`; existing skills with the same name
+  reject the write.
+
+### Workflow
+The cold-author flow over MCP becomes:
+1. `lint_skill({source})` — fast feedback while drafting
+2. `compile_skill({source, inputs})` — confirm the artifact looks right
+3. `skill_write({name, source})` — commit to SkillStore as Draft
+4. `skill_status({name, new_state: "Approved"})` — explicit deploy
+5. `register_trigger({skill_name, source: "cron", name: "...")` — fire
+6. `health_metrics({skills: [name]})` — observe fires
+
+Six tools, one round-trip each, no filesystem dependency. The integration
+test in `tests/v0.2.3.test.ts` exercises the full lifecycle end-to-end.
+
+### Acknowledgments
+Thanks to Perry for the three-tool bundle design (thread `f48b8ef3`),
+turned around within an hour of the v0.2.2 ship.
+
 ## 0.2.2 — 2026-05-22
 
 **Parser fixes from cold-author minion battery.** Perry ran 3 independent

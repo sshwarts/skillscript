@@ -132,12 +132,12 @@ describe("v0.2.1 — runtime_capabilities MCP tool", () => {
     rmSync(home, { recursive: true, force: true });
   });
 
-  it("appears in tools/list as the 8th built-in tool", async () => {
+  it("appears in tools/list (v0.2.3 ships 11 tools total; runtime_capabilities is among them)", async () => {
     const { mcpServer } = bootstrap({ skillsDir: join(home, "skills"), traceDir: join(home, "traces") });
     const resp = await mcpServer.handle(rpc("tools/list"));
     const r = (resp as { result: { tools: Array<{ name: string }> } }).result;
     expect(r.tools.map((t) => t.name)).toContain("runtime_capabilities");
-    expect(r.tools).toHaveLength(8);
+    expect(r.tools).toHaveLength(11);
   });
 
   it("returns all categories when called without filter", async () => {
@@ -149,7 +149,7 @@ describe("v0.2.1 — runtime_capabilities MCP tool", () => {
     expect(Array.isArray(caps["mcpConnectors"])).toBe(true);
     expect(Array.isArray(caps["agentConnectors"])).toBe(true);
     expect(typeof caps["shellExecution"]).toBe("object");
-    expect(caps["runtimeVersion"]).toBe("0.2.2");
+    expect(caps["runtimeVersion"]).toBe("0.2.3");
   });
 
   it("honors include filter — returns only requested categories", async () => {

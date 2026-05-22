@@ -3,6 +3,9 @@ import type { Scheduler, ResolvableTriggerSource, TriggerRegistration } from "./
 import type { TraceStore } from "./trace.js";
 import type { Registry } from "./connectors/registry.js";
 import { healthMetrics, type HealthMetrics } from "./metrics.js";
+import { lint } from "./lint.js";
+import { compile } from "./compile.js";
+import { LintFailureError } from "./errors.js";
 
 /**
  * MCP server contract surface (T6b Phase 1). Exposes the runtime's
@@ -26,6 +29,9 @@ import { healthMetrics, type HealthMetrics } from "./metrics.js";
  *   unregister_trigger({trigger_id})→ boolean (write)
  *   health_metrics({filter?})      → HealthMetrics
  *   runtime_capabilities({include?})→ wired connectors + shell-exec mode (v0.2.1)
+ *   lint_skill({source?|name})     → diagnostics across tiers (v0.2.3)
+ *   compile_skill({source?|name, inputs?})→ rendered artifact + errors (v0.2.3)
+ *   skill_write({name, source, overwrite?})→ commit to SkillStore (write, v0.2.3)
  */
 
 // ─── JSON-RPC 2.0 ──────────────────────────────────────────────────────────
@@ -79,7 +85,7 @@ export class McpServer {
   private readonly version: string;
 
   constructor(private readonly deps: McpServerDeps) {
-    this.version = deps.serverVersion ?? "0.2.2";
+    this.version = deps.serverVersion ?? "0.2.3";
     this.registerBuiltinTools();
   }
 
@@ -340,6 +346,181 @@ export class McpServer {
       },
       handler: async (args) => this.runtimeCapabilities(args),
     });
+
+    // ─── v0.2.3 — over-the-wire authoring lifecycle ────────────────────────
+
+    this.registerTool({
+      name: "lint_skill",
+      description: "Run static lint against a skill source body or stored skill name. Returns diagnostics across tier-1 (errors that block compile), tier-2 (warnings), tier-3 (advisories). Read-only. Inner-loop affordance for cold authors iterating on a draft.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          source: { type: "string", description: "Skill source body to lint. One of source/name required." },
+          name: { type: "string", description: "Name of a skill stored in the SkillStore. One of source/name required." },
+        },
+      },
+      handler: async (args) => this.lintSkill(args),
+    });
+
+    this.registerTool({
+      name: "compile_skill",
+      description: "Compile a skill source body or stored skill name. Returns the rendered artifact + parse/compile errors + resolved variables + topological execution order. Read-only. Pre-commit validation affordance.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          source: { type: "string", description: "Skill source body to compile. One of source/name required." },
+          name: { type: "string", description: "Name of a skill stored in the SkillStore. One of source/name required." },
+          inputs: {
+            type: "object",
+            additionalProperties: { type: "string" },
+            description: "Optional `# Vars:` overrides keyed by variable name.",
+          },
+        },
+      },
+      handler: async (args) => this.compileSkill(args),
+    });
+
+    this.registerTool({
+      name: "skill_write",
+      description: "Write a skill body into the configured SkillStore. Tier-1 lint runs at write time (SkillStore contract); throws on rejection. Returns version + content_hash. Skill always lands as `Draft` — promote to `Approved` via skill_status. Write operation.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          name: { type: "string", description: "Skill name; must match the `# Skill:` header in the source body." },
+          source: { type: "string", description: "Skill source body." },
+          overwrite: { type: "boolean", description: "When false (default) and a skill with this name already exists, the write is rejected. When true, replaces in place.", default: false },
+        },
+        required: ["name", "source"],
+      },
+      handler: async (args) => this.skillWrite(args),
+    });
+  }
+
+  // ─── v0.2.3 authoring-lifecycle handlers ───────────────────────────────────
+
+  private async lintSkill(args: Record<string, unknown>): Promise<Record<string, unknown>> {
+    const source = await this.resolveSource(args);
+    const lintResult = await lint(source, {
+      skillStore: this.deps.skillStore,
+      callSite: "api",
+    });
+    return {
+      diagnostics: lintResult.findings.map((f) => ({
+        rule: f.rule,
+        tier: severityToTier(f.severity),
+        severity: f.severity,
+        message: f.message,
+        block: f.block,
+        remediation: f.remediation,
+        extras: f.extras,
+      })),
+      error_count: lintResult.errorCount,
+      warning_count: lintResult.warningCount,
+      info_count: lintResult.infoCount,
+      passes_tier_1: lintResult.errorCount === 0,
+      passes_tier_2: lintResult.warningCount === 0,
+      passes_tier_3: lintResult.infoCount === 0,
+    };
+  }
+
+  private async compileSkill(args: Record<string, unknown>): Promise<Record<string, unknown>> {
+    const source = await this.resolveSource(args);
+    const inputs = (args["inputs"] as Record<string, string> | undefined) ?? undefined;
+    try {
+      const compiled = await compile(source, {
+        skillStore: this.deps.skillStore,
+        ...(inputs !== undefined ? { inputs } : {}),
+      });
+      return {
+        skill_name: compiled.skillName,
+        rendered: compiled.output,
+        resolved_variables: compiled.resolvedVariables,
+        target_order: compiled.targetOrder,
+        triggers: compiled.triggers,
+        outputs: compiled.outputs,
+        on_error: compiled.onError,
+        warnings: compiled.warnings,
+        errors: [],
+      };
+    } catch (err) {
+      // compile() throws structured errors for parse / lint / dep-cycle / unresolved-var.
+      // Surface as `errors` rather than failing the tool call so cold authors get a
+      // diagnostic surface to iterate against.
+      const message = (err as Error).message;
+      if (err instanceof LintFailureError) {
+        return {
+          skill_name: null,
+          rendered: null,
+          resolved_variables: {},
+          target_order: [],
+          triggers: [],
+          outputs: [],
+          on_error: null,
+          warnings: [],
+          errors: [message],
+          lint_findings: err.diagnostics,
+        };
+      }
+      return {
+        skill_name: null,
+        rendered: null,
+        resolved_variables: {},
+        target_order: [],
+        triggers: [],
+        outputs: [],
+        on_error: null,
+        warnings: [],
+        errors: [message],
+      };
+    }
+  }
+
+  private async skillWrite(args: Record<string, unknown>): Promise<Record<string, unknown>> {
+    const name = args["name"];
+    const source = args["source"];
+    if (typeof name !== "string" || name === "") {
+      throw new Error("skill_write: `name` is required (non-empty string).");
+    }
+    if (typeof source !== "string" || source === "") {
+      throw new Error("skill_write: `source` is required (non-empty string).");
+    }
+    const overwrite = args["overwrite"] === true;
+    if (!overwrite) {
+      try {
+        await this.deps.skillStore.metadata(name);
+        // metadata() succeeded → skill exists. Refuse without overwrite=true.
+        throw new Error(`skill_write: '${name}' already exists. Pass overwrite=true to replace.`);
+      } catch (err) {
+        // Re-throw the refuse-message; swallow "not found" so we proceed with the write.
+        const msg = (err as Error).message;
+        if (msg.startsWith("skill_write:")) throw err;
+      }
+    }
+    // SkillStore.store() runs tier-1 lint as part of its contract and throws
+    // LintFailureError on rejection. Surface that to the caller verbatim.
+    const versionInfo = await this.deps.skillStore.store(name, source);
+    return {
+      name: versionInfo.name,
+      version: versionInfo.version,
+      content_hash: versionInfo.content_hash,
+      status: versionInfo.status,
+      changed_at: versionInfo.changed_at,
+    };
+  }
+
+  /**
+   * Resolve {source?, name?} to a source string. One required; if both, source
+   * wins (lets clients tweak a stored skill's body without re-storing first).
+   */
+  private async resolveSource(args: Record<string, unknown>): Promise<string> {
+    const source = args["source"];
+    const name = args["name"];
+    if (typeof source === "string" && source !== "") return source;
+    if (typeof name === "string" && name !== "") {
+      const loaded = await this.deps.skillStore.load(name);
+      return loaded.source;
+    }
+    throw new Error("Either `source` or `name` is required.");
   }
 
   private async runtimeCapabilities(args: Record<string, unknown>): Promise<Record<string, unknown>> {
@@ -366,6 +547,14 @@ export class McpServer {
       };
     }
     return out;
+  }
+}
+
+function severityToTier(severity: "error" | "warning" | "info"): 1 | 2 | 3 {
+  switch (severity) {
+    case "error": return 1;
+    case "warning": return 2;
+    case "info": return 3;
   }
 }
 

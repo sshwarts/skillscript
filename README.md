@@ -2,7 +2,7 @@
 
 > A small declarative language for authoring agent workflows.
 
-**Status: v1 in progress (current release: 0.2.2).** The public API, language syntax, and connector contracts may change before v1.0.0. Expect breakage until then.
+**Status: v1 in progress (current release: 0.2.3).** The public API, language syntax, and connector contracts may change before v1.0.0. Expect breakage until then.
 
 A skillscript is a declarative recipe — a small program with a dependency DAG of named targets, each composed of typed operations. Skills are authored once and executed many times, either by the interpreter (autonomous, cron-fired) or by an agent reading a compiled prompt artifact.
 
@@ -146,7 +146,7 @@ skillfile dashboard --port 8080            # custom port
 skillfile dashboard --host 0.0.0.0         # bind all interfaces (container only)
 ```
 
-The dashboard talks to the runtime via an MCP server contract (JSON-RPC 2.0 over HTTP at `/rpc`). Real MCP clients (Claude Desktop, Cursor, future tools) can consume the same endpoint — the SPA is one of several possible UIs over the same contract. Eight tools today: `skill_list`, `skill_metadata`, `skill_status` (write), `list_triggers`, `register_trigger` (write), `unregister_trigger` (write), `health_metrics`, `runtime_capabilities`.
+The dashboard talks to the runtime via an MCP server contract (JSON-RPC 2.0 over HTTP at `/rpc`). Real MCP clients (Claude Desktop, Cursor, future tools) can consume the same endpoint — the SPA is one of several possible UIs over the same contract. **Eleven tools** today: `skill_list`, `skill_metadata`, `skill_status` (write), `list_triggers`, `register_trigger` (write), `unregister_trigger` (write), `health_metrics`, `runtime_capabilities`, `lint_skill`, `compile_skill`, `skill_write` (write). The last three (v0.2.3) close the over-the-wire authoring lifecycle — foreign clients can lint → compile → write → status → register_trigger end-to-end without filesystem access.
 
 ---
 
@@ -175,7 +175,7 @@ Images publish to GitHub Container Registry:
 ```sh
 docker pull ghcr.io/sshwarts/skillscript-runtime:latest
 # or pin to a specific version
-docker pull ghcr.io/sshwarts/skillscript-runtime:v0.2.2
+docker pull ghcr.io/sshwarts/skillscript-runtime:v0.2.3
 ```
 
 Authentication (`gh auth login` then `gh auth token | docker login ghcr.io -u sshwarts --password-stdin`) is only required for pushes; pulls are public.
