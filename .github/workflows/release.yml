@@ -1,0 +1,124 @@
+name: release
+
+# Tag-triggered release pipeline.
+#
+# On `git push origin vX.Y.Z`, this workflow runs the full smoke test
+# (typecheck + LOC + vitest), then:
+#   1. Verifies package.json version matches the tag
+#   2. Builds + pushes a multi-arch (amd64+arm64) container to GHCR
+#      tagged `:vX.Y.Z` and `:latest`
+#   3. Creates a GitHub Release with the matching CHANGELOG.md section
+#      as the release body
+#   4. Publishes to npm
+#
+# Ordering: container → release → npm is intentional — if npm fails
+# (e.g., token expired, registry outage) the GHCR image and GitHub
+# Release already shipped, and the operator can manually `pnpm publish`
+# after fixing the credential. The reverse order would leave a published
+# npm package without a corresponding GitHub Release if the release step
+# choked.
+#
+# Required repo secrets:
+#   NPM_TOKEN — granular access token with "Bypass two-factor
+#               authentication" enabled, scoped to skillscript-runtime
+#               read-and-write (see feedback_npm_publish_2fa memory)
+#
+# GITHUB_TOKEN is auto-provided with the permissions block below.
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write    # create GitHub Releases
+      packages: write    # push to GHCR
+      id-token: write    # npm provenance via OIDC
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22.x
+          registry-url: 'https://registry.npmjs.org'
+          cache: 'pnpm'
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Smoke test (typecheck + LOC + vitest)
+        run: |
+          pnpm exec tsc --noEmit
+          pnpm run loc-check
+          pnpm exec vitest run
+
+      - name: Build
+        run: pnpm run build
+
+      - name: Extract version from tag
+        id: version
+        run: echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+
+      - name: Verify tag matches package.json version
+        run: |
+          PKG_VERSION=$(node -p "require('./package.json').version")
+          TAG_VERSION="${{ steps.version.outputs.version }}"
+          if [ "$PKG_VERSION" != "$TAG_VERSION" ]; then
+            echo "FAIL: package.json version '$PKG_VERSION' does not match tag 'v$TAG_VERSION'"
+            exit 1
+          fi
+          echo "OK: package.json and tag agree on v$TAG_VERSION"
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build + push container (linux/amd64 + linux/arm64)
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: |
+            ghcr.io/${{ github.repository_owner }}/skillscript-runtime:v${{ steps.version.outputs.version }}
+            ghcr.io/${{ github.repository_owner }}/skillscript-runtime:latest
+
+      - name: Extract changelog section for this version
+        id: changelog
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+          # Escape regex dots so 0.2.4 matches literally, not as 0a2b4.
+          ESCAPED="${VERSION//./\\.}"
+          awk "/^## ${ESCAPED}([^0-9]|\$)/{flag=1; next} /^## [0-9]/{flag=0} flag" CHANGELOG.md > /tmp/release-notes.md
+          if [ ! -s /tmp/release-notes.md ]; then
+            echo "FAIL: no changelog section found for v$VERSION in CHANGELOG.md"
+            exit 1
+          fi
+          echo "ok: extracted $(wc -l < /tmp/release-notes.md) lines of release notes"
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: skillscript-runtime ${{ github.ref_name }}
+          body_path: /tmp/release-notes.md
+          draft: false
+          prerelease: false
+
+      - name: Publish to npm
+        run: pnpm publish --access public --no-git-checks --provenance
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
