@@ -2,7 +2,7 @@
 
 > A small declarative language for authoring agent workflows.
 
-**Status: v1 in progress (current release: 0.2.3).** The public API, language syntax, and connector contracts may change before v1.0.0. Expect breakage until then.
+**Status: v1 in progress (current release: 0.2.4).** The public API, language syntax, and connector contracts may change before v1.0.0. Expect breakage until then.
 
 A skillscript is a declarative recipe — a small program with a dependency DAG of named targets, each composed of typed operations. Skills are authored once and executed many times, either by the interpreter (autonomous, cron-fired) or by an agent reading a compiled prompt artifact.
 
@@ -175,7 +175,7 @@ Images publish to GitHub Container Registry:
 ```sh
 docker pull ghcr.io/sshwarts/skillscript-runtime:latest
 # or pin to a specific version
-docker pull ghcr.io/sshwarts/skillscript-runtime:v0.2.3
+docker pull ghcr.io/sshwarts/skillscript-runtime:v0.2.4
 ```
 
 Authentication (`gh auth login` then `gh auth token | docker login ghcr.io -u sshwarts --password-stdin`) is only required for pushes; pulls are public.

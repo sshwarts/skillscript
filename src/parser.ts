@@ -173,7 +173,7 @@ const REQUIRES_LINE = /^(user-var|system-var):([A-Za-z0-9_-]+)\s*(?:→|->)\s*([
 /** Capability token: `connector_type.feature_flag`. Matches one space-separated token of a capability `# Requires:` line. */
 const CAPABILITY_TOKEN = /^[a-z_][a-z0-9_]*\.[a-z_][a-z0-9_]*$/;
 /** `&` op: `& skill-name [arg=value ...] [-> VARNAME]`. Skill names follow the same charset as filesystem-safe identifiers (alphanumeric, hyphen, underscore). */
-const AMPERSAND_OP_REGEX = /^&\s+([A-Za-z0-9][\w-]*)\s*(.*?)(?:\s*->\s*([A-Za-z_]\w*))?\s*$/s;
+const AMPERSAND_OP_REGEX = /^&\s+([A-Za-z0-9][\w-]*)\s*(.*?)(?:\s*->\s*([A-Za-z_]\w*))?(?:\s+\(fallback\s*:\s*(.+?)\))?\s*$/s;
 const SET_OP_REGEX = /^\$set\s+([A-Za-z_]\w*)\s*=\s*(.*)$/;
 const FOREACH_OP_REGEX = /^foreach\s+([A-Za-z_]\w*)\s+in\s+(.+?):\s*$/;
 const IF_OP_REGEX = /^if\s+(.+?):\s*$/;
@@ -308,16 +308,20 @@ function splitVarsLine(value: string): string[] {
  * paragraph instructions. Without folding, the line-iterating parse loop
  * treats each interior newline as a block break and mis-parses.
  *
- * Folding only kicks in when a line opens a `"` or `'` without closing
- * it. Subsequent lines are joined with the literal `\n` until the quote
- * closes, preserving the string content as a single token.
+ * Folding only engages on kwarg-bearing op lines (`~ `, `> `, `& `) —
+ * the three op kinds whose values legitimately span newlines. Plain
+ * frontmatter (`# Description: symbol's intraday drops`), target labels,
+ * `!` literals, and shell `@` bodies are left untouched so that
+ * apostrophes in natural English prose don't open phantom string scopes
+ * that swallow the rest of the skill (Perry's v0.2.4 Bug D regression
+ * from the v0.2.2 fix).
  */
 function foldQuotedContinuations(lines: string[]): string[] {
   const out: string[] = [];
   let buffer: string | null = null;
   for (const line of lines) {
     if (buffer === null) {
-      if (hasUnclosedQuote(line)) {
+      if (isKwargBearingLine(line) && hasUnclosedQuote(line)) {
         buffer = line;
       } else {
         out.push(line);
@@ -335,6 +339,17 @@ function foldQuotedContinuations(lines: string[]): string[] {
   // rather than swallowing content.
   if (buffer !== null) out.push(buffer);
   return out;
+}
+
+/**
+ * Three op kinds use `key=value` kwarg args where the value may legitimately
+ * span newlines. Everything else (frontmatter, target labels, `!` / `@` / `$`
+ * op bodies, control-flow keywords) is single-line by convention and must
+ * not engage the multi-line fold.
+ */
+function isKwargBearingLine(line: string): boolean {
+  const stripped = line.replace(/^\s+/, "");
+  return stripped.startsWith("~ ") || stripped.startsWith("> ") || stripped.startsWith("& ");
 }
 
 function hasUnclosedQuote(text: string): boolean {
@@ -942,7 +957,7 @@ export function parse(source: string): ParsedSkill {
         result.parseErrors.push(`Malformed \`&\` op in target '${currentTarget.name}' — expected \`& skill-name [key=value ...] [-> VARNAME]\``);
         continue;
       }
-      const [, skillName, argsStr, outputVar] = match;
+      const [, skillName, argsStr, outputVar, ampFallback] = match;
       const args: Record<string, string> = {};
       const tokens = tokenizeKeywordArgs(argsStr ?? "");
       let argError = false;
@@ -962,6 +977,7 @@ export function parse(source: string): ParsedSkill {
         ampParams: { skillName: skillName!, args },
       };
       if (outputVar !== undefined) ampOp.outputVar = outputVar;
+      if (ampFallback !== undefined) ampOp.fallback = processSetValue(ampFallback);
       opBucket.push(ampOp);
       continue;
     }
@@ -996,6 +1012,7 @@ export function parse(source: string): ParsedSkill {
     let mcpConnectorForOp: string | undefined = undefined;
     let atPolicy: "unsafe" | undefined = undefined;
     let atOutputVar: string | undefined = undefined;
+    let atFallback: string | undefined = undefined;
     // Check `??` before `?`, `$set` before `$`.
     if (stripped.startsWith("?? ") || stripped === "??") {
       const tail = stripped.slice(3).trim();
@@ -1045,10 +1062,15 @@ export function parse(source: string): ParsedSkill {
     } else if (stripped.startsWith("@ ") || stripped === "@") {
       kind = "@";
       let tail = stripped.slice(2).trim();
-      // Optional output binding: `-> VAR` at end of line.
-      const outMatch = /^(.+?)\s+->\s+([A-Za-z_]\w*)\s*$/.exec(tail);
+      // Optional output binding: `-> VAR [(fallback: "...")]` at end of line.
+      // v0.2.4 Bug F: the trailing `(fallback: ...)` clause is now supported
+      // for parity with $/~/> ops — cold authors reach for op-level fallback
+      // as a defensive-coding posture and previously hit silent
+      // outputVar-not-bound failures.
+      const outMatch = /^(.+?)\s+->\s+([A-Za-z_]\w*)(?:\s+\(fallback\s*:\s*(.+?)\))?\s*$/.exec(tail);
       if (outMatch !== null) {
         atOutputVar = outMatch[2]!;
+        if (outMatch[3] !== undefined) atFallback = processSetValue(outMatch[3]);
         tail = outMatch[1]!.trim();
       }
       // `@ unsafe <command>` — `unsafe` as literal first token signals
@@ -1071,6 +1093,7 @@ export function parse(source: string): ParsedSkill {
         ...(mcpConnectorForOp !== undefined ? { mcpConnector: mcpConnectorForOp } : {}),
         ...(atPolicy !== undefined ? { policy: atPolicy } : {}),
         ...(atOutputVar !== undefined ? { outputVar: atOutputVar } : {}),
+        ...(atFallback !== undefined ? { fallback: atFallback } : {}),
       });
     }
   }

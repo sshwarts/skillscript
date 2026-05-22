@@ -1,5 +1,49 @@
 # Changelog
 
+## 0.2.4 — 2026-05-22
+
+**Two more parser bugs from Perry's 6-minion battery via `compile_skill`.**
+v0.2.3's authoring tools gave Perry the cleanest possible validation
+surface — 30 seconds later, she had two new bugs filed (thread `e609a448`).
+Both parser-only, both shipped.
+
+### Fixed
+- **Bug D (regression from v0.2.2): apostrophe in plain text swallows targets.**
+  The v0.2.2 `foldQuotedContinuations` pre-pass tracked single-quotes
+  globally — an apostrophe in `# Description: symbol's intraday drops`
+  opened an unclosed-string scope that absorbed all subsequent lines,
+  leaving zero targets visible and producing a `[no-targets]` lint error.
+  Hit by 2/6 cold authors. Fix: limit fold engagement to kwarg-bearing
+  op lines (`~ `, `> `, `& `) — the three op kinds where values
+  legitimately span newlines. Frontmatter, `!` literals, `@` shell
+  bodies, and target labels are now left untouched.
+- **Bug F (pre-existing): `(fallback: ...)` after `-> VAR` broke binding
+  on `@` and `&` ops.** `$`/`~`/`>` had explicit fallback support in
+  their regexes; `@` (parser.ts:1049) and `&` (`AMPERSAND_OP_REGEX`)
+  didn't. The trailing `(fallback: ...)` clause prevented the `-> VAR`
+  extractor from matching → outputVar never bound → downstream
+  `$(VAR)` fired `undeclared-var` diagnostics on variables that
+  authors had clearly declared. Hit by 2/6 cold authors. Fix: extend
+  both regexes with `(?:\s+\(fallback\s*:\s*(.+?)\))?` and thread
+  the captured fallback into the op record. `@ unsafe` variant also
+  fixed for parity.
+
+### Validation
+Perry's 6-minion compile matrix:
+
+| State | v0.2.3 | v0.2.4 (projected) |
+|---|---|---|
+| Pass | 3/6 | 6/6 |
+
+(v0.2.4 projection — three minions previously failed on D and/or F;
+sed-removing the apostrophe and rewriting the fallback clause cleared
+both per Perry's testing. Test fixtures in `tests/v0.2.4.test.ts`
+cover both bug repros and regression guards.)
+
+### Acknowledgments
+Perry — for the back-to-back minion-battery runs that surface bugs in
+single-hour cadence after each ship.
+
 ## 0.2.3 — 2026-05-22
 
 **Over-the-wire authoring lifecycle.** v0.2.0–v0.2.2 gave foreign MCP clients

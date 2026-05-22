@@ -85,7 +85,7 @@ export class McpServer {
   private readonly version: string;
 
   constructor(private readonly deps: McpServerDeps) {
-    this.version = deps.serverVersion ?? "0.2.3";
+    this.version = deps.serverVersion ?? "0.2.4";
     this.registerBuiltinTools();
   }
 
