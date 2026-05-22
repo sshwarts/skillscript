@@ -29,6 +29,13 @@ export interface DashboardServerConfig {
   bindAddress?: string;
   /** Absolute path to the directory containing index.html + app.js + styles.css. Auto-detected when omitted. */
   assetsDir?: string;
+  /**
+   * When false, GET routes for the browser SPA (`/`, `/index.html`,
+   * `/app.js`, `/styles.css`) return 404 — only `POST /rpc` is served.
+   * v0.2.7 addition supporting `skillfile serve` (headless deployments).
+   * Default true preserves existing `skillfile dashboard` behavior.
+   */
+  mountSpa?: boolean;
 }
 
 const MIME: Record<string, string> = {
@@ -43,6 +50,7 @@ export class DashboardServer {
   private readonly port: number;
   private readonly bindAddress: string;
   private readonly assetsDir: string;
+  private readonly mountSpa: boolean;
   private httpServer: Server | null = null;
 
   constructor(config: DashboardServerConfig) {
@@ -50,6 +58,7 @@ export class DashboardServer {
     this.port = config.port ?? 7878;
     this.bindAddress = config.bindAddress ?? "127.0.0.1";
     this.assetsDir = config.assetsDir ?? locateAssetsDir();
+    this.mountSpa = config.mountSpa ?? true;
   }
 
   async start(): Promise<void> {
@@ -85,6 +94,11 @@ export class DashboardServer {
         return;
       }
       if (req.method === "GET") {
+        if (!this.mountSpa) {
+          res.statusCode = 404;
+          res.end("Not Found (SPA disabled — running in `serve` mode)");
+          return;
+        }
         await this.handleStatic(url.pathname, res);
         return;
       }

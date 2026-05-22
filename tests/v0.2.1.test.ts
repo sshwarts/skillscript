@@ -149,7 +149,7 @@ describe("v0.2.1 — runtime_capabilities MCP tool", () => {
     expect(Array.isArray(caps["mcpConnectors"])).toBe(true);
     expect(Array.isArray(caps["agentConnectors"])).toBe(true);
     expect(typeof caps["shellExecution"]).toBe("object");
-    expect(caps["runtimeVersion"]).toBe("0.2.6");
+    expect(caps["runtimeVersion"]).toBe("0.2.7");
   });
 
   it("honors include filter — returns only requested categories", async () => {

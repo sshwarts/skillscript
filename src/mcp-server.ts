@@ -74,6 +74,10 @@ export interface McpServerDeps {
   registry?: Registry;
   /** Surfaced via `runtime_capabilities` so cold agents know whether `@ unsafe` is permitted. */
   enableUnsafeShell?: boolean;
+  /** Runtime mode label — `"serve"` (headless) or `"dashboard"` (SPA mounted). v0.2.7. */
+  runtimeMode?: "serve" | "dashboard";
+  /** Path to the persistent imperative-trigger registry, when configured. v0.2.7. */
+  triggersFilePath?: string;
   serverVersion?: string;
 }
 
@@ -85,7 +89,7 @@ export class McpServer {
   private readonly version: string;
 
   constructor(private readonly deps: McpServerDeps) {
-    this.version = deps.serverVersion ?? "0.2.6";
+    this.version = deps.serverVersion ?? "0.2.7";
     this.registerBuiltinTools();
   }
 
@@ -338,7 +342,7 @@ export class McpServer {
             type: "array",
             items: {
               type: "string",
-              enum: ["localModels", "mcpConnectors", "memoryStores", "skillStores", "agentConnectors", "shellExecution", "runtimeVersion"],
+              enum: ["localModels", "mcpConnectors", "memoryStores", "skillStores", "agentConnectors", "shellExecution", "runtimeVersion", "runtimeMode", "triggersFilePath"],
             },
             description: "Filter which categories to return. Omit for all.",
           },
@@ -529,6 +533,8 @@ export class McpServer {
     const out: Record<string, unknown> = {};
     const reg = this.deps.registry;
     if (want("runtimeVersion")) out["runtimeVersion"] = this.version;
+    if (want("runtimeMode")) out["runtimeMode"] = this.deps.runtimeMode ?? "dashboard";
+    if (want("triggersFilePath")) out["triggersFilePath"] = this.deps.triggersFilePath ?? null;
     if (want("skillStores")) out["skillStores"] = reg ? reg.listSkillStores().map((e) => describeEntry(e)) : [];
     if (want("memoryStores")) out["memoryStores"] = reg ? reg.listMemoryStores().map((e) => describeEntry(e)) : [];
     if (want("localModels")) out["localModels"] = reg ? reg.listLocalModels().map((e) => describeEntry(e)) : [];

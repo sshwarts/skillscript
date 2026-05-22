@@ -1,5 +1,58 @@
 # Changelog
 
+## 0.2.7 — 2026-05-22
+
+**Runtime ergonomics.** Items 4 + 5 from Perry's v0.2.5 kickoff
+(thread `f75477a4`, carried forward to kickoff `2d3d461c`). Two
+orthogonal changes bundled: the long-deferred `serve`/`dashboard`
+split + persistent imperative-trigger registry.
+
+### Added
+- **`skillfile serve` command.** Headless runtime host: scheduler +
+  MCP server only, no browser SPA mounted. For production deployments,
+  containers, CI environments. Shares the existing `bootstrap()` helper
+  with `skillfile dashboard`; differs only in whether the SPA routes
+  are wired.
+- **`skillfile dashboard` continues to mount the SPA.** No behavior
+  change; the CLI now has the explicit choice rather than an implicit
+  bundle.
+- **Persistent imperative-trigger registry** at
+  `$SKILLSCRIPT_HOME/triggers.json`. Imperative registrations (via the
+  MCP `register_trigger` tool) write through to disk synchronously and
+  hydrate at bootstrap. Survives process restart — register a one-shot
+  trigger before lunch, the trigger fires after the runtime reboots in
+  the afternoon. Schema-versioned wire format.
+- **Boot-time expiry pruning.** Imperative triggers whose `expires_at`
+  has passed at hydrate time are dropped from the in-memory registry
+  AND the on-disk file. No accumulation of dead rows.
+- **`runtime_capabilities` reports two new fields:** `runtimeMode`
+  (`"serve" | "dashboard"`) and `triggersFilePath` (string or null).
+  Cold agents discovering the runtime can ask which deployment shape
+  they've reached and where the persistent registry lives.
+
+### Unchanged
+- **Declarative triggers** (parsed from `# Triggers:` headers in skill
+  bodies) continue to live-derive from the SkillStore at every boot.
+  They are NOT persisted to `triggers.json` — that's reserved for
+  imperative registrations whose source-of-truth is the MCP write path.
+- `DashboardServer` defaults `mountSpa: true` so existing embedders
+  keep working.
+
+### Internal
+- `Scheduler` gains an optional `onTriggersChanged` write-through hook
+  in its config. `bootstrap()` wires it when `triggersFilePath` is set.
+- `Scheduler.registerTrigger` accepts an optional `seedFromPersistence`
+  flag for boot-time hydration that preserves the original trigger id
+  and suppresses the write-through hook (prevents re-writing the file
+  we just read).
+- 614/614 tests passing (600 + 14 new fixtures across persistence
+  round-trip, boot-time prune, mode reporting, and SPA-mounting
+  toggle). Narrow-core LOC unchanged at 4976/13.
+
+### Acknowledgments
+Perry — clean carryover from the v0.2.5 kickoff, validated end-to-end
+on every patch since.
+
 ## 0.2.6 — 2026-05-22
 
 **Language polish — Items 2 + 3 from the v0.2.5 kickoff** (Perry's thread

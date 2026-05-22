@@ -4,7 +4,7 @@
 // scheduler+MCP host and SPA-mounting variant is a trivial new entry point
 // rather than a refactor.
 
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 
 import { Registry } from "./connectors/registry.js";
@@ -12,7 +12,7 @@ import { FilesystemSkillStore } from "./connectors/skill-store.js";
 import { OllamaLocalModel } from "./connectors/local-model.js";
 import { SqliteMemoryStore } from "./connectors/memory-store.js";
 import { FilesystemTraceStore } from "./trace.js";
-import { Scheduler, type ResolvableTriggerSource } from "./scheduler.js";
+import { Scheduler, type ResolvableTriggerSource, type TriggerRegistration } from "./scheduler.js";
 import type { TraceConfig } from "./trace.js";
 import { McpServer } from "./mcp-server.js";
 import { parse } from "./parser.js";
@@ -31,6 +31,19 @@ export interface BootstrapOpts {
   enableUnsafeShell?: boolean;
   /** When set, scheduler-driven fires record traces via the result's traceStore. */
   trace?: TraceConfig;
+  /**
+   * Path to the imperative-trigger persistence file. When set, `bootstrap()`
+   * hydrates the scheduler from this file at boot (pruning expired entries)
+   * and writes-through on every imperative register/unregister. Declarative
+   * triggers continue to live-derive from the SkillStore. v0.2.7 addition.
+   */
+  triggersFilePath?: string;
+  /**
+   * Runtime mode label surfaced via `runtime_capabilities`. `"dashboard"`
+   * (default) when an SPA is mounted; `"serve"` for headless deployments.
+   * v0.2.7 addition.
+   */
+  mode?: "serve" | "dashboard";
 }
 
 export interface BootstrapResult {
@@ -41,6 +54,24 @@ export interface BootstrapResult {
   traceStore: FilesystemTraceStore;
   /** Read back so runtime_capabilities can surface the active mode. */
   enableUnsafeShell: boolean;
+  /** Runtime mode label (echoed from opts; defaults to "dashboard"). */
+  mode: "serve" | "dashboard";
+  /** Imperative-trigger persistence path, when configured. */
+  triggersFilePath?: string;
+}
+
+/** v0.2.7 — wire-format for `$SKILLSCRIPT_HOME/triggers.json`. */
+interface PersistedTriggerFile {
+  schema_version: 1;
+  triggers: Array<{
+    id: string;
+    skill_name: string;
+    source: string;
+    name: string;
+    declarative: false;
+    registered_at: number;
+    expires_at: number | null;
+  }>;
 }
 
 const VALID_TRIGGER_SOURCES: ReadonlyArray<ResolvableTriggerSource> = [
@@ -88,6 +119,17 @@ export function bootstrap(opts: BootstrapOpts): BootstrapResult {
   const { registry, skillStore } = defaultRegistry(opts);
   const traceStore = new FilesystemTraceStore(opts.traceDir);
   const enableUnsafeShell = opts.enableUnsafeShell ?? false;
+  const mode = opts.mode ?? "dashboard";
+
+  // v0.2.7 — wire write-through to the persistent registry, then hydrate
+  // any existing imperative triggers from disk before scheduler.start()
+  // is called downstream. Declarative triggers are layered on top via
+  // wireDeclarativeTriggers() after bootstrap returns.
+  const onTriggersChanged = opts.triggersFilePath !== undefined
+    ? (snapshot: ReadonlyArray<TriggerRegistration>) => {
+        writePersistedTriggers(opts.triggersFilePath!, snapshot);
+      }
+    : undefined;
 
   const scheduler = new Scheduler({
     registry,
@@ -95,12 +137,117 @@ export function bootstrap(opts: BootstrapOpts): BootstrapResult {
     traceStore,
     ...(opts.pollIntervalSeconds !== undefined ? { pollIntervalSeconds: opts.pollIntervalSeconds } : {}),
     ...(opts.trace !== undefined ? { trace: opts.trace, traceStore } : {}),
+    ...(onTriggersChanged !== undefined ? { onTriggersChanged } : {}),
     enableUnsafeShell,
   });
 
-  const mcpServer = new McpServer({ skillStore, scheduler, traceStore, registry, enableUnsafeShell });
+  if (opts.triggersFilePath !== undefined) {
+    hydratePersistedTriggers(scheduler, opts.triggersFilePath);
+  }
 
-  return { registry, scheduler, mcpServer, skillStore, traceStore, enableUnsafeShell };
+  const mcpServer = new McpServer({
+    skillStore,
+    scheduler,
+    traceStore,
+    registry,
+    enableUnsafeShell,
+    runtimeMode: mode,
+    ...(opts.triggersFilePath !== undefined ? { triggersFilePath: opts.triggersFilePath } : {}),
+  });
+
+  return {
+    registry,
+    scheduler,
+    mcpServer,
+    skillStore,
+    traceStore,
+    enableUnsafeShell,
+    mode,
+    ...(opts.triggersFilePath !== undefined ? { triggersFilePath: opts.triggersFilePath } : {}),
+  };
+}
+
+/**
+ * Read `triggers.json` (if present) and re-register each imperative trigger
+ * into the scheduler with its persisted id. Prunes expired rows during the
+ * load. Re-writes the file with the pruned set so future hydrations don't
+ * re-scan dead entries.
+ */
+function hydratePersistedTriggers(
+  scheduler: Scheduler,
+  path: string,
+  log: (msg: string) => void = (msg) => process.stderr.write(`[bootstrap] ${msg}\n`),
+): { loaded: number; pruned: number } {
+  if (!existsSync(path)) return { loaded: 0, pruned: 0 };
+  let parsed: PersistedTriggerFile;
+  try {
+    parsed = JSON.parse(readFileSync(path, "utf8")) as PersistedTriggerFile;
+  } catch (err) {
+    log(`triggers.json parse failed at '${path}': ${(err as Error).message}; ignoring file`);
+    return { loaded: 0, pruned: 0 };
+  }
+  if (parsed.schema_version !== 1 || !Array.isArray(parsed.triggers)) {
+    log(`triggers.json at '${path}' has unsupported shape (schema_version=${parsed.schema_version}); ignoring`);
+    return { loaded: 0, pruned: 0 };
+  }
+  const nowSec = Math.floor(Date.now() / 1000);
+  let loaded = 0;
+  let pruned = 0;
+  for (const t of parsed.triggers) {
+    if (t.expires_at !== null && t.expires_at <= nowSec) {
+      pruned++;
+      continue;
+    }
+    if (!VALID_TRIGGER_SOURCES.includes(t.source as ResolvableTriggerSource)) {
+      log(`triggers.json: skipped '${t.id}' — unknown source '${t.source}'`);
+      pruned++;
+      continue;
+    }
+    scheduler.registerTrigger(
+      {
+        id: t.id,
+        skillName: t.skill_name,
+        source: t.source as ResolvableTriggerSource,
+        name: t.name,
+        declarative: false,
+        registeredAt: t.registered_at,
+        ...(t.expires_at !== null ? { expiresAt: t.expires_at } : {}),
+      },
+      { seedFromPersistence: true },
+    );
+    loaded++;
+  }
+  if (pruned > 0) {
+    // Re-write the file without the pruned rows.
+    writePersistedTriggers(path, scheduler.listTriggers().filter((t) => !t.declarative));
+    log(`triggers.json: loaded ${loaded}, pruned ${pruned} expired`);
+  } else if (loaded > 0) {
+    log(`triggers.json: loaded ${loaded} imperative trigger(s)`);
+  }
+  return { loaded, pruned };
+}
+
+/** Serialize the scheduler's imperative-trigger set to disk atomically. */
+function writePersistedTriggers(
+  path: string,
+  triggers: ReadonlyArray<TriggerRegistration>,
+): void {
+  const dir = dirname(path);
+  if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
+  const imperative = triggers.filter((t) => !t.declarative);
+  const payload: PersistedTriggerFile = {
+    schema_version: 1,
+    triggers: imperative.map((t) => ({
+      id: t.id,
+      skill_name: t.skillName,
+      source: t.source,
+      name: t.name,
+      declarative: false as const,
+      registered_at: t.registeredAt,
+      expires_at: t.expiresAt ?? null,
+    })),
+  };
+  writeFileSync(path, JSON.stringify(payload, null, 2), "utf8");
 }
 
 /**

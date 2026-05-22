@@ -57,6 +57,16 @@ export interface SchedulerConfig {
   now?: () => number;
   /** Optional debug logger. Default console.warn. */
   log?: (msg: string) => void;
+  /**
+   * Optional write-through hook. Fires on register/unregister of an
+   * imperative (non-declarative) trigger so a persistent registry can
+   * mirror the in-memory state to disk. v0.2.7 addition — used by the
+   * `bootstrap()` helper to wire `$SKILLSCRIPT_HOME/triggers.json`.
+   * Declarative triggers (parsed from `# Triggers:` headers) are NOT
+   * forwarded to this hook — those re-derive from the SkillStore at
+   * every boot and don't belong in the persistent registry.
+   */
+  onTriggersChanged?: (snapshot: ReadonlyArray<TriggerRegistration>) => void;
 }
 
 /** Internal: snapshot of cron-fire state to dedupe within a minute. */
@@ -74,6 +84,7 @@ export class Scheduler {
   private readonly traceStore: TraceStore | undefined;
   private readonly now: () => number;
   private readonly log: (msg: string) => void;
+  private readonly onTriggersChanged: ((snapshot: ReadonlyArray<TriggerRegistration>) => void) | undefined;
   private readonly triggers = new Map<string, TriggerRegistration>();
   private readonly cronState = new Map<string, CronFireState>();
   private pollTimer: ReturnType<typeof setInterval> | null = null;
@@ -90,22 +101,64 @@ export class Scheduler {
     this.traceStore = config.traceStore;
     this.now = config.now ?? (() => Date.now());
     this.log = config.log ?? ((msg) => process.stderr.write(`[scheduler] ${msg}\n`));
+    this.onTriggersChanged = config.onTriggersChanged;
   }
 
-  registerTrigger(reg: Omit<TriggerRegistration, "id" | "registeredAt">): TriggerRegistration {
-    const id = `trig-${this.nextId++}`;
+  /**
+   * Register a new trigger. v0.2.7: imperative registrations fire the
+   * `onTriggersChanged` hook so the persistent registry can write
+   * through to disk. Declarative registrations skip the hook — those
+   * re-derive from the SkillStore at boot, not from the persistent file.
+   *
+   * `seedFromPersistence`: when true, suppresses the hook AND assigns the
+   * stored id verbatim so the trigger comes back from disk with the same
+   * id the MCP client originally received. Used by `bootstrap()` during
+   * boot-time hydration.
+   */
+  registerTrigger(
+    reg: Omit<TriggerRegistration, "id" | "registeredAt"> & { id?: string; registeredAt?: number },
+    opts?: { seedFromPersistence?: boolean },
+  ): TriggerRegistration {
+    const id = reg.id ?? `trig-${this.nextId++}`;
+    // Keep nextId monotonic across hydrated ids so future imperative
+    // registrations don't collide with seeded ones.
+    const idNum = /^trig-(\d+)$/.exec(id);
+    if (idNum && Number(idNum[1]) >= this.nextId) {
+      this.nextId = Number(idNum[1]) + 1;
+    }
     const full: TriggerRegistration = {
-      ...reg,
+      skillName: reg.skillName,
+      source: reg.source,
+      name: reg.name,
+      registeredAt: reg.registeredAt ?? Math.floor(this.now() / 1000),
+      declarative: reg.declarative,
+      ...(reg.expiresAt !== undefined ? { expiresAt: reg.expiresAt } : {}),
       id,
-      registeredAt: Math.floor(this.now() / 1000),
     };
     this.triggers.set(id, full);
+    if (opts?.seedFromPersistence !== true && !full.declarative) {
+      this.fireOnTriggersChanged();
+    }
     return full;
   }
 
   unregisterTrigger(id: string): boolean {
     this.cronState.delete(id);
-    return this.triggers.delete(id);
+    const existed = this.triggers.get(id);
+    const removed = this.triggers.delete(id);
+    if (removed && existed !== undefined && !existed.declarative) {
+      this.fireOnTriggersChanged();
+    }
+    return removed;
+  }
+
+  private fireOnTriggersChanged(): void {
+    if (this.onTriggersChanged === undefined) return;
+    try {
+      this.onTriggersChanged(Array.from(this.triggers.values()));
+    } catch (err) {
+      this.log(`onTriggersChanged hook threw: ${(err as Error).message}`);
+    }
   }
 
   listTriggers(filter?: { skillName?: string; source?: ResolvableTriggerSource }): TriggerRegistration[] {
@@ -166,14 +219,18 @@ export class Scheduler {
    */
   async tick(): Promise<void> {
     const nowMs = this.now();
-    // Expiry sweep.
+    // Expiry sweep. Imperative triggers that expire need to fire the
+    // onTriggersChanged hook so the persistent registry drops them on disk.
     const nowSec = Math.floor(nowMs / 1000);
+    let imperativeExpired = false;
     for (const [id, t] of this.triggers) {
       if (t.expiresAt !== undefined && t.expiresAt <= nowSec) {
+        if (!t.declarative) imperativeExpired = true;
         this.triggers.delete(id);
         this.cronState.delete(id);
       }
     }
+    if (imperativeExpired) this.fireOnTriggersChanged();
     // Cron evaluation.
     const date = new Date(nowMs);
     const minuteEpoch = Math.floor(nowMs / 60_000);

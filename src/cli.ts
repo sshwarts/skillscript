@@ -35,7 +35,7 @@ const EXAMPLES_DIR = join(HOME_DIR, "examples");
 const PLUGINS_DIR = join(HOME_DIR, "plugins");
 const TRACE_DIR = join(HOME_DIR, "traces");
 
-const VERSION = "0.2.6";
+const VERSION = "0.2.7";
 
 interface CommandHelp {
   description: string;
@@ -173,8 +173,20 @@ const COMMAND_HELP: Readonly<Record<string, CommandHelp>> = {
       "skillfile health --connector memory-store --since-ms 3600000",
     ],
   },
+  serve: {
+    description: "Start the headless runtime host: scheduler + MCP server, no browser SPA",
+    usage: "skillfile serve [--port N] [--host ADDR]",
+    options: [
+      { flag: "--port N", description: "TCP port (default: 7878)" },
+      { flag: "--host ADDR", description: "Bind address (default: 127.0.0.1; container deploys override to 0.0.0.0)" },
+    ],
+    examples: [
+      "skillfile serve",
+      "skillfile serve --host 0.0.0.0 --port 7878   # container deployment",
+    ],
+  },
   dashboard: {
-    description: "Start the runtime host: scheduler + MCP server + browser dashboard SPA",
+    description: "Start the full runtime host: scheduler + MCP server + browser dashboard SPA",
     usage: "skillfile dashboard [--port N] [--host ADDR]",
     options: [
       { flag: "--port N", description: "TCP port (default: 7878)" },
@@ -191,7 +203,7 @@ const COMMAND_HELP: Readonly<Record<string, CommandHelp>> = {
 const COMMAND_ORDER: ReadonlyArray<string> = [
   "init", "run", "compile", "audit", "lint", "list",
   "fires", "diagram", "sign", "verify", "replay", "health",
-  "dashboard",
+  "serve", "dashboard",
 ];
 
 function usage(): string {
@@ -288,7 +300,8 @@ async function main(): Promise<number> {
     case "verify":  return await cmdVerify(rest);
     case "replay":  return await cmdReplay(rest);
     case "health":  return await cmdHealth(rest);
-    case "dashboard":           return await cmdDashboard(rest);
+    case "serve":               return await cmdRuntimeHost(rest, { mode: "serve" });
+    case "dashboard":           return await cmdRuntimeHost(rest, { mode: "dashboard" });
     default:
       process.stderr.write(`skillfile: unknown command '${cmd}'\n\n${usage()}`);
       return 64;
@@ -624,7 +637,7 @@ async function copyScaffoldFile(src: string, dest: string): Promise<void> {
   await writeFile(dest, body, "utf8");
 }
 
-async function cmdDashboard(args: string[]): Promise<number> {
+async function cmdRuntimeHost(args: string[], opts: { mode: "serve" | "dashboard" }): Promise<number> {
   const portStr = extractFlag(args, "--port");
   const port = portStr !== undefined ? parseInt(portStr, 10) : 7878;
   // --host is the bind address inside the running process. 127.0.0.1 is
@@ -632,10 +645,13 @@ async function cmdDashboard(args: string[]): Promise<number> {
   // --host 0.0.0.0 so the host-side port-forward can reach the listener
   // (host port mapping still enforces 127.0.0.1 externally).
   const host = extractFlag(args, "--host") ?? "127.0.0.1";
+  const triggersFilePath = join(HOME_DIR, "triggers.json");
   const wired = bootstrap({
     skillsDir: SKILLS_DIR,
     traceDir: TRACE_DIR,
     memoryDbPath: MEMORY_DB,
+    triggersFilePath,
+    mode: opts.mode,
     // Scheduler-fired skills record traces by default; `fires` / `health` /
     // `health_metrics` (MCP) all read from the trace store.
     trace: { mode: "on" },
@@ -644,9 +660,16 @@ async function cmdDashboard(args: string[]): Promise<number> {
   // so the first tick can fire any minute-aligned cron entries.
   await wireDeclarativeTriggers(wired);
   wired.scheduler.start();
-  const server = new DashboardServer({ mcpServer: wired.mcpServer, port, bindAddress: host });
+  // v0.2.7: dashboard mounts the SPA; serve runs headless on /rpc only.
+  const server = new DashboardServer({
+    mcpServer: wired.mcpServer,
+    port,
+    bindAddress: host,
+    mountSpa: opts.mode === "dashboard",
+  });
   await server.start();
-  process.stdout.write(`dashboard running on http://${host}:${port}\nctrl-C to stop\n`);
+  const label = opts.mode === "dashboard" ? "dashboard" : "serve (headless)";
+  process.stdout.write(`skillfile ${label} running on http://${host}:${port}\nctrl-C to stop\n`);
   await new Promise<void>((resolve) => {
     let shuttingDown = false;
     const shutdown = (): void => {
