@@ -261,12 +261,12 @@ Each example is annotated with the language pattern it demonstrates. Authored fr
 
 **v0.2.6** — pre-1.0, breaking changes expected. The language is stable enough to author production skills; the surrounding tooling (CLI, dashboard, MCP server contract) may evolve before v1.0.
 
-Test coverage: 549/549 passing. Narrow-core LOC under the 5000/20-file ceiling per ERD.
+Test coverage: 600/600 passing. Narrow-core LOC under the 5000/20-file ceiling per ERD.
 
 What's coming next:
-- Comparison operators (`<`, `>`, `<=`, `>=`) and `|length` filter — orchestration carve-out for numeric thresholds
+- `skillfile serve` headless command — scheduler + MCP server without the SPA, for container/CI deployments
 - Persistent trigger registry on disk — imperative triggers survive process restart
-- `skillfile serve` headless command — scheduler + MCP server without the SPA
+- AgentConnector reference adapters — bundled implementations for tmux pane / file-watch / webhook substrates so adopters can plug `prompt-context:` / `template:` deliveries into real receivers without writing their own connector first
 
 ## Contributing
 
