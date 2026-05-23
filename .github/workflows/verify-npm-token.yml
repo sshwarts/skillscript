@@ -1,0 +1,40 @@
+name: verify-npm-token
+
+# One-shot verification that NPM_TOKEN reaches the runner with a value
+# that actually authenticates against the registry. Manual-trigger only;
+# delete after a successful verification.
+#
+# Output to look for: `npm whoami` returns the token's account name.
+# If it errors with ENEEDAUTH, the secret value is wrong or expired.
+
+on:
+  workflow_dispatch:
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22.x
+          registry-url: 'https://registry.npmjs.org'
+
+      - name: Verify NPM_TOKEN
+        run: |
+          echo "NPM_TOKEN length: ${#NPM_TOKEN}"
+          if [ "${#NPM_TOKEN}" -eq 0 ]; then
+            echo "FAIL: NPM_TOKEN is empty — secret not set or not propagating to env."
+            exit 1
+          fi
+          echo "First 4 chars look like: ${NPM_TOKEN:0:4}..."
+          npm config set //registry.npmjs.org/:_authToken "$NPM_TOKEN"
+          echo "---"
+          echo "Running: npm whoami"
+          npm whoami
+          echo "---"
+          echo "OK: token authenticates against npmjs.org as the account above."
+        env:
+          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
