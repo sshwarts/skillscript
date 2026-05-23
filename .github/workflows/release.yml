@@ -125,15 +125,17 @@ jobs:
           prerelease: false
 
       - name: Publish to npm
-        # Five publish-step failures across v0.2.5–v0.2.9, each a
-        # different pnpm/setup-node/npm interaction quirk. The common
-        # theme: "where I write .npmrc doesn't match where npm reads it."
-        #
-        # `npm config set` bypasses .npmrc-location ambiguity — npm
-        # writes to whichever file it itself considers canonical.
-        # `--ignore-scripts` skips prepublishOnly (smoke ran above).
+        # SIX publish-step failures across v0.2.5–v0.2.10 with six
+        # different fix theories, none working — same ENEEDAUTH for
+        # the last three. Time to verify the secret is even reaching
+        # the runner. Diagnostic emits token LENGTH only (GHA masks
+        # values in logs); if the secret is empty/wrong we'll see it.
         run: |
+          echo "NPM_TOKEN length: ${#NPM_TOKEN}"
+          echo "First 4 chars look like: ${NPM_TOKEN:0:4}..."
           npm config set //registry.npmjs.org/:_authToken "$NPM_TOKEN"
+          echo "npm registry config:"
+          npm config list 2>&1 | grep -iE "registry|authtoken" | sed 's/_authToken=[a-zA-Z0-9_-]*/_authToken=***/'
           npm publish --access public --ignore-scripts
         env:
           NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
