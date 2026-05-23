@@ -2,6 +2,7 @@ import type { ParsedSkill, SkillOp, OutputDecl } from "./parser.js";
 import type { DeliveryReceipt, TriggerProvenance } from "./connectors/agent.js";
 import { tokenizeKeywordArgs, processSetValue } from "./parser.js";
 import { applyFilter } from "./filters.js";
+import { dispatchExecuteSkillIntercept } from "./composition.js";
 import type { Registry } from "./connectors/registry.js";
 import { spawn } from "node:child_process";
 import {
@@ -86,6 +87,18 @@ export interface ExecuteContext {
   triggerCtx?: { source: string; name: string; fired_at_ms: number; trigger_id?: string };
   /** Skill identity for trace records. Optional — falls back to parsed.name + version inference. */
   skillVersion?: string;
+  /**
+   * Current recursion depth for `$ execute_skill` composition (v0.2.8).
+   * Each nested compose-call increments the counter; the runtime throws
+   * a structured error when depth exceeds `maxRecursionDepth`. Undefined
+   * is treated as 0 (top-level execution).
+   */
+  recursionDepth?: number;
+  /**
+   * Recursion-depth ceiling for `$ execute_skill`. Default 10. Configurable
+   * for tests + deployments with deeper composition chains.
+   */
+  maxRecursionDepth?: number;
 }
 
 /**
@@ -544,6 +557,20 @@ async function execOpInner(
           lastBoundVar: op.outputVar ?? flatKey,
           lastValue: placeholder,
         };
+      }
+
+      // v0.2.8: built-in `$ execute_skill` intercept. The composition
+      // module handles arg parsing + recursion-guarded dispatch so this
+      // op handler stays under the narrow-core LOC ceiling.
+      if (toolName === "execute_skill" && op.mcpConnector === undefined) {
+        try {
+          const childResult = await dispatchExecuteSkillIntercept(args, targetName, ctx);
+          vars.set(flatKey, childResult);
+          if (op.outputVar !== undefined) vars.set(op.outputVar, childResult);
+          return { lastBoundVar: op.outputVar ?? flatKey, lastValue: childResult };
+        } catch (err) {
+          throw makeOpError("$", `\`$ execute_skill\` failed: ${(err as Error).message}`);
+        }
       }
 
       const connectorName = op.mcpConnector ?? "primary";

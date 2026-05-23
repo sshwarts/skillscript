@@ -1,5 +1,71 @@
 # Changelog
 
+## 0.2.8 — 2026-05-23
+
+**Discovery + composition.** Two new MCP tools per Perry's v0.2.8
+kickoff (thread `45c167bc`). Both close real public-runtime gaps:
+cold-author bootstrap (`help`) and skill-to-skill composition that
+doesn't depend on AMP (`execute_skill`).
+
+### Added
+- **`help` MCP tool** — cold-agent language discovery. `help()` returns
+  a ~500-token quickstart covering the six minimum-viable questions a
+  cold author needs (skill shape, op symbols, result binding, branching,
+  iteration, debugging). `help({topic})` returns deeper sections:
+  - `ops` — op symbol legend with grammars
+  - `frontmatter` — header keys + values
+  - `examples` — three canonical worked skills (minimal / threshold /
+    LocalModel branching)
+  - `connectors` — short explainer + live wired-set summary from the
+    registry (delegates dynamic depth to `runtime_capabilities`)
+  - `lint-codes` — tier-1/2/3 rule index
+- **`execute_skill` MCP tool** — public composition primitive.
+  `execute_skill({skill_name, inputs?, mechanical?})`. Symmetric return
+  shape with AMP's `amp_execute_skill`:
+  `{skill_name, final_vars, transcript, outputs, errors, target_order}`.
+  `mechanical: true` previews dispatch without firing `$`/`~`/`@`/`??`
+  ops (TestFlight mode); propagates through recursive composition.
+  Recursion-depth guard at 10 (configurable via
+  `ExecuteContext.maxRecursionDepth`); structured
+  `RecursionDepthExceededError` fires on infinite-loop composition.
+  Missing-skill returns a structured error rather than crash.
+- **In-skill `$ execute_skill skill_name=child` intercept** — the
+  runtime recognizes `execute_skill` as a built-in tool name and
+  dispatches to the composition helper without requiring an MCP
+  connector to be wired. Closes the gap Perry surfaced: prior to v0.2.8,
+  the only way to invoke another skill was via AMP's private
+  `amp_execute_skill`; a fresh runtime had `mcpConnectors: []` and no
+  way to compose.
+
+### Internal
+- New `src/composition.ts` module wraps load + compile + execute behind
+  a single `executeSkillByName()` function. Both the MCP tool handler
+  and the `$` op intercept delegate here. Keeps the runtime's narrow-
+  core LOC under the ERD §1 ceiling.
+- New `src/help-content.ts` module hosts the static help payload.
+- Tool count: 11 → 13. Existing 5 assertions across `mcp-server`,
+  `dashboard-server`, `dogfood-t6b`, `v0.2.1`, and `v0.2.3` tests
+  updated.
+
+### Test coverage
+- 17 new fixtures in `tests/v0.2.8.test.ts` covering: help topic
+  surfaces, execute_skill end-to-end against bootstrapped runtime,
+  mechanical-mode preview, missing-skill error shape, in-skill
+  `$ execute_skill` composition, recursion-depth guard on infinite-loop
+  chains, composition without an MCP connector wired.
+- 631/631 tests passing. Narrow-core LOC 4999/13 (1 line under the 5000
+  ceiling — tight).
+
+### Validation
+Perry's new "zero-primer" harness — fresh sub-agent with the Skillscript
+MCP tools wired but ZERO system primer or language reference in context.
+Task: "write a working skill that does X." Success = compiles clean.
+Tests whether `help()` alone is enough to bootstrap authoring.
+
+### Acknowledgments
+Perry — kickoff design + minion-validation cadence. Public composition
+was the missing piece for "skillscript without AMP."
+
 ## 0.2.7 — 2026-05-22
 
 **Runtime ergonomics.** Items 4 + 5 from Perry's v0.2.5 kickoff

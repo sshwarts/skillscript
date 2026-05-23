@@ -52,7 +52,7 @@ describe("McpServer protocol", () => {
     }
   });
 
-  it("tools/list returns 11 built-in tools (v0.2.3 added lint_skill + compile_skill + skill_write)", async () => {
+  it("tools/list returns 13 built-in tools (v0.2.8 added execute_skill + help)", async () => {
     const { server, cleanup } = withServer();
     try {
       const resp = await server.handle(rpc("tools/list"));
@@ -60,7 +60,9 @@ describe("McpServer protocol", () => {
       const names = r.tools.map((t) => t.name).sort();
       expect(names).toEqual([
         "compile_skill",
+        "execute_skill",
         "health_metrics",
+        "help",
         "lint_skill",
         "list_triggers",
         "register_trigger",

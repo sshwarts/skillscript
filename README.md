@@ -3,7 +3,7 @@
 *A language for agents to write themselves in.*
 
 [![npm version](https://img.shields.io/npm/v/skillscript-runtime.svg)](https://www.npmjs.com/package/skillscript-runtime)
-[![tests](https://img.shields.io/badge/tests-614%2F614-green)](#)
+[![tests](https://img.shields.io/badge/tests-631%2F631-green)](#)
 [![license](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 [![status](https://img.shields.io/badge/status-pre--1.0-orange)](#status)
 
@@ -259,9 +259,9 @@ Each example is annotated with the language pattern it demonstrates. Authored fr
 
 ## Status
 
-**v0.2.7** — pre-1.0, breaking changes expected. The language is stable enough to author production skills; the surrounding tooling (CLI, dashboard, MCP server contract) may evolve before v1.0.
+**v0.2.8** — pre-1.0, breaking changes expected. The language is stable enough to author production skills; the surrounding tooling (CLI, dashboard, MCP server contract) may evolve before v1.0.
 
-Test coverage: 614/614 passing. Narrow-core LOC under the 5000/20-file ceiling per ERD.
+Test coverage: 631/631 passing. Narrow-core LOC under the 5000/20-file ceiling per ERD.
 
 What's coming next:
 - AgentConnector reference adapters — bundled implementations for tmux pane / TTY-injection / file-watch / webhook substrates so adopters can plug `prompt-context:` / `template:` deliveries into real receivers without writing their own connector first

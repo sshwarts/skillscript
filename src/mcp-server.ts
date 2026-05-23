@@ -6,6 +6,12 @@ import { healthMetrics, type HealthMetrics } from "./metrics.js";
 import { lint } from "./lint.js";
 import { compile } from "./compile.js";
 import { LintFailureError } from "./errors.js";
+import {
+  executeSkillByName,
+  RecursionDepthExceededError,
+  SkillNotFoundForCompositionError,
+} from "./composition.js";
+import { helpResponse } from "./help-content.js";
 
 /**
  * MCP server contract surface (T6b Phase 1). Exposes the runtime's
@@ -32,6 +38,8 @@ import { LintFailureError } from "./errors.js";
  *   lint_skill({source?|name})     → diagnostics across tiers (v0.2.3)
  *   compile_skill({source?|name, inputs?})→ rendered artifact + errors (v0.2.3)
  *   skill_write({name, source, overwrite?})→ commit to SkillStore (write, v0.2.3)
+ *   execute_skill({skill_name, inputs?, mechanical?})→ run + return result (write, v0.2.8)
+ *   help({topic?})                 → cold-agent language discovery (read, v0.2.8)
  */
 
 // ─── JSON-RPC 2.0 ──────────────────────────────────────────────────────────
@@ -89,7 +97,7 @@ export class McpServer {
   private readonly version: string;
 
   constructor(private readonly deps: McpServerDeps) {
-    this.version = deps.serverVersion ?? "0.2.7";
+    this.version = deps.serverVersion ?? "0.2.8";
     this.registerBuiltinTools();
   }
 
@@ -398,6 +406,133 @@ export class McpServer {
       },
       handler: async (args) => this.skillWrite(args),
     });
+
+    // ─── v0.2.8 — composition + discovery ──────────────────────────────────
+
+    this.registerTool({
+      name: "execute_skill",
+      description: "Execute a stored skill end-to-end against the runtime's wired connectors. Returns {skill_name, final_vars, transcript, outputs, errors, target_order}. `mechanical: true` previews dispatch without firing $/~/@/?? ops (TestFlight mode). Recursion-depth-guarded for composition chains (default 10). Write operation.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          skill_name: { type: "string", description: "Skill name as stored in the SkillStore." },
+          inputs: {
+            type: "object",
+            additionalProperties: { type: "string" },
+            description: "Optional `# Vars:` overrides keyed by variable name.",
+          },
+          mechanical: {
+            type: "boolean",
+            description: "When true, $/~/@/?? ops bind placeholders instead of firing. Recurses through nested execute_skill calls.",
+            default: false,
+          },
+        },
+        required: ["skill_name"],
+      },
+      handler: async (args) => this.executeSkill(args),
+    });
+
+    this.registerTool({
+      name: "help",
+      description: "Cold-agent language discovery. `help()` returns a ~500-token quickstart. `help({topic})` returns a deeper section. Topics: ops / frontmatter / examples / connectors / lint-codes. Read-only.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          topic: {
+            type: "string",
+            enum: ["ops", "frontmatter", "examples", "connectors", "lint-codes"],
+            description: "Optional topic for a deeper section. Omit for the quickstart.",
+          },
+        },
+      },
+      handler: async (args) => this.help(args),
+    });
+  }
+
+  private async executeSkill(args: Record<string, unknown>): Promise<Record<string, unknown>> {
+    const skillName = args["skill_name"];
+    if (typeof skillName !== "string" || skillName === "") {
+      throw new Error("execute_skill: `skill_name` is required (non-empty string).");
+    }
+    const inputs = (args["inputs"] as Record<string, string> | undefined) ?? {};
+    const mechanical = args["mechanical"] === true;
+
+    // Build an ExecuteContext for the call. The MCP tool entry is the
+    // top-level — recursionDepth starts at 0 and increments inside
+    // executeSkillByName.
+    if (this.deps.registry === undefined) {
+      throw new Error("execute_skill: runtime registry not configured (McpServerDeps.registry missing).");
+    }
+    const ctx = {
+      registry: this.deps.registry,
+      mechanical,
+      recursionDepth: 0,
+    } satisfies import("./runtime.js").ExecuteContext;
+
+    try {
+      const result = await executeSkillByName(skillName, inputs, {
+        skillStore: this.deps.skillStore,
+        ctx,
+      });
+      return {
+        skill_name: result.skill_name,
+        final_vars: result.final_vars,
+        transcript: result.transcript,
+        outputs: result.outputs,
+        errors: result.errors,
+        target_order: result.target_order,
+        mechanical,
+      };
+    } catch (err) {
+      if (err instanceof SkillNotFoundForCompositionError) {
+        return {
+          skill_name: null,
+          final_vars: {},
+          transcript: [],
+          outputs: {},
+          errors: [{ class: "SkillNotFoundError", opKind: "execute_skill", target: "(root)", message: err.message }],
+          target_order: [],
+          mechanical,
+        };
+      }
+      if (err instanceof RecursionDepthExceededError) {
+        return {
+          skill_name: skillName,
+          final_vars: {},
+          transcript: [],
+          outputs: {},
+          errors: [{ class: "RecursionDepthExceededError", opKind: "execute_skill", target: "(root)", message: err.message, chain: err.chain }],
+          target_order: [],
+          mechanical,
+        };
+      }
+      if (err instanceof LintFailureError) {
+        return {
+          skill_name: skillName,
+          final_vars: {},
+          transcript: [],
+          outputs: {},
+          errors: [{ class: "LintFailureError", opKind: "execute_skill", target: "(root)", message: err.message }],
+          target_order: [],
+          mechanical,
+        };
+      }
+      // Unexpected — surface as a structured error rather than throw.
+      return {
+        skill_name: skillName,
+        final_vars: {},
+        transcript: [],
+        outputs: {},
+        errors: [{ class: (err as Error).name, opKind: "execute_skill", target: "(root)", message: (err as Error).message }],
+        target_order: [],
+        mechanical,
+      };
+    }
+  }
+
+  private async help(args: Record<string, unknown>): Promise<Record<string, unknown>> {
+    const topic = typeof args["topic"] === "string" ? args["topic"] : null;
+    return helpResponse(topic, this.version, this.deps.registry);
   }
 
   // ─── v0.2.3 authoring-lifecycle handlers ───────────────────────────────────
