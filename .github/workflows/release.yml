@@ -124,18 +124,16 @@ jobs:
           draft: false
           prerelease: false
 
-      - name: Configure npm auth
-        # Hand-write ~/.npmrc with the literal token. v0.2.7's CI run
-        # showed setup-node's NODE_AUTH_TOKEN env-substitution path didn't
-        # engage under `npm publish` either (likely overwritten by the
-        # earlier pnpm install step). Writing the file directly with a
-        # literal token avoids env-substitution entirely. Secret stays
-        # masked in logs per GitHub Actions standard.
-        run: echo "//registry.npmjs.org/:_authToken=${NPM_TOKEN}" > $HOME/.npmrc
-        env:
-          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
-
       - name: Publish to npm
+        # Project-root `.npmrc` takes precedence over `$HOME/.npmrc` AND
+        # the `$NPM_CONFIG_USERCONFIG`-redirected file setup-node@v4 writes
+        # to `$RUNNER_TEMP`. v0.2.5-0.2.7 attempts at `$HOME/.npmrc` were
+        # silently ignored because of the env redirect. Writing to project
+        # root + single-step keeps auth + publish atomic.
         # `npm publish` (not pnpm) bypasses pnpm 11's auto-OIDC behavior.
         # `--ignore-scripts` skips prepublishOnly since smoke ran above.
-        run: npm publish --access public --ignore-scripts
+        run: |
+          echo "//registry.npmjs.org/:_authToken=${NPM_TOKEN}" > .npmrc
+          npm publish --access public --ignore-scripts
+        env:
+          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
