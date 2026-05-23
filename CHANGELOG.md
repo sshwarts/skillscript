@@ -1,5 +1,97 @@
 # Changelog
 
+## 0.3.3 — 2026-05-23
+
+**`$ json_parse` op + `|json_parse` filter removal + cleaner conditional
+error UX.** Closes the v0.3.2 spec promise from `af14b7d8` (Perry's
+signoff finding `0a409c5c`): `|json_parse` filter was string-in/string-
+out, so `.field` access on parsed JSON couldn't propagate structure
+through the filter signature. v0.3.3 ships the deferred `$ json_parse`
+intercept named in lesson `dc824ee4`, which binds the parsed value as
+structured so `resolveRef`'s existing dotted descent handles `$(P.field)`
+in conditions + emit for free. Same end-user outcome, no
+condition-grammar surface change.
+
+### Breaking change
+
+- **`|json_parse` filter removed.** Use the new `$ json_parse $(VAR) ->
+  OUT` op instead. Reason: verb collision risk if both surfaces shared
+  `json_parse`, and the filter's actual utility (round-trip through
+  `JSON.parse` + `JSON.stringify`) is thin enough that the
+  disambiguation cost outweighed the use case. Anyone who actually
+  wanted normalized JSON can compose `$ json_parse $(X) -> P` then
+  `$(P|json)` with the existing stringify filter. Easier to add back as
+  a wrapper later than carry a confused dual-surface forward.
+
+### Added
+
+- **`$ json_parse $(VAR) -> OUT` op (built-in).** Parses the post-
+  substitution input as JSON and binds the parsed value (object / array
+  / scalar) to `OUT` in the vars map. `resolveRef`'s existing dotted
+  descent then handles `$(OUT.field)` in conditions, emit bodies,
+  retrieval queries, etc. — no filter+field grammar gymnastics. Mirrors
+  the `$ execute_skill` intercept shape in `runtime.ts`.
+
+  ```
+  # Vars: PAYLOAD={"status":"ok","count":3}
+  read:
+      $ json_parse $(PAYLOAD) -> P
+      if $(P.status) == "ok" and $(P.count) > "0":
+          ! processing $(P.count) items
+  ```
+
+  Throws structured error on malformed input (caught by `else:` /
+  `# OnError:`). Throws when the input expression is empty.
+
+- **`unparsed-json-field-access` lint advisory (tier-3, info).** Static
+  detection of `$(VAR|json_parse).field` in any op text — emit bodies,
+  `$set`/`$append` values, `foreach` lists, retrieval/local-model/amp
+  params. Remediation points at the new op. (In condition contexts the
+  parser rejection fires first as tier-1 with the same remediation
+  text.)
+
+- **`CompileResult.advisories: string[]`** and tier-2 lint findings
+  carried into `CompileResult.warnings` (was only the orphan-target
+  message before). Closes Perry's spec scope item #4 from `af14b7d8`
+  — cold authors get separate `warnings` + `advisories` surfaces in
+  `compile_skill` MCP responses instead of having to introspect
+  separately. Each entry formatted as `<rule>: <message>`.
+
+### Fixed
+
+- **Indent cascade after rejected conditions (Bug D).** Pre-v0.3.3,
+  when an `if`/`elif` condition was rejected (`Unsupported condition`
+  error), the body lines correctly indented under the rejected block
+  triggered a spurious `Mid-block indent change` cascade. Cold authors
+  chased phantom indent bugs instead of the real condition issue. The
+  parser now pushes a sink scope frame after a rejected condition so
+  body lines collect into a throwaway bucket and drop at scope pop.
+  Real condition error still surfaces; phantom indent error doesn't.
+
+- **`invalid-conditional-syntax` error message updated (Bug B).** Pre-
+  v0.3.3 the parser error and lint rule both claimed "v1 grammar is
+  truthy / `==` / `!=` against quoted literals, or `in` / `not in`
+  between two `$(NAME)` refs" — stale since v0.2.5 (comparison ops)
+  and outright wrong since v0.3.2 (`and`/`or`/`not` shipped). New
+  message enumerates current supported shapes accurately AND points
+  at `$ json_parse` as the remediation for the `$(VAR|filter).field`
+  shape.
+
+### Implementation notes
+
+- **Narrow-core LOC ceiling 5650 → 5700.** Net ~50 LOC: ~25 for the
+  runtime `$ json_parse` intercept, ~30 for the new lint advisory
+  walker, ~10 for parser sink-scope frames (Bug D), ~5 for compile.ts
+  tier-2/tier-3 plumbing, minus ~10 for the yanked `|json_parse` filter
+  case. History entry in `scripts/loc-ceiling.mjs`.
+
+- **Tests:** 24 new in `tests/v0.3.3.test.ts` covering the op (parser
+  + runtime + dotted descent + array/scalar handling + error paths),
+  filter removal (negative coverage), lint advisory, error-message
+  updates, indent-cascade sanity (Bug D), help surface, and Bug C
+  `CompileResult.advisories` surface. 848/851 passing (3 long-skip
+  browser dogfood).
+
 ## 0.3.2 — 2026-05-23
 
 **Boolean trio + `|json_parse` filter + filter chain support.** v0.3.2

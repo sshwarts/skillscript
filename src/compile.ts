@@ -95,7 +95,20 @@ export interface CompileResult {
    */
   provenance: ProvenanceBlock;
   onError: string | null;
+  /**
+   * Tier-2 lint warnings + orphan-target diagnostics. v0.3.3 expanded to
+   * carry tier-2 findings from the lint preflight; previously the field
+   * only held the orphan-target message. Each entry is `<rule>: <message>`
+   * for lint findings, raw message for orphan diagnostics.
+   */
   warnings: string[];
+  /**
+   * Tier-3 lint advisories from the preflight (v0.3.3). Separated from
+   * `warnings` so cold authors can distinguish "should fix" from
+   * "informational." Each entry is `<rule>: <message>`. Spec scope item
+   * #4 from `af14b7d8` — closes the v0.3.1 signoff gap.
+   */
+  advisories: string[];
   /** Pass-through to the runtime — saves re-parsing. */
   parsed: ParsedSkill;
 }
@@ -115,6 +128,10 @@ export async function compile(
   // Parse errors surface here too (as parse-error rule findings) before the
   // legacy error throw below; preserving the throw shape keeps existing
   // catchers working while giving lint-aware callers a richer diagnostic.
+  // v0.3.3: tier-2 + tier-3 findings carried forward onto CompileResult
+  // as warnings / advisories (spec scope item #4 from af14b7d8).
+  const lintWarnings: string[] = [];
+  const lintAdvisories: string[] = [];
   if (options.skipLintPreflight !== true) {
     const lintResult = await lint(source, {
       ...(skillStore !== undefined ? { skillStore } : {}),
@@ -134,6 +151,10 @@ export async function compile(
         })),
         "compile",
       );
+    }
+    for (const f of lintResult.findings) {
+      if (f.severity === "warning") lintWarnings.push(`${f.rule}: ${f.message}`);
+      else if (f.severity === "info") lintAdvisories.push(`${f.rule}: ${f.message}`);
     }
   }
 
@@ -279,7 +300,8 @@ export async function compile(
     triggers: parsed.triggers,
     outputs,
     onError: parsed.onError,
-    warnings,
+    warnings: [...warnings, ...lintWarnings],
+    advisories: lintAdvisories,
     parsed,
     dataSkillsInlined,
     provenance,

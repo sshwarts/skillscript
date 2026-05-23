@@ -135,6 +135,23 @@ Calls an MCP tool. Without an explicit connector prefix, routes to the
 another stored skill end-to-end without requiring an MCP connector — pass
 input vars as additional kwargs.
 
+**Built-in (v0.3.3):** \`$ json_parse $(VAR) -> P\` parses the input as JSON
+and binds the structured value to \`P\`. Dotted descent via \`$(P.field)\`
+works in conditions and emit — no filter+field grammar gymnastics.
+
+\`\`\`
+# Vars: PAYLOAD={"status":"ok","count":3}
+
+read:
+    $ json_parse $(PAYLOAD) -> P
+    if $(P.status) == "ok" and $(P.count) > "0":
+        ! processing $(P.count) items
+\`\`\`
+
+Throws on malformed JSON (caught by \`else:\` / \`# OnError:\`). Replaces
+the v0.3.2 \`|json_parse\` filter, which couldn't propagate parsed
+structure through \`.field\` access.
+
 ### \`~\` — LocalModel call
 
 \`\`\`
@@ -226,7 +243,6 @@ Apply on \`$(VAR|filter)\` references; chain left-to-right.
 | \`url\` | encodeURIComponent |
 | \`shell\` | POSIX single-quote escape |
 | \`json\` | JSON.stringify |
-| \`json_parse\` | Parse JSON string; round-trips for valid JSON, throws for malformed (v0.3.2). Pairs with \`|length\` for array counts on JSON arrays. |
 | \`trim\` | Whitespace trim |
 | \`length\` | Array element count or string char count (v0.2.5) |
 
@@ -606,6 +622,7 @@ Three tiers per ERD §3:
 - \`duplicate-skill-name\` — name collides with an existing stored skill
 - \`plugin-collision\` — placeholder for v1.x plugin-loader name conflicts
 - \`deferred-skill-reference\` — composition ref (\`&\` / \`$ execute_skill\` / \`# Templates:\`) targets a skill not currently in the SkillStore; resolution deferred to execute time (v0.3.1+). Confirms the forward-reference path is engaged; clears once the target is stored.
+- \`unparsed-json-field-access\` — op text contains \`$(VAR|json_parse).field\`; the \`|json_parse\` filter was removed in v0.3.3. Replace with \`$ json_parse $(VAR) -> P\` then \`$(P.field)\`.
 
 \`compile_skill({source})\` runs the full lint preflight and reports
 findings in the \`errors\` + \`warnings\` arrays. \`lint_skill({source})\`

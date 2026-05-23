@@ -406,8 +406,8 @@ const MALFORMED_OP_GRAMMAR: LintRule = {
 const INVALID_CONDITIONAL_SYNTAX: LintRule = {
   id: "invalid-conditional-syntax",
   severity: "error",
-  description: "An `if:` / `elif:` condition uses syntax outside the v1 narrow grammar (truthy / `==` / `!=` / `in` / `not in`).",
-  remediation: "Restructure the condition to use a supported shape. v1 explicitly excludes AND/OR, numeric comparison, and defined-checks.",
+  description: "An `if:` / `elif:` condition uses syntax outside the supported grammar.",
+  remediation: "Use a supported shape: truthy `$(REF)`; `$(REF) ==/!=/</>/<=/>= \"literal\"` or `$(REF) ==/!=/</>/<=/>= $(REF)`; `$(REF) (not) in $(REF)`; composable with `and` / `or` / `not` and parens. Filters + dotted-field allowed inside `$(REF)`. For field access on parsed JSON, use `$ json_parse $(VAR) -> P` then `$(P.field)`.",
   check: (ctx) => ctx.parsed.parseErrors
     .filter((msg) => /Unsupported condition/.test(msg))
     .map((msg) => ({
@@ -570,6 +570,52 @@ const DEFERRED_SKILL_REFERENCE: LintRule = {
           extras: { referenced_skill: name, via: "# Templates" },
         });
       }
+    }
+    return findings;
+  },
+};
+
+// v0.3.3 — `|json_parse` filter removed; the shape `$(VAR|json_parse).field`
+// is statically detectable. Fire a tier-3 advisory pointing at the new
+// `$ json_parse $(VAR) -> P` op so authors who carried the v0.3.2 pattern
+// forward get a direct remediation instead of the generic "unknown filter"
+// error from applyFilter.
+const UNPARSED_JSON_FIELD_ACCESS: LintRule = {
+  id: "unparsed-json-field-access",
+  severity: "info",
+  description: "Op text contains `$(VAR|json_parse).field` — the `|json_parse` filter was removed in v0.3.3.",
+  remediation: "Replace with `$ json_parse $(VAR) -> P` then access `$(P.field)`. The op binds the parsed structure so dotted descent works in conditions + emit. See help({topic: \"ops\"}).",
+  check: (ctx) => {
+    const findings: LintFinding[] = [];
+    const BAD = /\$\([^)]*\|\s*json_parse\s*\)\.([A-Za-z_]\w*)/;
+    const reportIfMatches = (text: string, targetName: string): void => {
+      const m = BAD.exec(text);
+      if (m === null) return;
+      findings.push({
+        rule: "unparsed-json-field-access",
+        severity: "info",
+        message: `In target '${targetName}': \`$(...|json_parse).${m[1]}\` — the \`|json_parse\` filter was removed in v0.3.3. Replace with \`$ json_parse $(VAR) -> P\` then \`$(P.${m[1]})\`.`,
+        block: targetName,
+      });
+    };
+    for (const [targetName, target] of ctx.parsed.targets) {
+      walkOps(target.ops, (op) => {
+        if (op.body !== undefined) reportIfMatches(op.body, targetName);
+        if (op.foreachList !== undefined) reportIfMatches(op.foreachList, targetName);
+        if (op.ifBranches !== undefined) {
+          for (const b of op.ifBranches) reportIfMatches(b.cond, targetName);
+        }
+        if (op.retrievalParams !== undefined) {
+          reportIfMatches(op.retrievalParams.query, targetName);
+          for (const v of Object.values(op.retrievalParams.extra)) reportIfMatches(String(v), targetName);
+        }
+        if (op.localModelParams !== undefined) {
+          reportIfMatches(op.localModelParams.prompt, targetName);
+        }
+        if (op.ampParams !== undefined) {
+          for (const v of Object.values(op.ampParams.args)) reportIfMatches(v, targetName);
+        }
+      });
     }
     return findings;
   },
@@ -1357,6 +1403,7 @@ const RULES: LintRule[] = [
   NO_DEFAULT_TARGET,
   DUPLICATE_SKILL_NAME,
   PLUGIN_COLLISION,
+  UNPARSED_JSON_FIELD_ACCESS,
 ];
 
 /** Read-only view of the rule registry — for tooling that introspects v1 rules. */

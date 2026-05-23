@@ -609,6 +609,32 @@ async function execOpInner(
         }
       }
 
+      // v0.3.3: `$ json_parse <expr> -> OUT` intercept. Parses the
+      // post-substitution input as JSON and binds the structured value
+      // (object/array/scalar) to the output var. Pairs with resolveRef's
+      // dotted descent so `$(OUT.field)` works in conditions + emit
+      // without filter+field grammar surface — closes the v0.3.2 gap
+      // where `|json_parse` (string-in/string-out) couldn't propagate
+      // parsed structure through `.field` access.
+      if (toolName === "json_parse" && op.mcpConnector === undefined) {
+        const input = argsStr.trim();
+        if (input === "") {
+          throw makeOpError("$", `\`$ json_parse\` requires an input expression (target '${targetName}').`);
+        }
+        let parsed: unknown;
+        try {
+          parsed = JSON.parse(input);
+        } catch (err) {
+          throw makeOpError(
+            "$",
+            `\`$ json_parse\` input is not valid JSON. Got: '${input.slice(0, 40)}${input.length > 40 ? "..." : ""}' — ${(err as Error).message}`,
+          );
+        }
+        vars.set(flatKey, parsed);
+        if (op.outputVar !== undefined) vars.set(op.outputVar, parsed);
+        return { lastBoundVar: op.outputVar ?? flatKey, lastValue: parsed };
+      }
+
       const connectorName = op.mcpConnector ?? "primary";
       let rawResult: unknown;
       let dispatched = false;

@@ -981,7 +981,19 @@ export function parse(source: string): ParsedSkill {
           continue;
         }
         if (!validateCondition(cond)) {
-          result.parseErrors.push(`Unsupported condition in \`elif\` (target '${currentTarget.name}'): \`${cond}\` — v1 grammar is truthy / \`==\` / \`!=\` against quoted literals, or \`in\` / \`not in\` between two \`$(NAME)\` refs`);
+          result.parseErrors.push(`Unsupported condition in \`elif\` (target '${currentTarget.name}'): \`${cond}\` — supported shapes: truthy \`$(REF)\`; \`$(REF) ==/!=/</>/<=/>= "literal"\` or \`$(REF) ==/!=/</>/<=/>= $(REF)\`; \`$(REF) (not) in $(REF)\`; composable with \`and\` / \`or\` / \`not\` and parens. Filters + dotted-field allowed inside \`$(REF)\` (e.g. \`$(ITEMS|length) > "0"\`). To access fields on parsed JSON, use \`$ json_parse $(VAR) -> P\` then refer to \`$(P.field)\` (the \`$(VAR|filter).field\` shape is not supported)`);
+          // v0.3.3 Bug D: sink-scope so body lines don't cascade. Mirror
+          // of the `if`-rejection path above. Synthetic branch isn't
+          // appended to the real ifOp's ifBranches — body lines collect
+          // into a throwaway bucket and drop at scope pop.
+          const sinkBranch = { cond, body: [] };
+          scopeStack.push({
+            kind: "elif",
+            target: currentTarget,
+            opsBucket: sinkBranch.body,
+            depth: continuationDepth,
+            ifOp,
+          });
           continue;
         }
         const newBranch = { cond, body: [] };
@@ -1042,7 +1054,21 @@ export function parse(source: string): ParsedSkill {
         continue;
       }
       if (!validateCondition(cond)) {
-        result.parseErrors.push(`Unsupported condition in \`if\` (target '${currentTarget.name}'): \`${cond}\` — v1 grammar is truthy / \`==\` / \`!=\` against quoted literals, or \`in\` / \`not in\` between two \`$(NAME)\` refs`);
+        result.parseErrors.push(`Unsupported condition in \`if\` (target '${currentTarget.name}'): \`${cond}\` — supported shapes: truthy \`$(REF)\`; \`$(REF) ==/!=/</>/<=/>= "literal"\` or \`$(REF) ==/!=/</>/<=/>= $(REF)\`; \`$(REF) (not) in $(REF)\`; composable with \`and\` / \`or\` / \`not\` and parens. Filters + dotted-field allowed inside \`$(REF)\` (e.g. \`$(ITEMS|length) > "0"\`). To access fields on parsed JSON, use \`$ json_parse $(VAR) -> P\` then refer to \`$(P.field)\` (the \`$(VAR|filter).field\` shape is not supported)`);
+        // v0.3.3 Bug D: push a sink scope frame so body lines (correctly
+        // indented relative to the rejected `if`) don't cascade into
+        // misleading `Mid-block indent change` errors. The synthetic ifOp
+        // isn't added to the AST — the body lines collect into a
+        // throwaway opsBucket that gets dropped at scope pop.
+        const sinkBranch = { cond, body: [] };
+        const sinkIfOp: SkillOp = { kind: "if", body: stripped0, ifBranches: [sinkBranch] };
+        scopeStack.push({
+          kind: "if",
+          target: currentTarget,
+          opsBucket: sinkBranch.body,
+          depth: lineIndent + INDENT_STEP,
+          ifOp: sinkIfOp,
+        });
         continue;
       }
       const firstBranch = { cond, body: [] };

@@ -43,6 +43,15 @@
 //            filter chain support in substituteRuntime. ~80 LOC across
 //            runtime + parser. Boolean trio + filter chain are core
 //            grammar features — feature-driven, ceiling nudge appropriate.
+//   v0.3.3:  nudged narrow ceiling 5650 → 5700 for $ json_parse op +
+//            unparsed-json-field-access tier-3 advisory + compile_skill
+//            warnings/advisories pass-through. Net ~50 LOC: ~25 for the
+//            runtime $ json_parse intercept (mirrors $ execute_skill
+//            shape), ~30 for the new lint advisory walker, ~5 net for
+//            compile.ts tier-2/tier-3 plumbing, minus ~10 for the yanked
+//            |json_parse filter case. Closes the v0.3.2 spec gap from
+//            af14b7d8 (filter+field can't propagate parsed structure)
+//            with an op-based alternative — same end-user outcome.
 //
 // Run: `pnpm run loc-check`. CI fails the build if the narrow ceiling is
 // breached. The broad count is reported but does NOT fail the build.
@@ -65,7 +74,7 @@ const CORE_PATHS = [
   "connectors/",
 ];
 
-const NARROW_MAX_LOC = 5650;
+const NARROW_MAX_LOC = 5700;
 const NARROW_MAX_FILES = 20;
 const BROAD_INFO_LOC = 9500;
 const BROAD_INFO_FILES = 28;

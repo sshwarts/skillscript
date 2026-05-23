@@ -1,7 +1,7 @@
 // Pipe-filter implementations. `$(NAME|filter)` syntax dispatches here.
 
 /** The names of every registered filter. Lint's `unknown-filter` rule consults this. */
-export const KNOWN_FILTERS = ["url", "shell", "json", "json_parse", "trim", "length"] as const;
+export const KNOWN_FILTERS = ["url", "shell", "json", "trim", "length"] as const;
 export type KnownFilter = (typeof KNOWN_FILTERS)[number];
 //
 // Adding a new filter:
@@ -28,6 +28,11 @@ export type KnownFilter = (typeof KNOWN_FILTERS)[number];
  *
  * Unknown filter names throw — typos are caught at compile time when the value
  * is already resolved, or at runtime for ambient refs.
+ *
+ * v0.3.3 — `|json_parse` filter removed. Use `$ json_parse $(VAR) -> P` op
+ * instead, which binds the parsed structure so `$(P.field)` works via
+ * resolveRef's dotted descent. Filter was string-in/string-out which couldn't
+ * propagate parsed shape through `.field` access.
  */
 export function applyFilter(value: string, filter: string): string {
   switch (filter) {
@@ -37,22 +42,6 @@ export function applyFilter(value: string, filter: string): string {
       return `'${value.replace(/'/g, "'\\''")}'`;
     case "json":
       return JSON.stringify(value);
-    case "json_parse": {
-      // v0.3.2: sibling to `|json` (stringify). Parses the input as JSON and
-      // re-stringifies — round-trip for valid JSON, throws for malformed.
-      // Useful chain with `|length` for array counting + as a validation gate
-      // before downstream string ops. Field-access on parsed structures is a
-      // separate concern (parsed value isn't propagated through string-in/
-      // string-out filter signature). See $ json_parse intercept (deferred).
-      try {
-        const parsed = JSON.parse(value) as unknown;
-        return JSON.stringify(parsed);
-      } catch (err) {
-        throw new Error(
-          `\`|json_parse\` filter: input is not valid JSON. Got: '${value.slice(0, 40)}${value.length > 40 ? "..." : ""}' — ${(err as Error).message}`,
-        );
-      }
-    }
     case "trim":
       return value.trim();
     case "length": {
@@ -67,6 +56,6 @@ export function applyFilter(value: string, filter: string): string {
       return String(value.length);
     }
     default:
-      throw new Error(`Unknown filter '${filter}' — supported: url, shell, json, json_parse, trim, length`);
+      throw new Error(`Unknown filter '${filter}' — supported: url, shell, json, trim, length`);
   }
 }

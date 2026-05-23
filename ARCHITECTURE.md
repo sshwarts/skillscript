@@ -40,7 +40,7 @@ src/
 ```
 
 Narrow-core LOC history (nudges driven by language extensions):
-- 5000 (T7 baseline) → 5100 (v0.2.10 parser robustness) → 5200 (v0.2.12 lint coverage) → 5400 (v0.3.0 `$append` accumulator) → 5500 (v0.3.1 forward-reference deferred resolution) → 5650 (v0.3.2 and/or/not + filter chain + `|json_parse`)
+- 5000 (T7 baseline) → 5100 (v0.2.10 parser robustness) → 5200 (v0.2.12 lint coverage) → 5400 (v0.3.0 `$append` accumulator) → 5500 (v0.3.1 forward-reference deferred resolution) → 5650 (v0.3.2 and/or/not + filter chain + `|json_parse`) → 5700 (v0.3.3 `$ json_parse` op + lint advisory + Bug D parser-recovery; `|json_parse` filter removed)
 
 ## What each narrow-core file owns
 
@@ -48,7 +48,7 @@ Narrow-core LOC history (nudges driven by language extensions):
 | --- | --- |
 | `parser.ts` | Tokenize and parse skill source. Header lines, target blocks, op grammar (`!`/`$`/`$set`/`$append`/`?`/`@`/`>`/`~`/`&`/`??`), `if`/`elif`/`else`/`foreach`, compound conditions (`and`/`or`/`not` + parens since v0.3.2). Produces AST. Recursive structural decomposition for compound conditions in `validateCondition`. Syntax errors only — semantic checks downstream. |
 | `compile.ts` | Three subsystems: (1) variable resolution against `# Requires:` cascade + caller inputs; (2) data-skill compile-time inlining; (3) topo-sort + render. Output formats: `prompt` (canonical), `prose`. Forward-reference deferral for missing `&` targets (v0.3.1). Produces compiled artifact + provenance sidecar. |
-| `filters.ts` | Pipe-filter implementations dispatched by `$(NAME\|filter)` syntax. v1 set: `url`, `shell`, `json`, `json_parse` (v0.3.2), `trim`, `length`. Adding a new filter = adding a case to `applyFilter` + registering in `KNOWN_FILTERS` + documenting in `help-content.ts`. |
+| `filters.ts` | Pipe-filter implementations dispatched by `$(NAME\|filter)` syntax. v1 set: `url`, `shell`, `json`, `trim`, `length`. (`json_parse` was a v0.3.2 addition removed in v0.3.3 — use the `$ json_parse $(VAR) -> OUT` op instead, which binds structured shape.) Adding a new filter = adding a case to `applyFilter` + registering in `KNOWN_FILTERS` + documenting in `help-content.ts`. |
 | `lint.ts` | Structured diagnostics across 3 tiers. ~30 rules covering parse errors, var resolution, condition grammar, composition refs (`unknown-skill-reference` demoted to tier-2 in v0.3.1 with tier-3 `deferred-skill-reference` advisory), shell safety (`unsafe-shell-op`, `unsafe-shell-disabled`, `unsafe-shell-ambiguous-subst`), mutation safety (`unconfirmed-mutation`), accumulator safety (v0.3.0 `uninitialized-append`, `foreach-local-accumulator-target`, `append-to-non-list`), retrieval-arg validation, credential leak detection. |
 | `runtime.ts` | Executor that walks the compiled artifact and dispatches ops through connector instances. Owns `evalCondition` (compound + leaf shapes), `substituteRuntime` (filter-chain aware since v0.3.2), `resolveRef` (dotted + indexed field access). Handles error propagation, per-op timeout chain, `foreach` iteration with loop-local scope, target-level `else:` error handler, `# OnError:` skill fallback, mechanical-mode placeholders. |
 | `connectors/*` | The integration boundary — every external system (skill storage, memory, local model, MCP, agent delivery) plugs in through one of the typed contracts. Registry handles multi-instance + three-layer resolution: per-call override > skill-declared > primary default. |

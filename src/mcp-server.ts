@@ -593,6 +593,7 @@ export class McpServer {
         outputs: compiled.outputs,
         on_error: compiled.onError,
         warnings: compiled.warnings,
+        advisories: compiled.advisories,
         errors: [],
       };
     } catch (err) {
@@ -610,6 +611,7 @@ export class McpServer {
           outputs: [],
           on_error: null,
           warnings: [],
+          advisories: [],
           errors: [message],
           lint_findings: err.diagnostics,
         };
@@ -623,6 +625,7 @@ export class McpServer {
         outputs: [],
         on_error: null,
         warnings: [],
+        advisories: [],
         errors: [message],
       };
     }

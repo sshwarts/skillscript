@@ -18,40 +18,11 @@ import { join } from "node:path";
  * sub-expressions and `not` prefix.
  */
 
-describe("v0.3.2 — |json_parse filter", () => {
-  it("round-trips valid JSON", () => {
-    expect(applyFilter('{"a":1}', "json_parse")).toBe('{"a":1}');
-    expect(applyFilter("[1,2,3]", "json_parse")).toBe("[1,2,3]");
-    expect(applyFilter('"hello"', "json_parse")).toBe('"hello"');
-  });
-
-  it("normalizes JSON formatting (round-trip strips whitespace)", () => {
-    expect(applyFilter('{ "a" : 1 , "b" : 2 }', "json_parse")).toBe('{"a":1,"b":2}');
-  });
-
-  it("throws on malformed JSON with structured message", () => {
-    expect(() => applyFilter("{bad", "json_parse")).toThrow(/json_parse/);
-    expect(() => applyFilter("{bad", "json_parse")).toThrow(/not valid JSON/);
-  });
-
-  it("throws on empty input (consistent with parse-failure path)", () => {
-    expect(() => applyFilter("", "json_parse")).toThrow(/json_parse/);
-  });
-
-  it("chains with |length on JSON arrays", () => {
-    // The existing |length already parses JSON arrays internally; the
-    // intermediate |json_parse step validates + normalizes before length.
-    expect(applyFilter(applyFilter("[1,2,3,4,5]", "json_parse"), "length")).toBe("5");
-  });
-
-  it("works in a substituted ref (round-trip + emit)", async () => {
-    const src = `# Skill: t\n# Status: Approved\n# Vars: RAW=[1,2,3]\nrun:\n    ! count: $(RAW|json_parse|length)\ndefault: run\n`;
-    const home = mkdtempSync(join(tmpdir(), "v032-jp-"));
-    const wired = bootstrap({ skillsDir: join(home, "skills"), traceDir: join(home, "traces") });
-    const compiled = await compile(src);
-    const result = await execute(compiled.parsed, compiled.resolvedVariables, compiled.targetOrder, { registry: wired.registry });
-    expect(result.errors).toEqual([]);
-    expect(result.emissions).toContain("count: 3");
+describe("v0.3.2 — |json_parse filter (removed in v0.3.3)", () => {
+  // Filter yanked in v0.3.3 in favor of `$ json_parse $(VAR) -> OUT` op.
+  // Keep negative-coverage so regression catches any reintroduction.
+  it("|json_parse filter rejects with unknown-filter error", () => {
+    expect(() => applyFilter('{"a":1}', "json_parse")).toThrow(/Unknown filter/);
   });
 });
 
@@ -152,10 +123,9 @@ describe("v0.3.2 — parser accepts compound conditions", () => {
 });
 
 describe("v0.3.2 — help surface", () => {
-  it("ops topic lists json_parse filter", () => {
+  it("ops topic does not list |json_parse filter (removed v0.3.3)", () => {
     const r = helpResponse("ops", "0.3.2") as { content: string };
-    expect(r.content).toMatch(/`json_parse`/);
-    expect(r.content).toMatch(/Parse JSON string/);
+    expect(r.content).not.toMatch(/\| `json_parse` \|/);
   });
 
   it("ops topic documents and/or/not compound conditions", () => {
