@@ -13,6 +13,7 @@ import {
   UnsafeShellDisabledError,
   UnresolvedVariableError,
   TypeMismatchError,
+  MissingSkillReferenceError,
 } from "./errors.js";
 import { TraceBuilder, shouldTraceFire } from "./trace.js";
 import type { TraceConfig, TraceStore } from "./trace.js";
@@ -551,18 +552,16 @@ async function execOpInner(
       };
     }
     case "&": {
-      // `&` ops are resolved at compile time — data-skill content is
-      // inlined; procedural-skill refs compile to a runtime invocation
-      // shape (not this op). If we hit `&` at runtime, the executor was
-      // handed a raw AST that bypassed compile().
+      // v0.3.1: deferred-resolution path. `&` ops that reached runtime
+      // are either (a) forward-references that compile couldn't inline
+      // because the target wasn't yet stored, or (b) the rare "raw AST
+      // bypassed compile()" case. Try to resolve through a SkillStore on
+      // the context if one is wired; otherwise throw MissingSkillReferenceError
+      // with the structured fields so `# OnError:` can catch.
       const skillName = op.ampParams?.skillName ?? "(unknown)";
-      throw makeOpError(
-        "&",
-        `\`& ${skillName}\` reached the runtime unresolved. The compile() ` +
-        `step inlines data-skills and lowers procedural refs to invocation ` +
-        `ops; running raw parsed skills bypasses that. Call compile() ` +
-        `before execute().`,
-      );
+      // No store wired = can't resolve. Surface as MissingSkillReferenceError
+      // for consistency (same shape as runtime resolve-and-miss path).
+      throw new MissingSkillReferenceError(skillName, "&", "&", targetName);
     }
     case "$": {
       const body = substituteRuntime(op.body, vars);

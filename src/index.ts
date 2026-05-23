@@ -111,6 +111,7 @@ export {
   InteractiveOpInAutonomousModeError,
   UnsafeShellDisabledError,
   UnresolvedVariableError,
+  MissingSkillReferenceError,
 } from "./errors.js";
 export type { LintDiagnostic, OpErrorMetadata } from "./errors.js";
 

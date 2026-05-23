@@ -1,5 +1,82 @@
 # Changelog
 
+## 0.3.1 — 2026-05-23
+
+**Forward-reference deferred resolution.** Cold authors building
+composition trees top-down (parent skill before child skills) used to
+hit a chicken-and-egg compile error. v0.3.1 demotes the relevant lint
+rules from tier-1 (error) to tier-2 (warning); runtime throws
+`MissingSkillReferenceError` if the ref still can't resolve at execute
+time. Spec approved by Perry in memory `be9993e3`.
+
+### Changed
+- **`unknown-skill-reference` demoted: tier-1 → tier-2.** `&`,
+  `& invoke`, and `$ execute_skill skill_name=` references to skills
+  not in the SkillStore now warn instead of blocking compile.
+- **`unknown-template-reference` demoted: tier-1 → tier-2.** Same
+  treatment for `# Templates:` refs.
+
+### Added
+- **Tier-3 `deferred-skill-reference` advisory.** Fires alongside the
+  demoted tier-2 with a teaching message: "Skill 'X' referenced via
+  `<op>` is not currently in the SkillStore. Lint demoted in v0.3.1 —
+  will resolve at execute time if the skill exists by then, or throw
+  `SkillNotFoundError` if not. If this is a typo, fix it now; if it's
+  a forward reference, this advisory will clear once you store 'X'."
+  Distinguishes "intentional forward-ref" from "typo I should fix now."
+
+- **`MissingSkillReferenceError` extends `OpError`.** New runtime error
+  class thrown when composition refs (`&` / `$ execute_skill` /
+  `# Templates:`) can't resolve at execute time. Inherits `OpError` so
+  it flows through `# OnError:` fallback chains — cold-author skills
+  can wire a recovery path naturally. Distinct from the SkillStore
+  contract's `SkillNotFoundError` (which is thrown by `store.load()` /
+  `store.metadata()` at the connector layer).
+
+- **Compile-time deferral path.** When `&` data-skill inlining can't
+  find the target, compile leaves the `&` op intact in the parsed AST
+  instead of throwing. Render flows through normally; runtime gets
+  another chance to resolve.
+
+### Unchanged (stronger contracts kept at tier-1)
+- **`# OnError: <skill>` validation stays tier-1.** OnError is the
+  runtime safety net — silently-missing handler discovered at the
+  worst possible UX moment (your skill is already failing) is too bad
+  an outcome to defer.
+- **`disabled-skill-reference` stays tier-1.** Disabled is a stronger
+  contract than missing — "explicitly removed from composition,
+  deprecated, do not consume" versus "not yet authored, might be
+  authored." Demoting Disabled would let silently-rotting composition
+  trees ship.
+
+### MCP wire shape
+- `execute_skill({skill_name: <missing>})` still surfaces
+  `errors[].class: "SkillNotFoundError"` on the wire (consumer-
+  compatibility); the underlying runtime now throws
+  `MissingSkillReferenceError` and the MCP layer renames at the boundary.
+
+### Harness corpus impact
+- 11 cold-author orchestrators that needed stub-skills bootstrapped
+  pre-v0.3.1 are now straight `pass` (3 reclassified to
+  `needs-fallback-skill` for their `# OnError:` targets which stay
+  tier-1). Manifest cleanup committed.
+
+### Tests
+- 16 new tests in `tests/v0.3.1.test.ts` covering: demotion of both
+  rules, the tier-3 advisory fires + content, runtime
+  `MissingSkillReferenceError` throws, `# OnError:` tier-1 unchanged,
+  `disabled-skill-reference` tier-1 unchanged, help-surface updates.
+- Total suite: 803 passing (was 787 at v0.3.0).
+
+### Loc-ceiling
+- Narrow core nudged 5400 → 5500 for the new advisory rule + runtime
+  defer-resolve path. Modest growth for a useful language semantic.
+
+### v0.3.x roadmap
+
+Next: **v0.3.2** — `|json_parse` filter + `and`/`or` boolean
+connectives (short-circuit semantics explicit in the spec).
+
 ## 0.3.0 — 2026-05-23
 
 **First minor bump since v0.2.x — language extension, not a fix patch.**

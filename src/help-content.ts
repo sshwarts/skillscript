@@ -497,7 +497,7 @@ The bound \`-> VAR\` carries the child's final emit through to the host's scope.
 ## Limits & lint signals
 
 - **Recursion**: depth-5 chain by default (\`ExecuteSkillRecursionError\` if exceeded). Both \`& invoke\` and \`$ execute_skill\` share the counter.
-- **Lint** (\`unknown-skill-reference\`, tier-1): \`& <name>\`, \`& invoke <name>\`, and \`$ execute_skill skill_name=<name>\` all validate the child skill exists in the SkillStore at compile time (v0.2.11 Bug 7 closed the \`$ execute_skill\` gap).
+- **Lint** (\`unknown-skill-reference\`, tier-2 as of v0.3.1): \`& <name>\`, \`& invoke <name>\`, and \`$ execute_skill skill_name=<name>\` all validate the child skill exists in the SkillStore at compile time. Forward references are allowed: missing skills lint as a warning (not error), and the runtime throws \`MissingSkillReferenceError\` if still unresolved at execute time. Tier-3 \`deferred-skill-reference\` advisory confirms when the deferred-resolution path is engaged.
 - **Lint** (\`disabled-skill-reference\`, tier-1): any composition primitive pointing at a \`# Status: Disabled\` skill blocks compile.
 
 ## When to use which
@@ -562,8 +562,6 @@ Three tiers per ERD §3:
 - \`single-equals\` — \`if $(VAR) = "..."\` instead of \`==\` (specific diagnostic)
 - \`indentation\` — tabs in indentation; mixed tabs/spaces
 - \`reserved-keyword\` — variable/target/skill name collides with a reserved word
-- \`unknown-skill-reference\` — \`&\` or \`$ execute_skill\` references a skill not in the store (v0.2.11 Bug 7 extended to cover \`$ execute_skill\`)
-- \`unknown-template-reference\` — \`# Templates: <name>\` references a skill not in the store (v0.2.12 Bug 17)
 - \`disabled-skill-reference\` — \`&\` or \`$ execute_skill\` references a Disabled skill
 - \`credential-in-args\` — op arg looks like a secret literal
 - \`status-disabled\` — skill marked \`# Status: Disabled\`
@@ -581,6 +579,8 @@ Three tiers per ERD §3:
 - \`unsafe-shell-ambiguous-subst\` — \`$(NAME)\` inside \`@ unsafe\` body that isn't a declared variable; collides with bash command-sub syntax
 - \`unsafe-shell-op\` — \`@ unsafe\` op present; requires human review every time
 - \`unknown-retrieval-arg\` — \`>\` op carries kwargs outside mode/query/limit/connector/fallback (v0.2.12 Bug 26)
+- \`unknown-skill-reference\` — \`&\` or \`$ execute_skill\` references a skill not in the store (demoted from tier-1 in v0.3.1; runtime throws \`MissingSkillReferenceError\` if still unresolved at execute)
+- \`unknown-template-reference\` — \`# Templates: <name>\` references a skill not in the store (demoted from tier-1 in v0.3.1)
 - \`unconfirmed-mutation\` — \`$\` op invokes a tool whose name suggests mutation (write/update/delete) without a preceding \`??\` confirmation
 - \`model-contention\` — async + sync ops on the same model serialize on a single runtime worker
 - \`draft-with-trigger\` — \`# Status: Draft\` skill has \`# Triggers:\` declared; triggers won't fire until Approved
@@ -592,6 +592,7 @@ Three tiers per ERD §3:
 - \`no-default-target\` — no \`default:\` declaration (relevant for data skills only; procedural skills hit tier-1)
 - \`duplicate-skill-name\` — name collides with an existing stored skill
 - \`plugin-collision\` — placeholder for v1.x plugin-loader name conflicts
+- \`deferred-skill-reference\` — composition ref (\`&\` / \`$ execute_skill\` / \`# Templates:\`) targets a skill not currently in the SkillStore; resolution deferred to execute time (v0.3.1+). Confirms the forward-reference path is engaged; clears once the target is stored.
 
 \`compile_skill({source})\` runs the full lint preflight and reports
 findings in the \`errors\` + \`warnings\` arrays. \`lint_skill({source})\`

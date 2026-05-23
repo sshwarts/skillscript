@@ -201,7 +201,11 @@ default: t
     // because the op chain bails on the error.
     expect(result.errors.length).toBe(1);
     expect(result.errors[0]!.opKind).toBe("&");
-    expect(result.errors[0]!.message).toMatch(/unresolved|compile/i);
+    // v0.3.1: the runtime now throws MissingSkillReferenceError for
+    // unresolved `&` ops (was a generic "compile() bypassed" error
+    // pre-v0.3.1). New message asks whether it's a forward-ref or typo.
+    expect(result.errors[0]!.message).toMatch(/MissingSkillReferenceError|forward-ref|typo|has no skill by that name/i);
+    expect(result.errors[0]!.class).toBe("MissingSkillReferenceError");
   });
 });
 

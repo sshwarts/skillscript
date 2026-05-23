@@ -459,11 +459,15 @@ const INDENTATION: LintRule = {
     })),
 };
 
+// v0.3.1: demoted tier-1 → tier-2. Forward-references are allowed; the
+// runtime throws `SkillNotFoundError` if the ref still can't resolve at
+// execute time. The tier-3 `deferred-skill-reference` advisory below
+// confirms the deferred-resolution path is engaged.
 const UNKNOWN_SKILL_REFERENCE: LintRule = {
   id: "unknown-skill-reference",
-  severity: "error",
-  description: "An `&` op references a skill that's not present in the configured SkillStore.",
-  remediation: "Check the skill name spelling, or store the missing skill before referencing it. If the reference is intentional and the skill will be added later, defer compile until it exists.",
+  severity: "warning",
+  description: "An `&` or `$ execute_skill` op references a skill that's not present in the configured SkillStore. Lint warning (not error) since v0.3.1 — runtime throws `SkillNotFoundError` if still missing at execute time.",
+  remediation: "If this is a typo, fix the spelling against your declarations. If it's a forward reference to a skill you'll author next, this warning clears once the skill is stored. The runtime will throw `SkillNotFoundError` at execute time if the skill is still missing.",
   check: async (ctx) => {
     if (ctx.skillStore === undefined) return [];
     const findings: LintFinding[] = [];
@@ -478,7 +482,7 @@ const UNKNOWN_SKILL_REFERENCE: LintRule = {
         } catch {
           findings.push({
             rule: "unknown-skill-reference",
-            severity: "error",
+            severity: "warning",
             message: `Skill '${targetName}' references skill '${ref.name}' via \`${ref.via}\`, but the SkillStore has no skill by that name.`,
             block: targetName,
             extras: { referenced_skill: ref.name, via: ref.via },
@@ -524,14 +528,62 @@ const UNKNOWN_RETRIEVAL_ARG: LintRule = {
   },
 };
 
+// v0.3.1: tier-3 advisory that fires alongside the demoted tier-2
+// unknown-skill-reference / unknown-template-reference. Confirms the
+// deferred-resolution path is engaged so cold authors can distinguish
+// "intentional forward-ref" from "typo I should fix now."
+const DEFERRED_SKILL_REFERENCE: LintRule = {
+  id: "deferred-skill-reference",
+  severity: "info",
+  description: "An `&` / `$ execute_skill` / `# Templates:` reference targets a skill not currently in the SkillStore; resolution is deferred to execute time (v0.3.1+).",
+  remediation: "If this is a forward reference, this advisory will clear once the referenced skill is stored. If it's a typo, fix the spelling — the runtime will throw `SkillNotFoundError` at execute time if still missing.",
+  check: async (ctx) => {
+    if (ctx.skillStore === undefined) return [];
+    const findings: LintFinding[] = [];
+    const seenComposition = new Set<string>();
+    for (const [targetName, target] of ctx.parsed.targets) {
+      for (const ref of collectAmpRefsFromOps(target.ops)) {
+        const key = `${ref.via}:${ref.name}`;
+        if (seenComposition.has(key)) continue;
+        seenComposition.add(key);
+        try {
+          await ctx.skillStore.metadata(ref.name);
+        } catch {
+          findings.push({
+            rule: "deferred-skill-reference",
+            severity: "info",
+            message: `Skill '${ref.name}' referenced via \`${ref.via}\` is not currently in the SkillStore. Lint demoted in v0.3.1 — will resolve at execute time if the skill exists by then, or throw SkillNotFoundError if not. If this is a typo, fix it now; if it's a forward reference, this advisory will clear once you store '${ref.name}'.`,
+            block: targetName,
+            extras: { referenced_skill: ref.name, via: ref.via },
+          });
+        }
+      }
+    }
+    for (const name of ctx.parsed.templates) {
+      try {
+        await ctx.skillStore.metadata(name);
+      } catch {
+        findings.push({
+          rule: "deferred-skill-reference",
+          severity: "info",
+          message: `Skill '${name}' referenced via \`# Templates:\` is not currently in the SkillStore. Lint demoted in v0.3.1 — will resolve at execute time if the skill exists by then, or throw SkillNotFoundError if not. If this is a typo, fix it now; if it's a forward reference, this advisory will clear once you store '${name}'.`,
+          extras: { referenced_skill: name, via: "# Templates" },
+        });
+      }
+    }
+    return findings;
+  },
+};
+
 // v0.2.12 Bug 17. `# Templates:` refs were not lint-validated despite
-// `# OnError:` having compile-time validation (since v0.2.10). Tier-1
-// because a missing template fails delivery at runtime.
+// `# OnError:` having compile-time validation (since v0.2.10).
+// v0.3.1: demoted tier-1 → tier-2 alongside unknown-skill-reference.
+// Runtime throws SkillNotFoundError on delivery if still missing.
 const UNKNOWN_TEMPLATE_REFERENCE: LintRule = {
   id: "unknown-template-reference",
-  severity: "error",
-  description: "`# Templates: <name>` references a skill that's not present in the configured SkillStore.",
-  remediation: "Check the template name spelling, or store the missing template skill before referencing it. Templates resolve at delivery time; missing ones fail the agent delivery.",
+  severity: "warning",
+  description: "`# Templates: <name>` references a skill that's not present in the configured SkillStore. Lint warning (not error) since v0.3.1 — runtime throws on delivery if still missing.",
+  remediation: "If this is a typo, fix the spelling. If it's a forward reference, the warning clears once the template skill is stored. Delivery throws if the template is still missing at runtime.",
   check: async (ctx) => {
     if (ctx.skillStore === undefined) return [];
     if (ctx.parsed.templates.length === 0) return [];
@@ -542,7 +594,7 @@ const UNKNOWN_TEMPLATE_REFERENCE: LintRule = {
       } catch {
         findings.push({
           rule: "unknown-template-reference",
-          severity: "error",
+          severity: "warning",
           message: `Skill references template '${name}' via \`# Templates:\`, but the SkillStore has no skill by that name.`,
           extras: { referenced_skill: name },
         });
@@ -1280,6 +1332,7 @@ const RULES: LintRule[] = [
   RESERVED_KEYWORD,
   UNKNOWN_SKILL_REFERENCE,
   UNKNOWN_TEMPLATE_REFERENCE,
+  DEFERRED_SKILL_REFERENCE,
   UNKNOWN_RETRIEVAL_ARG,
   UNINITIALIZED_APPEND,
   FOREACH_LOCAL_ACCUMULATOR_TARGET,

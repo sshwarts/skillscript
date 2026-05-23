@@ -5,7 +5,7 @@ import type { Registry } from "./connectors/registry.js";
 import { healthMetrics, type HealthMetrics } from "./metrics.js";
 import { lint } from "./lint.js";
 import { compile } from "./compile.js";
-import { LintFailureError } from "./errors.js";
+import { LintFailureError, MissingSkillReferenceError } from "./errors.js";
 import {
   executeSkillByName,
   RecursionDepthExceededError,
@@ -489,7 +489,14 @@ export class McpServer {
         mechanical,
       };
     } catch (err) {
-      if (err instanceof SkillNotFoundForCompositionError) {
+      // v0.3.1: composition.ts now throws MissingSkillReferenceError (OpError
+      // subclass) instead of the legacy SkillNotFoundForCompositionError, so
+      // missing-skill failures flow through `# OnError:` chains. The MCP wire
+      // shape continues to surface this as `class: "SkillNotFoundError"` for
+      // consumer-compatibility — renamed message + structured fields, same
+      // top-level class label on the wire. The legacy branch stays as a
+      // belt-and-suspenders catch for any path still throwing the old type.
+      if (err instanceof MissingSkillReferenceError || err instanceof SkillNotFoundForCompositionError) {
         return {
           skill_name: null,
           final_vars: {},

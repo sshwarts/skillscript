@@ -66,20 +66,24 @@ function inputs(...keys: ReadonlyArray<keyof typeof TEST_INPUTS>): Record<string
 
 export const HARNESS_MANIFEST: ReadonlyArray<HarnessEntry> = [
   // ─── needs-inputs (7) ──────────────────────────────────────────────────
-  { file: "pass-a-1__07__olsen-color-from-message.skill.md", classification: { kind: "needs-stub-skills", stubNames: ["olsen-marker-emit"], inputs: inputs("MESSAGE") } },
+  // v0.3.1: `# Templates:` ref demoted to tier-2 — compile clean without stub.
+  { file: "pass-a-1__07__olsen-color-from-message.skill.md", classification: { kind: "needs-inputs", inputs: inputs("MESSAGE") } },
   { file: "pass-a-1__10__doc-section-stitcher.skill.md", classification: { kind: "needs-inputs", inputs: inputs("SLUG") } },
   { file: "pass-a-2__06__pr-quick-review.skill.md", classification: { kind: "needs-inputs", inputs: inputs("REPO", "PR_NUMBER") } },
   { file: "pass-a-2__09__cluster-distill.skill.md", classification: { kind: "needs-inputs", inputs: inputs("TOPIC") } },
   { file: "pass-a-3__04__bug-triage-template.skill.md", classification: { kind: "needs-inputs", inputs: inputs("REPORT_URL", "REPORT_BODY") } },
   { file: "pass-a-3__06__ghostwrite-reply.skill.md", classification: { kind: "needs-inputs", inputs: inputs("INBOUND_BODY") } },
-  { file: "pass-b-1__05__handoff-to-builder.skill.md", classification: { kind: "needs-stub-skills", stubNames: ["builder-pr-template", "builder-checklist"], inputs: inputs("FEATURE_PROMPT") } },
+  // v0.3.1: `# Templates:` refs demoted to tier-2.
+  { file: "pass-b-1__05__handoff-to-builder.skill.md", classification: { kind: "needs-inputs", inputs: inputs("FEATURE_PROMPT") } },
 
   // ─── needs-fallback-skill (3) — exercises Bug 11 (forward-reference) ──
   // These cold-authored skills declared `# OnError: <name>` for a fallback
   // they didn't define. Test stubs the fallback into the SkillStore.
-  { file: "pass-a-2__07__ticket-router.skill.md", classification: { kind: "needs-stub-skills", stubNames: ["ticket-router-fallback", "ticket-assignment-procedure", "ticket-escalate-procedure"], inputs: { TICKET_BODY: "test ticket body", TICKET_ID: "T-42" } } },
+  // v0.3.1: # OnError: still tier-1, so the fallback stub stays. # Templates: refs demoted.
+  { file: "pass-a-2__07__ticket-router.skill.md", classification: { kind: "needs-fallback-skill", fallbackName: "ticket-router-fallback", inputs: { TICKET_BODY: "test ticket body", TICKET_ID: "T-42" } } },
   { file: "pass-b-2__02__olsen-overnight-distill.skill.md", classification: { kind: "needs-fallback-skill", fallbackName: "olsen-distill-fallback" } },
-  { file: "pass-b-3__08__handoff-with-context.skill.md", classification: { kind: "needs-stub-skills", stubNames: ["handoff-fallback", "deep-citation-chase", "contradiction-finder"], inputs: inputs("TOPIC") } },
+  // v0.3.1: # OnError: still tier-1; # Templates: refs demoted.
+  { file: "pass-b-3__08__handoff-with-context.skill.md", classification: { kind: "needs-fallback-skill", fallbackName: "handoff-fallback", inputs: inputs("TOPIC") } },
 
   // ─── intentional-failure (2) — feature-request manifestos ─────────────
   // Both use hypothetical block-introducing keywords the parser doesn't
@@ -89,16 +93,17 @@ export const HARNESS_MANIFEST: ReadonlyArray<HarnessEntry> = [
   { file: "pass-b-1__10__log-fanout-classifier.skill.md", classification: { kind: "intentional-failure", errorPattern: /indent(ation)? change|[Uu]nknown block-introducer/, reason: "FR manifesto: `parallel:` / branch-scope / try/catch" } },
   { file: "pass-b-1__11__streaming-incident-narrator.skill.md", classification: { kind: "intentional-failure", errorPattern: /indent(ation)? change|[Uu]nknown block-introducer/, reason: "FR manifesto: `@@` / destructuring / `|json_parse`" } },
 
-  // ─── needs-stub-skills (5) — exercises Bug 7 (v0.2.11) ────────────────
-  // Cold-authored orchestrators that `$ execute_skill skill_name=<child>`
-  // child skills the minion didn't author. Pre-Bug-7, lint silently let
-  // these through; now they hit `unknown-skill-reference`. Test stubs the
-  // child names into the SkillStore (same mechanism as needs-fallback-skill).
-  { file: "pass-a-1__04__schedule-window-router.skill.md", classification: { kind: "needs-stub-skills", stubNames: ["mailbox-digest"] } },
-  { file: "pass-a-1__05__morning-brief.skill.md", classification: { kind: "needs-stub-skills", stubNames: ["calendar-today", "mailbox-digest", "ham-band-watch", "hn-top-five"] } },
-  { file: "pass-b-1__04__pr-triage-orchestrator.skill.md", classification: { kind: "needs-stub-skills", stubNames: ["pr-fetch", "pr-classify", "pr-digest-render"], inputs: inputs("REPO") } },
-  { file: "pass-b-2__01__pr-drift-watch.skill.md", classification: { kind: "needs-stub-skills", stubNames: ["extract-json-number"] } },
-  { file: "pass-b-2__03__drift-detection-orchestrator.skill.md", classification: { kind: "needs-stub-skills", stubNames: ["pr-counter-task1", "stargazer-c1"] } },
+  // ─── former needs-stub-skills (8) — all demoted to pass in v0.3.1 ─────
+  // Pre-v0.3.1 these orchestrators failed compile because `$ execute_skill`
+  // / `# Templates:` refs were tier-1 errors. v0.3.1 demotes both to
+  // tier-2 warnings; compile succeeds with a warning, runtime would
+  // throw MissingSkillReferenceError if the skill is actually executed
+  // (covered in v0.3.1.test.ts, not here).
+  { file: "pass-a-1__04__schedule-window-router.skill.md", classification: { kind: "pass" } },
+  { file: "pass-a-1__05__morning-brief.skill.md", classification: { kind: "pass" } },
+  { file: "pass-b-1__04__pr-triage-orchestrator.skill.md", classification: { kind: "needs-inputs", inputs: inputs("REPO") } },
+  { file: "pass-b-2__01__pr-drift-watch.skill.md", classification: { kind: "pass" } },
+  { file: "pass-b-2__03__drift-detection-orchestrator.skill.md", classification: { kind: "pass" } },
 
   // ─── pass (49) ─────────────────────────────────────────────────────────
   { file: "pass-a-1__00__tide-glance.skill.md", classification: { kind: "pass" } },
@@ -135,8 +140,9 @@ export const HARNESS_MANIFEST: ReadonlyArray<HarnessEntry> = [
   { file: "pass-b-2__00__morning-weather-greet.skill.md", classification: { kind: "pass" } },
   { file: "pass-b-2__04__signature-block.skill.md", classification: { kind: "pass" } },
   { file: "pass-b-2__05__brief-with-signature.skill.md", classification: { kind: "pass" } },
-  { file: "pass-b-2__06__ticket-triage-router.skill.md", classification: { kind: "needs-stub-skills", stubNames: ["ticket-assignment-procedure", "ticket-postmortem-template"] } },
-  { file: "pass-b-2__07__status-card-augmenter.skill.md", classification: { kind: "needs-stub-skills", stubNames: ["project-status-followup", "kickoff-meeting-template"] } },
+  // v0.3.1: Templates demoted; pass.
+  { file: "pass-b-2__06__ticket-triage-router.skill.md", classification: { kind: "pass" } },
+  { file: "pass-b-2__07__status-card-augmenter.skill.md", classification: { kind: "pass" } },
   { file: "pass-b-2__08__session-start-greeter.skill.md", classification: { kind: "pass" } },
   { file: "pass-b-2__09__dangerous-cleanup.skill.md", classification: { kind: "pass" } },
   { file: "pass-b-2__10__feature-request-showcase.skill.md", classification: { kind: "pass" } },
@@ -147,7 +153,8 @@ export const HARNESS_MANIFEST: ReadonlyArray<HarnessEntry> = [
   { file: "pass-b-3__04__morning-brief.skill.md", classification: { kind: "pass" } },
   { file: "pass-b-3__05__nightly-summary.skill.md", classification: { kind: "pass" } },
   { file: "pass-b-3__06__olsen-digest-aside.skill.md", classification: { kind: "pass" } },
-  { file: "pass-b-3__07__pr-review-augment.skill.md", classification: { kind: "needs-stub-skills", stubNames: ["deep-diff-walkthrough", "regression-checklist"] } },
+  // v0.3.1: Templates demoted; pass.
+  { file: "pass-b-3__07__pr-review-augment.skill.md", classification: { kind: "pass" } },
   { file: "pass-b-3__09__foreach-stress.skill.md", classification: { kind: "pass" } },
   { file: "pass-b-3__10__mailbox-triage.skill.md", classification: { kind: "pass" } },
 ];

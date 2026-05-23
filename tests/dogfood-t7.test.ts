@@ -24,8 +24,8 @@ const REPO_ROOT = join(__dirname, "..");
 const PACKAGE_JSON = JSON.parse(readFileSync(join(REPO_ROOT, "package.json"), "utf8")) as Record<string, unknown>;
 
 describe("T7 — package.json polish", () => {
-  it("1. version is 0.3.0 ($append accumulator op — first language extension since v0.2)", () => {
-    expect(PACKAGE_JSON["version"]).toBe("0.3.0");
+  it("1. version is 0.3.1 (forward-reference deferred resolution: lint demotion + MissingSkillReferenceError)", () => {
+    expect(PACKAGE_JSON["version"]).toBe("0.3.1");
   });
 
   it("2. main + types + bin + engines.node ≥ 22.5 declared", () => {
@@ -75,12 +75,12 @@ describe("T7 — distributed code surface", () => {
     expect(out.trim(), `found AMP identifiers: ${out}`).toBe("");
   });
 
-  it("7. narrow-core LOC ceiling holds (< 5400 / 20 files; nudged v0.2.10 → 5100, v0.2.12 → 5200, v0.3.0 → 5400)", () => {
+  it("7. narrow-core LOC ceiling holds (< 5500 / 20 files; nudged v0.2.10 → 5100, v0.2.12 → 5200, v0.3.0 → 5400, v0.3.1 → 5500)", () => {
     const out = execSync("node scripts/loc-ceiling.mjs", { cwd: REPO_ROOT, encoding: "utf8" });
     const match = /CORE\s+(\d+) LOC across (\d+) files/.exec(out);
     expect(match).not.toBeNull();
     const [, locStr, filesStr] = match!;
-    expect(Number(locStr)).toBeLessThan(5400);
+    expect(Number(locStr)).toBeLessThan(5500);
     expect(Number(filesStr)).toBeLessThan(20);
   });
 

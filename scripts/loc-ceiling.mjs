@@ -32,6 +32,11 @@
 //            lint rules with scope-tracking walker (~150 LOC). First
 //            actual language extension since v0.2's Bug-driven growth;
 //            nudge is feature-driven, not fix-driven.
+//   v0.3.1:  nudged narrow ceiling 5400 → 5500 for forward-reference
+//            deferred resolution — new tier-3 deferred-skill-reference
+//            lint rule (~45 LOC) + MissingSkillReferenceError class
+//            + runtime defer-resolve path. Modest growth for a useful
+//            language semantic.
 //
 // Run: `pnpm run loc-check`. CI fails the build if the narrow ceiling is
 // breached. The broad count is reported but does NOT fail the build.
@@ -54,7 +59,7 @@ const CORE_PATHS = [
   "connectors/",
 ];
 
-const NARROW_MAX_LOC = 5400;
+const NARROW_MAX_LOC = 5500;
 const NARROW_MAX_FILES = 20;
 const BROAD_INFO_LOC = 9500;
 const BROAD_INFO_FILES = 28;

@@ -219,6 +219,41 @@ export class UnsafeShellDisabledError extends OpError {
   }
 }
 
+/**
+ * A composition reference (`&` data-skill inline, `$ execute_skill`, or
+ * `# Templates:` delivery) couldn't be resolved at execute time because
+ * the SkillStore has no skill by that name. v0.3.1: forward-reference
+ * lint demotion means the runtime is now the resolution gate, not
+ * compile-time lint. Inherits `OpError` so it flows through `# OnError:`
+ * fallback chains naturally.
+ *
+ * Distinct from the SkillStore-contract `SkillNotFoundError` (line 39) —
+ * that's thrown by `store.load()` / `store.metadata()` and signals the
+ * connector-layer miss. This class is the OpError-shaped wrapper the
+ * runtime synthesizes for the composition site so cold-author skills
+ * can use `# OnError:` as the recovery path.
+ */
+export class MissingSkillReferenceError extends OpError {
+  constructor(
+    public readonly missingSkillName: string,
+    opKind: string,
+    public readonly viaOp: "&" | "$ execute_skill" | "# Templates",
+    target?: string,
+  ) {
+    const message =
+      `Skill '${target ?? "?"}' references skill '${missingSkillName}' via \`${viaOp}\` at execute time, ` +
+      `but the SkillStore has no skill by that name. Was the reference intentional ` +
+      `(forward-ref) and the skill never stored, or is this a typo?`;
+    const remediation =
+      `Store the missing skill via \`skill_write\`, fix the spelling at the call site, ` +
+      `or wire a \`# OnError: <fallback-skill>\` on the calling skill so the failure ` +
+      `routes to a recovery path. v0.3.1 demoted the lint to tier-2 — runtime is ` +
+      `the resolution gate.`;
+    super(message, opKind, remediation, target);
+    this.name = "MissingSkillReferenceError";
+  }
+}
+
 /** A `$(VAR)` reference couldn't be resolved at runtime. */
 export class UnresolvedVariableError extends OpError {
   constructor(

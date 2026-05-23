@@ -22,6 +22,7 @@ import { compile } from "./compile.js";
 import { execute, type ExecuteContext, type ExecuteResult } from "./runtime.js";
 import type { Registry } from "./connectors/registry.js";
 import type { SkillStore } from "./connectors/types.js";
+import { MissingSkillReferenceError } from "./errors.js";
 
 const DEFAULT_MAX_RECURSION_DEPTH = 10;
 
@@ -83,7 +84,10 @@ export async function executeSkillByName(
   try {
     loaded = await skillStore.load(skillName);
   } catch {
-    throw new SkillNotFoundForCompositionError(skillName);
+    // v0.3.1: structured runtime error that flows through `# OnError:`.
+    // The legacy SkillNotFoundForCompositionError is kept exported for
+    // backwards-compat but the new code path throws the OpError shape.
+    throw new MissingSkillReferenceError(skillName, "$", "$ execute_skill");
   }
 
   const compiled = await compile(loaded.source, { inputs, skillStore });

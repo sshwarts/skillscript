@@ -328,7 +328,17 @@ async function inlineOps(
         err.rule = "skill-dep-cycle";
         throw err;
       }
-      const source = await store.load(refName);
+      // v0.3.1: forward-reference deferred resolution. If the referenced
+      // skill isn't in the store at compile time, leave the `&` op intact
+      // in the AST so the runtime gets a chance to resolve (or fail with
+      // SkillNotFoundError). Lint tier-2 + tier-3 advisory already flagged.
+      let source: Awaited<ReturnType<typeof store.load>>;
+      try {
+        source = await store.load(refName);
+      } catch {
+        out.push(op);
+        continue;
+      }
       const refParsed = parse(source.source);
       if (refParsed.type === "data") {
         inlinedRecord.push({
