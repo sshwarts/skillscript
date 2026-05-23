@@ -24,8 +24,8 @@ const REPO_ROOT = join(__dirname, "..");
 const PACKAGE_JSON = JSON.parse(readFileSync(join(REPO_ROOT, "package.json"), "utf8")) as Record<string, unknown>;
 
 describe("T7 — package.json polish", () => {
-  it("1. version is 0.2.11 (T7 + 0.2.1-0.2.10 + 0.2.11 harness Bugs 4/5/6/7/10/14 + composition docs + CLI execute rename)", () => {
-    expect(PACKAGE_JSON["version"]).toBe("0.2.11");
+  it("1. version is 0.2.12 (R2 harness Bugs 15-26 + run alias dropped + single-source version constant)", () => {
+    expect(PACKAGE_JSON["version"]).toBe("0.2.12");
   });
 
   it("2. main + types + bin + engines.node ≥ 22.5 declared", () => {
@@ -75,12 +75,12 @@ describe("T7 — distributed code surface", () => {
     expect(out.trim(), `found AMP identifiers: ${out}`).toBe("");
   });
 
-  it("7. narrow-core LOC ceiling holds (< 5100 / 20 files; ceiling nudged in v0.2.10)", () => {
+  it("7. narrow-core LOC ceiling holds (< 5200 / 20 files; ceiling nudged in v0.2.10 → 5100, v0.2.12 → 5200)", () => {
     const out = execSync("node scripts/loc-ceiling.mjs", { cwd: REPO_ROOT, encoding: "utf8" });
     const match = /CORE\s+(\d+) LOC across (\d+) files/.exec(out);
     expect(match).not.toBeNull();
     const [, locStr, filesStr] = match!;
-    expect(Number(locStr)).toBeLessThan(5100);
+    expect(Number(locStr)).toBeLessThan(5200);
     expect(Number(filesStr)).toBeLessThan(20);
   });
 
@@ -122,9 +122,10 @@ describe("T7 — CLI --help surface", () => {
 
   it("10. each command has per-command --help with description + usage", () => {
     const commands = [
-      // `run` retains per-command --help (it's still dispatchable as a
-      // deprecated alias in v0.2.11); just not advertised at top-level.
-      "init", "execute", "run", "compile", "audit", "lint", "list",
+      // v0.2.12 dropped the `run` deprecated alias (shipped in v0.2.11 with a
+      // stderr deprecation notice; one-release window per the CLI symmetry
+      // memory `2e999f9e`).
+      "init", "execute", "compile", "audit", "lint", "list",
       "fires", "diagram", "sign", "verify", "replay", "health",
       "serve", "dashboard",
     ];
@@ -136,9 +137,20 @@ describe("T7 — CLI --help surface", () => {
     }
   });
 
-  it("11. version flag reports 0.2.11", () => {
+  it("11. version flag reports the package.json version (single-sourced as of v0.2.12)", () => {
     const out = execSync(`${CLI} --version`, { encoding: "utf8" });
-    expect(out.trim()).toBe("0.2.11");
+    const pkgVersion = JSON.parse(execSync(`cat ${join(REPO_ROOT, "package.json")}`, { encoding: "utf8" }))["version"];
+    expect(out.trim()).toBe(pkgVersion);
+  });
+
+  it("11b. mcp-server runtime_capabilities.runtimeVersion matches package.json (v0.2.12 Bug 20 regression)", async () => {
+    const { McpServer } = await import("../src/mcp-server.js");
+    const pkgVersion = JSON.parse(execSync(`cat ${join(REPO_ROOT, "package.json")}`, { encoding: "utf8" }))["version"];
+    const srv = new McpServer({ skillStore: { metadata: async () => { throw new Error("stub"); } } as never });
+    const tool = srv.listTools().find((t) => t.name === "runtime_capabilities");
+    expect(tool).toBeDefined();
+    const caps = await tool!.handler({}) as { runtimeVersion: string };
+    expect(caps.runtimeVersion).toBe(pkgVersion);
   });
 });
 

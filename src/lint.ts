@@ -469,20 +469,83 @@ const UNKNOWN_SKILL_REFERENCE: LintRule = {
     const findings: LintFinding[] = [];
     const seen = new Set<string>();
     for (const [targetName, target] of ctx.parsed.targets) {
-      for (const refName of collectAmpRefsFromOps(target.ops)) {
-        if (seen.has(refName)) continue;
-        seen.add(refName);
+      for (const ref of collectAmpRefsFromOps(target.ops)) {
+        const key = `${ref.via}:${ref.name}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
         try {
-          await ctx.skillStore.metadata(refName);
+          await ctx.skillStore.metadata(ref.name);
         } catch {
           findings.push({
             rule: "unknown-skill-reference",
             severity: "error",
-            message: `Skill '${targetName}' references skill '${refName}' via \`&\`, but the SkillStore has no skill by that name.`,
+            message: `Skill '${targetName}' references skill '${ref.name}' via \`${ref.via}\`, but the SkillStore has no skill by that name.`,
             block: targetName,
-            extras: { referenced_skill: refName },
+            extras: { referenced_skill: ref.name, via: ref.via },
           });
         }
+      }
+    }
+    return findings;
+  },
+};
+
+// v0.2.12 Bug 26. Tier-2 warning when a `>` retrieval op carries kwargs
+// outside the documented set. Cold author wrote `since=1h` (hallucinated
+// time-window predicate) and the kwarg passed silently. The documented
+// kwarg set is mode/query/limit/connector/fallback plus filter shapes
+// the connector advertises via staticCapabilities (out of band here).
+const KNOWN_RETRIEVAL_KWARGS = new Set(["mode", "query", "limit", "connector", "fallback"]);
+
+const UNKNOWN_RETRIEVAL_ARG: LintRule = {
+  id: "unknown-retrieval-arg",
+  severity: "warning",
+  description: "A `>` retrieval op carries a kwarg outside the documented set (mode/query/limit/connector/fallback).",
+  remediation: "Remove the kwarg, or check it against your MemoryStore connector's documentation — extras pass through to the connector but unrecognized ones often indicate hallucinated syntax.",
+  check: (ctx) => {
+    const findings: LintFinding[] = [];
+    for (const [targetName, target] of ctx.parsed.targets) {
+      walkOps(target.ops, (op) => {
+        if (op.kind !== ">") return;
+        const extras = op.retrievalParams?.extra ?? {};
+        for (const k of Object.keys(extras)) {
+          if (KNOWN_RETRIEVAL_KWARGS.has(k)) continue;
+          findings.push({
+            rule: "unknown-retrieval-arg",
+            severity: "warning",
+            message: `\`>\` op in target '${targetName}' carries unknown kwarg '${k}'. Documented kwargs: ${Array.from(KNOWN_RETRIEVAL_KWARGS).join(", ")}. If '${k}' is a connector-specific filter, confirm it against the connector's docs.`,
+            block: targetName,
+            extras: { unknown_kwarg: k },
+          });
+        }
+      });
+    }
+    return findings;
+  },
+};
+
+// v0.2.12 Bug 17. `# Templates:` refs were not lint-validated despite
+// `# OnError:` having compile-time validation (since v0.2.10). Tier-1
+// because a missing template fails delivery at runtime.
+const UNKNOWN_TEMPLATE_REFERENCE: LintRule = {
+  id: "unknown-template-reference",
+  severity: "error",
+  description: "`# Templates: <name>` references a skill that's not present in the configured SkillStore.",
+  remediation: "Check the template name spelling, or store the missing template skill before referencing it. Templates resolve at delivery time; missing ones fail the agent delivery.",
+  check: async (ctx) => {
+    if (ctx.skillStore === undefined) return [];
+    if (ctx.parsed.templates.length === 0) return [];
+    const findings: LintFinding[] = [];
+    for (const name of ctx.parsed.templates) {
+      try {
+        await ctx.skillStore.metadata(name);
+      } catch {
+        findings.push({
+          rule: "unknown-template-reference",
+          severity: "error",
+          message: `Skill references template '${name}' via \`# Templates:\`, but the SkillStore has no skill by that name.`,
+          extras: { referenced_skill: name },
+        });
       }
     }
     return findings;
@@ -499,18 +562,18 @@ const DISABLED_SKILL_REFERENCE: LintRule = {
     const findings: LintFinding[] = [];
     const checked = new Set<string>();
     for (const [targetName, target] of ctx.parsed.targets) {
-      for (const refName of collectAmpRefsFromOps(target.ops)) {
-        if (checked.has(refName)) continue;
-        checked.add(refName);
+      for (const ref of collectAmpRefsFromOps(target.ops)) {
+        if (checked.has(ref.name)) continue;
+        checked.add(ref.name);
         try {
-          const meta = await ctx.skillStore.metadata(refName);
+          const meta = await ctx.skillStore.metadata(ref.name);
           if (meta.status === "Disabled") {
             findings.push({
               rule: "disabled-skill-reference",
               severity: "error",
-              message: `Skill '${targetName}' references '${refName}' which is disabled.`,
+              message: `Skill '${targetName}' references '${ref.name}' via \`${ref.via}\` which is disabled.`,
               block: targetName,
-              extras: { referenced_skill: refName, target_status: meta.status },
+              extras: { referenced_skill: ref.name, via: ref.via, target_status: meta.status },
             });
           }
         } catch {
@@ -910,18 +973,18 @@ const REFERENCE_TO_DISABLED_SKILL: LintRule = {
     const findings: LintFinding[] = [];
     const checked = new Set<string>();
     for (const [targetName, target] of ctx.parsed.targets) {
-      for (const refName of collectAmpRefsFromOps(target.ops)) {
-        if (checked.has(refName)) continue;
-        checked.add(refName);
+      for (const ref of collectAmpRefsFromOps(target.ops)) {
+        if (checked.has(ref.name)) continue;
+        checked.add(ref.name);
         try {
-          const meta = await ctx.skillStore.metadata(refName);
+          const meta = await ctx.skillStore.metadata(ref.name);
           if (meta.status === "Disabled") {
             findings.push({
               rule: "reference-to-disabled-skill",
               severity: "warning",
-              message: `Target '${targetName}' references '${refName}' which is disabled.`,
+              message: `Target '${targetName}' references '${ref.name}' via \`${ref.via}\` which is disabled.`,
               block: targetName,
-              extras: { referenced_skill: refName },
+              extras: { referenced_skill: ref.name, via: ref.via },
             });
           }
         } catch {
@@ -1028,6 +1091,8 @@ const RULES: LintRule[] = [
   INDENTATION,
   RESERVED_KEYWORD,
   UNKNOWN_SKILL_REFERENCE,
+  UNKNOWN_TEMPLATE_REFERENCE,
+  UNKNOWN_RETRIEVAL_ARG,
   DISABLED_SKILL_REFERENCE,
   CREDENTIAL_IN_ARGS,
   STATUS_DISABLED,
@@ -1068,18 +1133,27 @@ function walkOps(ops: SkillOp[], visit: (op: SkillOp) => void): void {
   }
 }
 
-function collectAmpRefsFromOps(ops: SkillOp[]): Set<string> {
-  const out = new Set<string>();
+// v0.2.12 Bug 19: tag refs with op kind so diagnostics report the actual
+// operator (pre-Bug-19 every message said "via `&`" even for `$ execute_skill`).
+interface CompositionRef { name: string; via: "&" | "$ execute_skill"; }
+
+function collectAmpRefsFromOps(ops: SkillOp[]): CompositionRef[] {
+  const out: CompositionRef[] = [];
+  const seen = new Set<string>();
+  const emit = (name: string, via: CompositionRef["via"]): void => {
+    const key = `${via}:${name}`;
+    if (seen.has(key)) return;
+    seen.add(key);
+    out.push({ name, via });
+  };
   walkOps(ops, (op) => {
-    if (op.kind === "&" && op.ampParams !== undefined) out.add(op.ampParams.skillName);
-    // v0.2.11 Bug 7: `$ execute_skill skill_name="child" ...` is also a
-    // composition primitive; missing-skill lint applies. Match either
-    // quoted-string skill_name= or a bare identifier.
+    if (op.kind === "&" && op.ampParams !== undefined) emit(op.ampParams.skillName, "&");
+    // v0.2.11 Bug 7: $ execute_skill is also a composition primitive.
     if (op.kind === "$" && /^execute_skill\b/.test(op.body)) {
       const m = /\bskill_name\s*=\s*(?:"([^"]+)"|'([^']+)'|([A-Za-z_][\w-]*))/.exec(op.body);
       if (m !== null) {
         const name = m[1] ?? m[2] ?? m[3];
-        if (name !== undefined && name !== "") out.add(name);
+        if (name !== undefined && name !== "") emit(name, "$ execute_skill");
       }
     }
   });

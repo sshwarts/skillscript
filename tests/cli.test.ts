@@ -30,9 +30,9 @@ describe("skillfile CLI", () => {
   });
 
   it("prints per-command help on `skillfile <cmd> --help`", () => {
-    const r = runCli(["run", "--help"]);
+    const r = runCli(["execute", "--help"]);
     expect(r.code).toBe(0);
-    expect(r.stdout).toMatch(/skillfile run — /);
+    expect(r.stdout).toMatch(/skillfile execute — /);
     expect(r.stdout).toMatch(/Arguments:/);
     expect(r.stdout).toMatch(/Options:/);
     expect(r.stdout).toMatch(/Examples:/);
@@ -40,13 +40,13 @@ describe("skillfile CLI", () => {
   });
 
   it("runs hello.skill end-to-end with bundled example", () => {
-    const r = runCli(["run", "examples/hello.skill.md"]);
+    const r = runCli(["execute", "examples/hello.skill.md"]);
     expect(r.code).toBe(0);
     expect(r.stdout).toMatch(/Hello, world!/);
   });
 
   it("threads --input overrides", () => {
-    const r = runCli(["run", "examples/hello.skill.md", "--input", "WHO=Scott"]);
+    const r = runCli(["execute", "examples/hello.skill.md", "--input", "WHO=Scott"]);
     expect(r.code).toBe(0);
     expect(r.stdout).toMatch(/Hello, Scott!/);
   });
@@ -70,7 +70,7 @@ describe("skillfile CLI", () => {
     expect(r.code).toBe(0);
     expect(r.stdout).toMatch(/Initialized/);
     // hello.skill should be discoverable after init.
-    const r2 = runCli(["run", "examples/hello.skill.md"], { SKILLSCRIPT_HOME: home });
+    const r2 = runCli(["execute", "examples/hello.skill.md"], { SKILLSCRIPT_HOME: home });
     expect(r2.code).toBe(0);
     expect(r2.stdout).toMatch(/Hello, world!/);
   });
@@ -100,7 +100,7 @@ t:
 
 default: t
 `);
-    const r = runCli(["run", "caller"], { SKILLSCRIPT_HOME: home });
+    const r = runCli(["execute", "caller"], { SKILLSCRIPT_HOME: home });
     expect(r.code).toBe(0);
     expect(r.stdout).toMatch(/be concise/);
     expect(r.stdout).toMatch(/ok/);

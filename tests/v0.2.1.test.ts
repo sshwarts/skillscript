@@ -149,7 +149,10 @@ describe("v0.2.1 — runtime_capabilities MCP tool", () => {
     expect(Array.isArray(caps["mcpConnectors"])).toBe(true);
     expect(Array.isArray(caps["agentConnectors"])).toBe(true);
     expect(typeof caps["shellExecution"]).toBe("object");
-    expect(caps["runtimeVersion"]).toBe("0.2.10");
+    // v0.2.12 Bug 20: source from package.json so this assertion doesn't
+    // need a manual bump every release. Lock-in test in dogfood-t7 (#11b).
+    const { RUNTIME_VERSION } = await import("../src/version.js");
+    expect(caps["runtimeVersion"]).toBe(RUNTIME_VERSION);
   });
 
   it("honors include filter — returns only requested categories", async () => {

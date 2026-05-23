@@ -22,6 +22,11 @@
 //   v0.2.10: nudged narrow ceiling 5000 → 5100 to accommodate parser
 //            robustness work (vars-comma + nested control flow + render
 //            disambiguation). Core remains under the original ERD intent.
+//   v0.2.12: nudged narrow ceiling 5100 → 5200 for Perry R2 fixes —
+//            Bug 17 (unknown-template-reference lint, ~25 LOC) +
+//            Bug 19 (composition-ref op-kind tagging, ~20 LOC across
+//            three lint-rule call sites). Still tracking close to the
+//            original ERD intent; nudge is bounded fix-driven growth.
 //
 // Run: `pnpm run loc-check`. CI fails the build if the narrow ceiling is
 // breached. The broad count is reported but does NOT fail the build.
@@ -44,7 +49,7 @@ const CORE_PATHS = [
   "connectors/",
 ];
 
-const NARROW_MAX_LOC = 5100;
+const NARROW_MAX_LOC = 5200;
 const NARROW_MAX_FILES = 20;
 const BROAD_INFO_LOC = 9500;
 const BROAD_INFO_FILES = 28;

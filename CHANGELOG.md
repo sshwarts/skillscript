@@ -1,5 +1,99 @@
 # Changelog
 
+## 0.2.12 — 2026-05-23
+
+**Twelve bug fixes from Perry's wild-and-crazy harness Round 2** (memory
+`a0be74cd`). Bug 15 is the high-severity silently-broken-skill case the
+harness was designed to find; the others span parser polish, lint coverage
+extension, mechanical-mode consistency, and docs. Plus the
+`skillfile run` deprecation window ended — alias removed.
+
+### Fixed
+- **Bug 15 (HIGH): blank line inside nested `else:` branch silently truncated
+  the branch.** The parser reset `currentTarget` and `scopeStack` on every
+  blank line — by design for separating top-level targets, but it also
+  silently dropped everything after a blank line *inside* an indented body.
+  Compile passed clean, lint passed clean, the rendered artifact stopped
+  mid-body. Fix: blank lines no longer reset state. Target boundary detection
+  is handled by the target-header path which re-anchors `currentTarget` on
+  any non-indented `target:` line. Same root cause closed the related case
+  where a blank line between a target body and a target-level `else:` broke
+  the error-handler attach.
+
+- **Bug 16: `# Vars:` URL values fragmented on `https:`.** The v0.2.10
+  comma-aware splitter's "IDENT + `:`" boundary heuristic matched `https:`
+  as a declaration boundary. Fix: when the lookahead's `:` is immediately
+  followed by `//`, treat it as URL-scheme, not declaration delimiter.
+
+- **Bug 17: `# Templates:` refs were not lint-validated.** New tier-1
+  `unknown-template-reference` rule mirrors the existing `# OnError:`
+  validation pattern. Missing templates fail delivery at runtime; now they
+  fail compile.
+
+- **Bug 18: `>` op `limit=$(VAR)` not substituted at render.** The render
+  path inlined `p.limit` directly without `substitute()`. Now both `limit`
+  and `mode` route through substitution for parity with `query`/`extra`.
+
+- **Bug 19: composition error said "via `&`" when actual op was
+  `$ execute_skill`.** The v0.2.11 Bug 7 fix reused the `&` error template.
+  Now `collectAmpRefsFromOps` returns `CompositionRef[]` with the op kind
+  tagged; diagnostics surface the actual operator.
+
+- **Bug 20: `runtime_capabilities.runtimeVersion` reported stale `0.2.10`.**
+  The version was triple-sourced (`package.json`, `cli.ts:VERSION`,
+  `mcp-server.ts` default) and one slipped on v0.2.11. New `src/version.ts`
+  reads `package.json` at module load; both `cli.ts` and `mcp-server.ts`
+  import from it. Added `dogfood-t7` regression assertion that the MCP
+  `runtimeVersion` matches `package.json` so this can't slip again.
+
+- **Bug 21: `unsafe-shell-disabled` (new v0.2.11 lint code) was missing from
+  `help({topic: "lint-codes"})`.** Now listed.
+
+- **Bug 22: `# Requires: ... (fallback: "value")` retained surrounding
+  quotes** in the bound target variable. Other `(fallback: ...)` parse
+  sites route through `processSetValue`; the Requires path didn't. Fixed.
+
+- **Bug 23: mechanical-mode `~` op bound a flat string** placeholder,
+  breaking dotted field-access on the bound var (`$(HI.outputs.text)`
+  erroring with `UnresolvedVariableError`). Now binds a Proxy placeholder
+  matching the `$`/`>` mechanical handlers. Ripple fix in the runtime `in`
+  operator to treat Proxy placeholders as single-element arrays so
+  mechanical-mode `in $(VAR)` checks don't false-error.
+
+- **Bug 26: `unknown-retrieval-arg` lint.** Cold author wrote `since=1h`
+  (hallucinated time-window predicate) and the kwarg passed silently. New
+  tier-2 warning validates `>` op kwargs against the documented set
+  (`mode`/`query`/`limit`/`connector`/`fallback`).
+
+### Added
+- **`help({topic: "frontmatter"})` ambient + ref docs (Bugs 24 + 25).**
+  Documents the `NOW` / `USER` / `SESSION_CONTEXT` / `TRIGGER_TYPE` /
+  `TRIGGER_PAYLOAD` / `ERROR_CONTEXT` bare ambient refs, the full
+  `EVENT.*` family auto-populated on cron-fired skills
+  (`fired_at` / `fired_at_unix` / `fired_at_plus_{1h,1d,7d}_unix`), and
+  the variable reference forms (bare / dotted / indexed / filter).
+  Pre-v0.2.12 these were discoverable only by inspecting `final_vars`
+  after running.
+
+### Removed
+- **`skillfile run` deprecated alias** (shipped in v0.2.11 with a one-release
+  deprecation window). Use `skillfile execute` — the alias has been removed
+  per the original commitment.
+
+### Fixed (docs)
+- **`skill_write` docstring** was stale — it claimed "Skill always lands as
+  Draft" but the runtime honors the source body's `# Status:` header. Per
+  Perry's resolved-question from R2.
+
+### Tests
+- 17 new tests in `tests/v0.2.12.test.ts`. Harness corpus manifest extended
+  to 11 stub-needing skills (was 8 in v0.2.11) — Bug 17's lint coverage now
+  catches template refs the cold authors invented. Total: 767 passing
+  (was 749).
+
+### Loc-ceiling
+- Narrow core nudged 5100 → 5200 to accommodate Bug 17 + Bug 19 lint surface.
+
 ## 0.2.11 — 2026-05-23
 
 **Six bug fixes + composition docs + MCP-CLI symmetry rename**, all sourced

@@ -269,6 +269,44 @@ Skill files open with \`# Key: value\` headers. Order isn't significant.
 \`\`\`
 
 Trigger sources today: \`cron\` (poll-based), \`session\` (\`start\` / \`end\` phases). Parse-only in v0.2: \`event\`, \`agent-event\`, \`file-watch\`, \`sensor\` (firing lands in v1.0).
+
+## Ambient variables (auto-populated by the runtime)
+
+The runtime injects these refs — don't declare them in \`# Vars:\` / \`# Requires:\`.
+
+| Ref | Source | Notes |
+|---|---|---|
+| \`$(NOW)\` | runtime clock | ISO-8601 timestamp at op-dispatch time |
+| \`$(USER)\` | invocation context | Identity passed via \`agentId\` / CLI user |
+| \`$(SESSION_CONTEXT)\` | runtime session | Free-form session snapshot for cross-skill carry |
+| \`$(TRIGGER_TYPE)\` | scheduler | \`cron\` / \`session\` / \`manual\` / \`agent-event\` |
+| \`$(TRIGGER_PAYLOAD)\` | scheduler | JSON-serializable payload attached to the firing trigger |
+| \`$(ERROR_CONTEXT)\` | runtime error handler | Inside \`else:\` and \`# OnError:\` only; \`.kind\` / \`.message\` / \`.target\` accessible |
+
+\`EVENT.*\` auto-populates on cron-fired skills (v0.2.7 scheduler):
+
+| Ref | Value |
+|---|---|
+| \`$(EVENT.fired_at)\` | epoch milliseconds |
+| \`$(EVENT.fired_at_unix)\` | epoch seconds |
+| \`$(EVENT.fired_at_plus_1h_unix)\` | \`fired_at_unix + 3600\` |
+| \`$(EVENT.fired_at_plus_1d_unix)\` | \`fired_at_unix + 86_400\` |
+| \`$(EVENT.fired_at_plus_7d_unix)\` | \`fired_at_unix + 604_800\` |
+
+(v0.2.12 Bug 24 — \`EVENT.*\` was undocumented before this release.)
+
+## Variable reference forms
+
+\`\`\`
+$(VAR)              bare ref (any declared/output-bound/ambient name)
+$(VAR.field)        dotted field access on JSON-bound vars + ambient family
+$(LIST.0)           indexed access (v0.2.12 Bug 25 — was undocumented)
+$(LIST.0.id)        mixed indexed + field-access (chains arbitrarily deep)
+$(VAR|filter)       filter pipe (see \`help({topic: "ops"})\` for filter list)
+$(VAR.field|filter) field-access then filter
+\`\`\`
+
+Unresolved refs: tier-1 \`undeclared-var\` at compile, \`UnresolvedVariableError\` at runtime.
 `;
 
 const EXAMPLES = `# Three canonical worked skills
@@ -481,19 +519,22 @@ Three tiers per ERD §3:
 - \`single-equals\` — \`if $(VAR) = "..."\` instead of \`==\` (specific diagnostic)
 - \`indentation\` — tabs in indentation; mixed tabs/spaces
 - \`reserved-keyword\` — variable/target/skill name collides with a reserved word
-- \`unknown-skill-reference\` — \`&\` op references a skill not in the store
-- \`disabled-skill-reference\` — \`&\` op references a Disabled skill
+- \`unknown-skill-reference\` — \`&\` or \`$ execute_skill\` references a skill not in the store (v0.2.11 Bug 7 extended to cover \`$ execute_skill\`)
+- \`unknown-template-reference\` — \`# Templates: <name>\` references a skill not in the store (v0.2.12 Bug 17)
+- \`disabled-skill-reference\` — \`&\` or \`$ execute_skill\` references a Disabled skill
 - \`credential-in-args\` — op arg looks like a secret literal
 - \`status-disabled\` — skill marked \`# Status: Disabled\`
 - \`circular-dependency\` — dep cycle between targets
 - \`missing-dependency\` — \`needs:\` references a target not declared
 - \`missing-skillstore-for-data-ref\` — \`&\` op fires without a SkillStore wired
+- \`unsafe-shell-disabled\` — \`@ unsafe\` declared but \`enableUnsafeShell: false\` (v0.2.11 Bug 5; fires only when caller passes the flag explicitly false)
 
 ## Tier-2 (warning)
 
 - \`deprecated-question\` — bare \`?\` op (deprecated v1; compile-error in v1.x)
 - \`unsafe-shell-ambiguous-subst\` — \`$(NAME)\` inside \`@ unsafe\` body that isn't a declared variable; collides with bash command-sub syntax
 - \`unsafe-shell-op\` — \`@ unsafe\` op present; requires human review every time
+- \`unknown-retrieval-arg\` — \`>\` op carries kwargs outside mode/query/limit/connector/fallback (v0.2.12 Bug 26)
 - \`unconfirmed-mutation\` — \`$\` op invokes a tool whose name suggests mutation (write/update/delete) without a preceding \`??\` confirmation
 - \`model-contention\` — async + sync ops on the same model serialize on a single runtime worker
 - \`draft-with-trigger\` — \`# Status: Draft\` skill has \`# Triggers:\` declared; triggers won't fire until Approved

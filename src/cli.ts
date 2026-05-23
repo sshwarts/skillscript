@@ -11,6 +11,7 @@ import { homedir } from "node:os";
 import { join, resolve, isAbsolute, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { RUNTIME_VERSION as VERSION } from "./version.js";
 import { compile } from "./compile.js";
 import { execute } from "./runtime.js";
 import { lint, formatLintResult } from "./lint.js";
@@ -34,8 +35,6 @@ const MEMORY_DB = join(HOME_DIR, "memory.db");
 const EXAMPLES_DIR = join(HOME_DIR, "examples");
 const PLUGINS_DIR = join(HOME_DIR, "plugins");
 const TRACE_DIR = join(HOME_DIR, "traces");
-
-const VERSION = "0.2.11";
 
 interface CommandHelp {
   description: string;
@@ -67,21 +66,10 @@ const COMMAND_HELP: Readonly<Record<string, CommandHelp>> = {
       "skillfile execute hello --mechanical --trace on",
     ],
   },
-  // `run` kept as deprecated alias for one release (v0.2.11). v0.2.12 will
-  // drop it. Memory `2e999f9e` from Perry: MCP-CLI symmetry — the MCP tool
-  // is `execute_skill`, so the CLI should mirror it.
-  run: {
-    description: "DEPRECATED alias for `execute` — will be removed in v0.2.12",
-    usage: "skillfile run <path|name> [options]  (use `execute` instead)",
-    args: [{ name: "<path|name>", description: "Path to .skill.md file OR name registered in SkillStore" }],
-    options: [
-      { flag: "--input KEY=value", description: "Provide a value for a declared input (repeatable)" },
-      { flag: "--format prompt|prose", description: "Render format (default: prompt)" },
-      { flag: "--mechanical", description: "Preview mode — `$`/`~`/`>` ops don't dispatch" },
-      { flag: "--trace on|off|sample", description: "Record execution trace via FilesystemTraceStore" },
-    ],
-    examples: ["skillfile execute examples/hello.skill.md  # preferred"],
-  },
+  // `skillfile run` was the original name (pre-v0.2.11). v0.2.11 added
+  // `skillfile execute` and shipped `run` as a deprecated alias with a
+  // stderr nudge. v0.2.12 drops the alias. Memory `2e999f9e` (Perry,
+  // 2026-05-23) drove the rename for MCP-CLI symmetry.
   compile: {
     description: "Render the compiled artifact (no execution)",
     usage: "skillfile compile <path|name> [options]",
@@ -219,8 +207,6 @@ const COMMAND_ORDER: ReadonlyArray<string> = [
   "init", "execute", "compile", "audit", "lint", "list",
   "fires", "diagram", "sign", "verify", "replay", "health",
   "serve", "dashboard",
-  // `run` intentionally omitted from listing — deprecated alias for `execute`,
-  // still dispatchable but not advertised. Removed in v0.2.12.
 ];
 
 function usage(): string {
@@ -307,12 +293,6 @@ async function main(): Promise<number> {
   switch (cmd) {
     case "init":    return await cmdInit();
     case "execute": return await cmdRun(rest);
-    case "run":
-      // Memory `2e999f9e` (Perry, 2026-05-23). Deprecated alias for
-      // `execute` — MCP-CLI symmetry. One-release deprecation; v0.2.12
-      // drops `run`. Emit a stderr nudge but don't fail the command.
-      process.stderr.write("note: `skillfile run` is deprecated; use `skillfile execute` (will be removed in v0.2.12)\n");
-      return await cmdRun(rest);
     case "compile": return await cmdCompile(rest);
     case "audit":   return await cmdAudit(rest);
     case "lint":    return await cmdLint(rest);

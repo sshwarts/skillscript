@@ -326,8 +326,21 @@ function splitVarsLine(value: string): string[] {
     if (ch === "[" || ch === "{") { depth++; cur += ch; continue; }
     if (ch === "]" || ch === "}") { depth = Math.max(0, depth - 1); cur += ch; continue; }
     if (ch === "," && depth === 0) {
-      const m = value.slice(i + 1).match(/^\s*[A-Za-z_][\w-]*\s*([=,:]|$)/);
+      const rest = value.slice(i + 1);
+      const m = rest.match(/^\s*[A-Za-z_][\w-]*\s*([=,:]|$)/);
       if (m !== null && (!cur.includes("=") || m[1] === "=" || m[1] === ":")) {
+        // v0.2.12 Bug 16: URL values (`https://...,https://...`) tripped
+        // the IDENT-then-`:` boundary heuristic — `https:` looks identical
+        // to a fresh declaration colon. Disambiguate via `://`: if the
+        // matched IDENT+`:` is immediately followed by `//`, it's the
+        // scheme half of a URL, not a declaration boundary.
+        if (m[1] === ":") {
+          const tail = rest.slice(m[0].length);
+          if (tail.startsWith("//")) {
+            cur += ch;
+            continue;
+          }
+        }
         parts.push(cur); cur = ""; continue;
       }
     }
@@ -639,8 +652,16 @@ export function parse(source: string): ParsedSkill {
   for (const rawLine of lines) {
     const line = rawLine.replace(/\s+$/, "");
     if (line === "") {
-      currentTarget = null;
-      scopeStack = [];
+      // v0.2.12 Bug 15. Blank lines must NOT reset currentTarget/scopeStack —
+      // they're free-form whitespace authors use to visually section a long
+      // target body. Pre-Bug-15 the reset silently truncated everything after
+      // a blank line inside a nested `else:` / `foreach` body (compile passed
+      // clean + lint passed clean + the rendered artifact stopped mid-body,
+      // a production-broken-silently failure). Boundary detection between
+      // targets is handled by the target-header path below (line ~830) which
+      // re-anchors `currentTarget` and resets `scopeStack` whenever a
+      // non-indented `target:` line appears. The `default:` path resets too.
+      // So no blank-line reset is needed — and forcing one was a footgun.
       continue;
     }
     if (line.startsWith("#")) {
@@ -788,7 +809,11 @@ export function parse(source: string): ParsedSkill {
             namespace: namespace as "user-var" | "system-var",
             key: k!,
             target: target!,
-            fallback: fallback === undefined ? null : fallback,
+            // v0.2.12 Bug 22: strip surrounding quotes on the fallback —
+            // every other (fallback: "...") parse site routes through
+            // processSetValue. Pre-fix, `(fallback: "stranger")` bound the
+            // target var to the literal string `"stranger"` (quotes and all).
+            fallback: fallback === undefined ? null : processSetValue(fallback),
             raw: value,
           });
         } else {

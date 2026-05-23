@@ -700,8 +700,18 @@ async function execOpInner(
       const promptSub = substituteRuntime(p.prompt, vars);
       if (ctx.mechanical === true) {
         const modelName = p.model ?? "default";
-        const placeholder = `[mechanical: would call LocalModel ${modelName} with prompt='${promptSub}']`;
-        emissions.push(`Would invoke LocalModel \`${modelName}\` (mechanical: true preview). Binding $(${op.outputVar}) = ${placeholder}`);
+        // v0.2.12 Bug 23: bind a Proxy placeholder (same shape as the `$`/`>`
+        // mechanical handlers) so dotted field access — `$(HI.outputs.text)`,
+        // `$(HI.choices.0.message.content)` — resolves to deeper placeholders
+        // instead of erroring with UnresolvedVariableError. Pre-fix the `~` op
+        // bound a flat string, which broke field access in mechanical mode.
+        const placeholder = makeMechanicalPlaceholder(
+          op.outputVar ?? `${modelName}.output`,
+        );
+        emissions.push(
+          `Would invoke LocalModel \`${modelName}\` with prompt='${promptSub}' ` +
+          `(mechanical: true preview). Binding $(${op.outputVar}) = ${stringifyValue(placeholder)}`,
+        );
         vars.set(op.outputVar!, placeholder);
         return { lastBoundVar: op.outputVar!, lastValue: placeholder };
       }
@@ -1270,6 +1280,13 @@ export function evalCondition(cond: string, vars: Map<string, unknown>): boolean
         }
       }
     }
+    // v0.2.12 Bug 23 ripple. After the mechanical-mode `~` handler started
+    // binding a Proxy placeholder (was a string pre-fix), `in $(VAR)` where
+    // VAR came from a `~` op started failing the array check below. Treat
+    // a Proxy placeholder as a single-element array, same tolerance as the
+    // string-shaped placeholders above — preserves dry-run truthiness for
+    // skills using LLM output as the RHS list.
+    if (isMechanicalPlaceholder(rhsVal)) rhsVal = [rhsVal];
     if (!Array.isArray(rhsVal)) {
       const got = rhsVal === null ? "null" : typeof rhsVal;
       throw new Error(`Runtime error in \`in\` condition: RHS \`$(${rhsRef})\` must be an array (got ${got})`);

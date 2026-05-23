@@ -504,12 +504,16 @@ function renderOpPrompt(op: SkillOp, targetName: string, resolved: Map<string, s
     case ">": {
       const p = op.retrievalParams!;
       const querySub = substitute(p.query, resolved);
+      // v0.2.12 Bug 18: substitute on `limit` and `mode` for consistency
+      // with `query` and `extra`. Pre-fix, limit=$(MAX) rendered literally.
+      const limitSub = typeof p.limit === "string" ? substitute(p.limit, resolved) : p.limit;
+      const modeSub = substitute(p.mode, resolved);
       const extraStr = Object.entries(p.extra)
         .map(([k, v]) => `${k}=${substitute(v, resolved)}`)
         .join(", ");
       const tail = extraStr ? `, ${extraStr}` : "";
       return [
-        `${prefix}- Retrieve from MemoryStore \`${p.connector}\`: mode=${p.mode}, query="${querySub}", limit=${p.limit}${tail} — bind result list to $(${op.outputVar}).`,
+        `${prefix}- Retrieve from MemoryStore \`${p.connector}\`: mode=${modeSub}, query="${querySub}", limit=${limitSub}${tail} — bind result list to $(${op.outputVar}).`,
       ];
     }
     case "~": {
@@ -601,11 +605,15 @@ function renderOpProse(op: SkillOp, resolved: Map<string, string>): string[] {
     case ">": {
       const p = op.retrievalParams!;
       const querySub = substitute(p.query, resolved);
+      // v0.2.12 Bug 18: substitute limit/mode here too (mirror of the
+      // prompt-format renderer above).
+      const limitSub = typeof p.limit === "string" ? substitute(p.limit, resolved) : p.limit;
+      const modeSub = substitute(p.mode, resolved);
       const extraStr = Object.entries(p.extra)
         .map(([k, v]) => `${k}=${substitute(v, resolved)}`)
         .join(", ");
       const tail = extraStr ? ` (filters: ${extraStr})` : "";
-      return [`Queries MemoryStore \`${p.connector}\` with mode=${p.mode}, query="${querySub}", limit=${p.limit}${tail}; binds to $(${op.outputVar}).`];
+      return [`Queries MemoryStore \`${p.connector}\` with mode=${modeSub}, query="${querySub}", limit=${limitSub}${tail}; binds to $(${op.outputVar}).`];
     }
     case "~": {
       const p = op.localModelParams!;

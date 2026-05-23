@@ -12,6 +12,7 @@ import {
   SkillNotFoundForCompositionError,
 } from "./composition.js";
 import { helpResponse } from "./help-content.js";
+import { RUNTIME_VERSION } from "./version.js";
 
 /**
  * MCP server contract surface (T6b Phase 1). Exposes the runtime's
@@ -97,7 +98,11 @@ export class McpServer {
   private readonly version: string;
 
   constructor(private readonly deps: McpServerDeps) {
-    this.version = deps.serverVersion ?? "0.2.10";
+    // v0.2.12 Bug 20. Default to the package.json-derived RUNTIME_VERSION
+    // so the version surface stays single-sourced (was hardcoded "0.2.10"
+    // pre-v0.2.12 and slipped on the v0.2.11 ship). Caller may still
+    // override via deps.serverVersion for custom embedding scenarios.
+    this.version = deps.serverVersion ?? RUNTIME_VERSION;
     this.registerBuiltinTools();
   }
 
@@ -394,7 +399,7 @@ export class McpServer {
 
     this.registerTool({
       name: "skill_write",
-      description: "Write a skill body into the configured SkillStore. Tier-1 lint runs at write time (SkillStore contract); throws on rejection. Returns version + content_hash. Skill always lands as `Draft` — promote to `Approved` via skill_status. Write operation.",
+      description: "Write a skill body into the configured SkillStore. Tier-1 lint runs at write time (SkillStore contract); throws on rejection. Returns version + content_hash. The `# Status:` header in the source body is honored — write with `# Status: Approved` and the skill lands Approved (otherwise defaults to Draft). Promote/demote later via skill_status. Write operation.",
       inputSchema: {
         type: "object",
         properties: {
