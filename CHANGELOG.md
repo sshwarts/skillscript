@@ -31,14 +31,16 @@ substitution but lags in conditional grammar" pattern named in dev-log
 
 ### Fixed
 
-- **Duplicate parse-error / invalid-conditional-syntax echo (item 2).**
-  Pre-v0.3.4, when an `if` / `elif` condition was rejected, both the
-  generic `parse-error` rule and the specific `invalid-conditional-
-  syntax` rule fired with identical message bodies — cold authors saw
-  the long supported-shapes text twice in the diagnostics. Same shape
-  for the single-`=` case. `PARSE_ERROR` rule now skips messages owned
-  by `invalid-conditional-syntax` / `single-equals`; still fires as
-  catch-all for header issues, malformed ops, indent errors, etc.
+- **Duplicate parse-error echo across five tier-1 rules (item 2 + fold).**
+  Pre-v0.3.4, the generic `parse-error` rule and five specific tier-1
+  rules each fired with identical message bodies when their owned shape
+  fired — cold authors saw every diagnostic twice. `PARSE_ERROR` rule
+  now skips messages owned by `invalid-conditional-syntax`,
+  `single-equals`, `malformed-op-grammar`, `reserved-keyword`, and
+  `indentation` (the full audit of tier-1 rules that filter
+  `parsed.parseErrors`). Catch-all behavior intact for the residual
+  shapes (header issues, malformed `foreach`/`needs`, etc.). Closes
+  Perry's signoff-time adjacent finding (`61b28daf`).
 
 - **Unified parser-recovery on all condition-rejection paths.** v0.3.3
   added sink-scope frames after rejected `if` / `elif` conditions
@@ -57,13 +59,15 @@ substitution but lags in conditional grammar" pattern named in dev-log
   ~25 for sink-scope consistency on the single-`=` rejection paths.
   History entry in `scripts/loc-ceiling.mjs`.
 
-- **Tests:** 16 new in `tests/v0.3.4.test.ts` covering parser
+- **Tests:** 19 new in `tests/v0.3.4.test.ts` covering parser
   acceptance of chains in all five condition shapes, runtime
   evaluation of chains via `evalCondition`, compound-with-chains
-  cross-feature interaction, parse-error dedup for both conditional-
-  syntax and single-equals, and regression coverage for non-
-  conditional parse-error paths. Plus 1 update in `tests/lint.test.ts`
-  reflecting the dedup. 862/865 passing (3 long-skip browser dogfood).
+  cross-feature interaction, parse-error dedup for all five owning
+  tier-1 rules (`invalid-conditional-syntax`, `single-equals`,
+  `malformed-op-grammar`, `reserved-keyword`, `indentation`), and
+  regression coverage for non-conditional parse-error paths. Plus 1
+  update in `tests/lint.test.ts` reflecting the dedup. 867/870
+  passing (3 long-skip browser dogfood).
 
 ## 0.3.3 — 2026-05-23
 

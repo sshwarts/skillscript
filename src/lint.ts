@@ -197,10 +197,17 @@ const PARSE_ERROR: LintRule = {
   check: (ctx) => ctx.parsed.parseErrors
     // v0.3.4: skip messages a more specific tier-1 rule already owns —
     // pre-fix both this rule and the specific one fired identical bodies,
-    // doubling noise. invalid-conditional-syntax / single-equals each
-    // surface their own findings; this rule stays catch-all for the rest
-    // (header issues, malformed ops, indent errors, etc.).
-    .filter((msg) => !/Unsupported condition|`=` is not valid in a condition/.test(msg))
+    // doubling noise. Each pattern below mirrors the corresponding tier-1
+    // rule's filter regex; PARSE_ERROR stays catch-all for unowned shapes
+    // (header issues, foreach/needs malformed, etc.).
+    //
+    // Owning rules:
+    //   invalid-conditional-syntax → Unsupported condition
+    //   single-equals              → `=` is not valid in a condition
+    //   malformed-op-grammar       → Malformed `<op>`
+    //   reserved-keyword           → is a reserved keyword
+    //   indentation                → Tab characters / Mid-block indent change
+    .filter((msg) => !/Unsupported condition|`=` is not valid in a condition|Malformed `[~>&$@!?]|is a reserved keyword|Tab characters in indentation|Mid-block indent change/.test(msg))
     .map((msg) => ({
       rule: "parse-error",
       severity: "error",
