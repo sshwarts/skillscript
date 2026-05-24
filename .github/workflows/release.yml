@@ -66,6 +66,12 @@ jobs:
         run: pnpm run build
 
       - name: Test
+        env:
+          # v0.4.1 — YouTrack proving suite (tests/v0.4.1-youtrack-proving.test.ts)
+          # always-fails when this token is missing per Scott's call (89e2752d).
+          # Set this secret in repo settings; a fresh dedicated YouTrack token
+          # (NOT a personal admin token), allowlist-scoped to read-only tools.
+          YOUTRACK_TEST_TOKEN: ${{ secrets.YOUTRACK_TEST_TOKEN }}
         run: pnpm exec vitest run
 
       - name: Extract version from tag

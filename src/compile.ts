@@ -64,6 +64,15 @@ export interface CompileOptions {
    * compiling clean and failing at first fire.
    */
   enableUnsafeShell?: boolean;
+  /**
+   * Runtime Registry, when known to the caller. v0.4.1 lint preflight
+   * uses it for runtime-aware `unknown-connector` + `disallowed-tool`
+   * checks via auto-derivation of `mcpConnectorNames` and
+   * `mcpConnectorAllowedTools`. MCP `compile_skill` handler passes the
+   * running runtime's registry by default; cold-author callers
+   * targeting a different runtime can omit.
+   */
+  registry?: import("./connectors/registry.js").Registry;
 }
 
 /**
@@ -137,6 +146,7 @@ export async function compile(
       ...(skillStore !== undefined ? { skillStore } : {}),
       callSite: "compile-preflight",
       ...(options.enableUnsafeShell !== undefined ? { enableUnsafeShell: options.enableUnsafeShell } : {}),
+      ...(options.registry !== undefined ? { registry: options.registry } : {}),
     });
     const tier1 = lintResult.findings.filter((f) => f.severity === "error");
     if (tier1.length > 0) {

@@ -34,14 +34,15 @@ src/
     memory-store.ts     — bundled default: SQLite + FTS at $SKILLSCRIPT_HOME/memory.db
     local-model.ts      — bundled default: Ollama at localhost:11434
     mcp.ts              — bundled default: stub; no servers wired by default
-    config.ts           — connectors.json loader (v0.4.0): parse + validate + ${ENV} substitution + closed-set class registry
+    config.ts           — connectors.json loader (v0.4.0+): parse + validate + ${ENV}/env-block-as-scope substitution + closed-set class registry + gitignore-detection (v0.4.1)
+    mcp-remote.ts       — RemoteMcpConnector (v0.4.1): child-process spawn + JSON-RPC stdio framing (lsp + newline) + initialize handshake + tool dispatch + lifecycle
     index.ts            — barrel re-exports
   dashboard/            — Vite SPA + dashboard HTTP server (v0.2.7)
   testing/              — test-only helpers shipped with the package
 ```
 
 Narrow-core LOC history (nudges driven by language extensions):
-- 5000 (T7 baseline) → 5100 (v0.2.10 parser robustness) → 5200 (v0.2.12 lint coverage) → 5400 (v0.3.0 `$append` accumulator) → 5500 (v0.3.1 forward-reference deferred resolution) → 5650 (v0.3.2 and/or/not + filter chain + `|json_parse`) → 5700 (v0.3.3 `$ json_parse` op + lint advisory + Bug D parser-recovery; `|json_parse` filter removed) → 5750 (v0.3.4 conditional multi-filter chain + parse-error dedup + unified sink-scope recovery) → 6000 (v0.4.0 connectors.json loader + closed-set class registry + two new lint rules + credential discipline)
+- 5000 (T7 baseline) → 5100 (v0.2.10 parser robustness) → 5200 (v0.2.12 lint coverage) → 5400 (v0.3.0 `$append` accumulator) → 5500 (v0.3.1 forward-reference deferred resolution) → 5650 (v0.3.2 and/or/not + filter chain + `|json_parse`) → 5700 (v0.3.3 `$ json_parse` op + lint advisory + Bug D parser-recovery; `|json_parse` filter removed) → 5750 (v0.3.4 conditional multi-filter chain + parse-error dedup + unified sink-scope recovery) → 6000 (v0.4.0 connectors.json loader + closed-set class registry + two new lint rules + credential discipline) → 6600 (v0.4.1 RemoteMcpConnector + allowed_tools allowlist + env-block-as-scope + framing config + gitignore-detect + lint auto-wire + foreach-over-parsed-JSON + kwarg coercion)
 
 ## What each narrow-core file owns
 

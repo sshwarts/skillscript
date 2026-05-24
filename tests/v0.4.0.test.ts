@@ -127,14 +127,11 @@ describe("v0.4.0 — KNOWN_CONNECTOR_CLASSES closed set", () => {
     expect(KNOWN_CONNECTOR_CLASSES.has("CallbackMcpConnector")).toBe(true);
   });
 
-  it("v0.4.0 does NOT register RemoteMcpConnector (lands in v0.4.1)", () => {
-    expect(KNOWN_CONNECTOR_CLASSES.has("RemoteMcpConnector")).toBe(false);
-  });
-
   it("listKnownConnectorClasses returns the closed set", () => {
+    // v0.4.1: RemoteMcpConnector joined the closed set; pre-v0.4.1 this
+    // test asserted its absence as a marker for the v0.4.0 ship.
     const list = listKnownConnectorClasses();
     expect(list).toContain("CallbackMcpConnector");
-    expect(list).not.toContain("RemoteMcpConnector");
   });
 });
 

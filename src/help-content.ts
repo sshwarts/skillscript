@@ -623,6 +623,7 @@ Three tiers per ERD §3:
 - \`plugin-collision\` — placeholder for v1.x plugin-loader name conflicts
 - \`deferred-skill-reference\` — composition ref (\`&\` / \`$ execute_skill\` / \`# Templates:\`) targets a skill not currently in the SkillStore; resolution deferred to execute time (v0.3.1+). Confirms the forward-reference path is engaged; clears once the target is stored.
 - \`unparsed-json-field-access\` — op text contains \`$(VAR|json_parse).field\`; the \`|json_parse\` filter was removed in v0.3.3. Replace with \`$ json_parse $(VAR) -> P\` then \`$(P.field)\`.
+- \`disallowed-tool\` (tier-1, v0.4.1) — \`$ name.tool\` references a tool not in the connector's \`allowed_tools\` allowlist. Either rewrite the skill to use a permitted tool or update \`connectors.json\` to grant access. Runtime defense-in-depth refuses disallowed dispatch even if lint is bypassed.
 
 \`compile_skill({source})\` runs the full lint preflight and reports
 findings in the \`errors\` + \`warnings\` arrays. \`lint_skill({source})\`

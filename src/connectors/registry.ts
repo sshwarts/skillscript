@@ -37,11 +37,24 @@ interface Entry<I, C> {
   ctor: C;
 }
 
+/**
+ * Extended entry shape for MCP connectors with v0.4.1's `allowed_tools`
+ * allowlist. Stored alongside the instance + ctor so both lint (compile-
+ * time `disallowed-tool` check) and runtime (dispatch-time defense-in-
+ * depth) consult the same source. `allowedTools === undefined` means
+ * "no allowlist configured → allow all" (backward-compat with v0.4.0).
+ * `allowedTools === []` means "explicitly empty → allow none" (staging
+ * disable pattern).
+ */
+interface McpEntry extends Entry<McpConnector, McpConnectorClass> {
+  allowedTools?: string[];
+}
+
 export class Registry {
   private skillStores = new Map<string, Entry<SkillStore, SkillStoreClass>>();
   private memoryStores = new Map<string, Entry<MemoryStore, MemoryStoreClass>>();
   private localModels = new Map<string, Entry<LocalModel, LocalModelClass>>();
-  private mcpConnectors = new Map<string, Entry<McpConnector, McpConnectorClass>>();
+  private mcpConnectors = new Map<string, McpEntry>();
   private agentConnectors = new Map<string, Entry<AgentConnector, AgentConnectorClass>>();
 
   // ─── Register ───────────────────────────────────────────────────────────
@@ -58,8 +71,28 @@ export class Registry {
     this.localModels.set(name, { instance, ctor: ctorOf(instance) as LocalModelClass });
   }
 
-  registerMcpConnector(name: string, instance: McpConnector): void {
-    this.mcpConnectors.set(name, { instance, ctor: ctorOf(instance) as McpConnectorClass });
+  registerMcpConnector(name: string, instance: McpConnector, allowedTools?: string[]): void {
+    this.mcpConnectors.set(name, {
+      instance,
+      ctor: ctorOf(instance) as McpConnectorClass,
+      ...(allowedTools !== undefined ? { allowedTools: [...allowedTools] } : {}),
+    });
+  }
+
+  /**
+   * Returns the per-connector allowlist or `undefined` if no allowlist is
+   * configured (allow-all semantics, v0.4.0 backward-compat). v0.4.1
+   * `disallowed-tool` lint + runtime defense-in-depth consult this.
+   */
+  getMcpConnectorAllowedTools(name: string): string[] | undefined {
+    return this.mcpConnectors.get(name)?.allowedTools;
+  }
+
+  /** True iff `toolName` is permitted by `name`'s allowlist (or no allowlist is configured). */
+  isToolAllowed(name: string, toolName: string): boolean {
+    const allowed = this.getMcpConnectorAllowedTools(name);
+    if (allowed === undefined) return true;
+    return allowed.includes(toolName);
   }
 
   registerAgentConnector(name: string, instance: AgentConnector): void {
@@ -129,7 +162,18 @@ export class Registry {
   listSkillStores(): Array<{ name: string; instance: SkillStore; ctor: SkillStoreClass }> { return entries(this.skillStores); }
   listMemoryStores(): Array<{ name: string; instance: MemoryStore; ctor: MemoryStoreClass }> { return entries(this.memoryStores); }
   listLocalModels(): Array<{ name: string; instance: LocalModel; ctor: LocalModelClass }> { return entries(this.localModels); }
-  listMcpConnectors(): Array<{ name: string; instance: McpConnector; ctor: McpConnectorClass }> { return entries(this.mcpConnectors); }
+  listMcpConnectors(): Array<{ name: string; instance: McpConnector; ctor: McpConnectorClass; allowedTools?: string[] }> {
+    const out: Array<{ name: string; instance: McpConnector; ctor: McpConnectorClass; allowedTools?: string[] }> = [];
+    for (const [name, entry] of this.mcpConnectors) {
+      out.push({
+        name,
+        instance: entry.instance,
+        ctor: entry.ctor,
+        ...(entry.allowedTools !== undefined ? { allowedTools: entry.allowedTools } : {}),
+      });
+    }
+    return out;
+  }
   listAgentConnectors(): Array<{ name: string; instance: AgentConnector; ctor: AgentConnectorClass }> { return entries(this.agentConnectors); }
 
   // ─── Aggregate view for the linter ──────────────────────────────────────

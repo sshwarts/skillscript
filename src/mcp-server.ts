@@ -552,10 +552,16 @@ export class McpServer {
 
   private async lintSkill(args: Record<string, unknown>): Promise<Record<string, unknown>> {
     const source = await this.resolveSource(args);
+    // v0.4.1 — auto-wire from runtime registry for unknown-connector +
+    // disallowed-tool. Closes Perry's v0.4.0 signoff observation
+    // a4ae08a6: the MCP lint surface IS the running runtime, so its
+    // wired connectors are the natural context for runtime-aware lint
+    // unless the caller explicitly overrides.
     const lintResult = await lint(source, {
       skillStore: this.deps.skillStore,
       callSite: "api",
       ...(this.deps.enableUnsafeShell !== undefined ? { enableUnsafeShell: this.deps.enableUnsafeShell } : {}),
+      ...(this.deps.registry !== undefined ? { registry: this.deps.registry } : {}),
     });
     return {
       diagnostics: lintResult.findings.map((f) => ({
@@ -584,6 +590,7 @@ export class McpServer {
         skillStore: this.deps.skillStore,
         ...(inputs !== undefined ? { inputs } : {}),
         ...(this.deps.enableUnsafeShell !== undefined ? { enableUnsafeShell: this.deps.enableUnsafeShell } : {}),
+        ...(this.deps.registry !== undefined ? { registry: this.deps.registry } : {}),
       });
       return {
         skill_name: compiled.skillName,
@@ -691,7 +698,15 @@ export class McpServer {
     if (want("skillStores")) out["skillStores"] = reg ? reg.listSkillStores().map((e) => describeEntry(e)) : [];
     if (want("memoryStores")) out["memoryStores"] = reg ? reg.listMemoryStores().map((e) => describeEntry(e)) : [];
     if (want("localModels")) out["localModels"] = reg ? reg.listLocalModels().map((e) => describeEntry(e)) : [];
-    if (want("mcpConnectors")) out["mcpConnectors"] = reg ? reg.listMcpConnectors().map((e) => describeEntry(e)) : [];
+    if (want("mcpConnectors")) {
+      // v0.4.1 — surface `allowed_tools` per connector (or null when allow-all).
+      out["mcpConnectors"] = reg
+        ? reg.listMcpConnectors().map((e) => ({
+            ...describeEntry(e),
+            allowed_tools: e.allowedTools ?? null,
+          }))
+        : [];
+    }
     if (want("mcpConnectorClasses")) {
       // v0.4.0 — closed-set of MCP connector classes that can be wired
       // via `connectors.json`. Cold authors check this before writing

@@ -91,6 +91,15 @@ export interface LintOptions {
    */
   mcpConnectorNames?: string[];
   /**
+   * Per-connector tool allowlists (v0.4.1). Map of connector name to
+   * the list of tool names that connector permits. `disallowed-tool`
+   * lint fires tier-1 on `$ name.tool` where `tool` isn't in the list.
+   * Connectors not in this map (or with `undefined` value) are treated
+   * as allow-all. Derived from `registry` when only the registry is
+   * provided.
+   */
+  mcpConnectorAllowedTools?: Map<string, string[]>;
+  /**
    * Errors from `connectors.json` load pass (v0.4.0). When provided,
    * `unknown-connector-class` lint rule re-surfaces the subset of these
    * about unknown class names so cold-author tooling sees them through
@@ -109,6 +118,7 @@ interface LintContext {
   enableUnsafeShell: boolean | undefined;
   mcpConnectorNames: string[] | undefined;
   connectorConfigErrors: string[];
+  mcpConnectorAllowedTools: Map<string, string[]>;
 }
 
 export interface LintRule {
@@ -132,6 +142,7 @@ export async function lint(source: string, options?: LintOptions): Promise<LintR
     enableUnsafeShell: options?.enableUnsafeShell,
     mcpConnectorNames: options?.mcpConnectorNames ?? collectMcpConnectorNamesFromRegistry(options?.registry),
     connectorConfigErrors: options?.connectorConfigErrors ?? [],
+    mcpConnectorAllowedTools: options?.mcpConnectorAllowedTools ?? collectMcpConnectorAllowedToolsFromRegistry(options?.registry),
   };
   const findings: LintFinding[] = [];
   for (const rule of RULES) {
@@ -170,6 +181,7 @@ export function lintSync(source: string, options?: LintOptions): LintResult {
     enableUnsafeShell: options?.enableUnsafeShell,
     mcpConnectorNames: options?.mcpConnectorNames ?? collectMcpConnectorNamesFromRegistry(options?.registry),
     connectorConfigErrors: options?.connectorConfigErrors ?? [],
+    mcpConnectorAllowedTools: options?.mcpConnectorAllowedTools ?? collectMcpConnectorAllowedToolsFromRegistry(options?.registry),
   };
   const findings: LintFinding[] = [];
   for (const rule of RULES) {
@@ -592,6 +604,46 @@ const UNKNOWN_CONNECTOR: LintRule = {
           message: `\`$ ${ref}.<tool>\` in target '${targetName}' references unknown connector '${ref}'. Wired connectors: ${known.size === 0 ? "(none)" : [...known].join(", ")}.`,
           block: targetName,
           extras: { referenced_connector: ref },
+        });
+      });
+    }
+    return findings;
+  },
+};
+
+// v0.4.1 — `$ name.tool` where `name` is configured with an
+// `allowed_tools` list that doesn't include `tool`. Tier-1 lint error
+// at compile time. Closes the "minion-safe by default" framing from
+// Perry's amendment 8a7356dc.
+const DISALLOWED_TOOL: LintRule = {
+  id: "disallowed-tool",
+  severity: "error",
+  description: "A `$ name.tool` op references a tool not permitted by the connector's `allowed_tools` allowlist.",
+  remediation: "Either rewrite the skill to use a tool that's in the allowlist, or update `connectors.json` to grant access. The runtime refuses disallowed dispatch even if lint is bypassed (defense-in-depth).",
+  check: (ctx) => {
+    if (ctx.mcpConnectorAllowedTools.size === 0) return [];
+    const findings: LintFinding[] = [];
+    const reported = new Set<string>();
+    for (const [targetName, target] of ctx.parsed.targets) {
+      walkOps(target.ops, (op) => {
+        if (op.kind !== "$" || op.mcpConnector === undefined) return;
+        const ref = op.mcpConnector;
+        const allowed = ctx.mcpConnectorAllowedTools.get(ref);
+        if (allowed === undefined) return; // no allowlist → allow-all
+        // Extract tool name from op.body — first token before whitespace.
+        const m = /^([A-Za-z_][\w:-]*)/.exec(op.body);
+        if (m === null) return;
+        const toolName = m[1]!;
+        if (allowed.includes(toolName)) return;
+        const key = `${targetName}:${ref}:${toolName}`;
+        if (reported.has(key)) return;
+        reported.add(key);
+        findings.push({
+          rule: "disallowed-tool",
+          severity: "error",
+          message: `\`$ ${ref}.${toolName}\` in target '${targetName}' is not in the allowlist for connector '${ref}'. ${allowed.length === 0 ? "Allowlist is empty (connector configured but no tools permitted)." : `Allowed: ${allowed.join(", ")}.`} Either rewrite or grant access in connectors.json.`,
+          block: targetName,
+          extras: { connector: ref, tool: toolName, allowed },
         });
       });
     }
@@ -1472,6 +1524,7 @@ const RULES: LintRule[] = [
   UNKNOWN_RETRIEVAL_ARG,
   UNKNOWN_CONNECTOR,
   UNKNOWN_CONNECTOR_CLASS,
+  DISALLOWED_TOOL,
   UNINITIALIZED_APPEND,
   FOREACH_LOCAL_ACCUMULATOR_TARGET,
   APPEND_TO_NON_LIST,
@@ -1624,6 +1677,15 @@ function collectClassesFromRegistry(
 function collectMcpConnectorNamesFromRegistry(registry: Registry | undefined): string[] | undefined {
   if (registry === undefined) return undefined;
   return registry.listMcpConnectors().map((e) => e.name);
+}
+
+function collectMcpConnectorAllowedToolsFromRegistry(registry: Registry | undefined): Map<string, string[]> {
+  const out = new Map<string, string[]>();
+  if (registry === undefined) return out;
+  for (const e of registry.listMcpConnectors()) {
+    if (e.allowedTools !== undefined) out.set(e.name, e.allowedTools);
+  }
+  return out;
 }
 
 function buildFeatureSet(

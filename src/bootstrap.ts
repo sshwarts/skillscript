@@ -11,7 +11,7 @@ import { Registry } from "./connectors/registry.js";
 import { FilesystemSkillStore } from "./connectors/skill-store.js";
 import { OllamaLocalModel } from "./connectors/local-model.js";
 import { SqliteMemoryStore } from "./connectors/memory-store.js";
-import { loadConnectorsConfig } from "./connectors/config.js";
+import { loadConnectorsConfig, detectGitignoreRisk } from "./connectors/config.js";
 import { FilesystemTraceStore } from "./trace.js";
 import { Scheduler, type ResolvableTriggerSource, type TriggerRegistration } from "./scheduler.js";
 import type { TraceConfig } from "./trace.js";
@@ -147,7 +147,7 @@ export function bootstrap(opts: BootstrapOpts): BootstrapResult {
     connectorConfigErrors.push(...result.errors);
     for (const c of result.connectors) {
       if (c.instance !== undefined) {
-        registry.registerMcpConnector(c.name, c.instance);
+        registry.registerMcpConnector(c.name, c.instance, c.allowedTools);
         configuredConnectorNames.push(c.name);
       }
     }
@@ -160,6 +160,13 @@ export function bootstrap(opts: BootstrapOpts): BootstrapResult {
       process.stderr.write(
         `[bootstrap] connectors.json: wired ${configuredConnectorNames.length} connector(s): ${configuredConnectorNames.join(", ")}\n`,
       );
+    }
+    // v0.4.1 — credential-discipline backstop. One-time stderr warning if
+    // connectors.json is in a git-tracked dir without a .gitignore entry.
+    // Informational; doesn't block startup.
+    const giWarning = detectGitignoreRisk(opts.connectorsConfigPath);
+    if (giWarning !== null) {
+      process.stderr.write(`[bootstrap] WARNING: ${giWarning}\n`);
     }
   }
 

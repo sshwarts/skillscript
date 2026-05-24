@@ -636,6 +636,24 @@ async function execOpInner(
       }
 
       const connectorName = op.mcpConnector ?? "primary";
+
+      // v0.4.1 — defense-in-depth allowlist check. Lint catches this at
+      // compile time via `disallowed-tool`; this runtime check is the
+      // backstop for compiled artifacts run against a different runtime
+      // config than the one they were linted against. Only fires when
+      // an explicit connector name is set (op.mcpConnector !== undefined)
+      // — the implicit "primary" path is for embedder-wired connectors
+      // that don't go through connectors.json.
+      if (op.mcpConnector !== undefined && ctx.registry.hasMcpConnector(connectorName)) {
+        const allowed = ctx.registry.getMcpConnectorAllowedTools(connectorName);
+        if (allowed !== undefined && !allowed.includes(toolName)) {
+          throw makeOpError(
+            "$",
+            `\`$ ${connectorName}.${toolName}\` is not in the allowlist for connector '${connectorName}'. ${allowed.length === 0 ? "Allowlist is empty (no tools permitted)." : `Allowed: ${allowed.join(", ")}.`} (Defense-in-depth: lint should have caught this earlier.)`,
+          );
+        }
+      }
+
       let rawResult: unknown;
       let dispatched = false;
       const timeoutMs = resolveOpTimeoutMs(undefined, skillTimeoutSec, absoluteTimeoutMs, vars);
@@ -1062,9 +1080,52 @@ function parseToolArgs(argsStr: string): Record<string, unknown> {
     if (eq === -1) continue;
     const key = tok.slice(0, eq).trim();
     const rawValue = tok.slice(eq + 1);
-    args[key] = processSetValue(rawValue);
+    args[key] = coerceKwargValue(rawValue);
   }
   return args;
+}
+
+/**
+ * v0.4.1 — typed kwarg coercion for `$ connector.tool key=value` calls.
+ * MCP servers often expect typed args (integer `limit`, boolean flags).
+ * Pre-v0.4.1 every kwarg was string-typed → caused real failures (YouTrack
+ * "expected integer, got String" for `limit=5`).
+ *
+ * Coercion rules (applied AFTER processSetValue strips matched quotes):
+ *   - Quoted strings → string (e.g. `query="for: me"` → "for: me")
+ *   - Unquoted `^-?\d+$` → integer
+ *   - Unquoted `^-?\d+\.\d+$` → number (float)
+ *   - Unquoted `true` / `false` → boolean
+ *   - Unquoted `null` → null
+ *   - JSON-shaped `[...]` or `{...}` → JSON.parse if valid, else string
+ *   - Everything else → string (existing v0.4.0 behavior)
+ *
+ * Authors can force string by quoting: `count="5"` → "5", `flag="true"` → "true".
+ */
+function coerceKwargValue(raw: string): unknown {
+  const trimmed = raw.replace(/\s+$/, "");
+  // Quoted → strip, return as string (no further coercion).
+  if (trimmed.length >= 2) {
+    const first = trimmed[0]!;
+    const last = trimmed[trimmed.length - 1]!;
+    if ((first === '"' && last === '"') || (first === "'" && last === "'")) {
+      return trimmed.slice(1, -1);
+    }
+  }
+  if (trimmed === "true") return true;
+  if (trimmed === "false") return false;
+  if (trimmed === "null") return null;
+  if (/^-?\d+$/.test(trimmed)) return Number.parseInt(trimmed, 10);
+  if (/^-?\d+\.\d+$/.test(trimmed)) return Number.parseFloat(trimmed);
+  // JSON-shaped — try to parse, fall back to string on failure.
+  if ((trimmed.startsWith("[") && trimmed.endsWith("]")) || (trimmed.startsWith("{") && trimmed.endsWith("}"))) {
+    try {
+      return JSON.parse(trimmed);
+    } catch {
+      /* not valid JSON — fall through to string */
+    }
+  }
+  return trimmed;
 }
 
 function resolveListExpr(expr: string, vars: Map<string, unknown>): unknown[] {
@@ -1074,6 +1135,21 @@ function resolveListExpr(expr: string, vars: Map<string, unknown>): unknown[] {
     const val = resolveRef(ref[1]!, vars);
     if (Array.isArray(val)) return val;
     if (val === undefined || val === null) return [];
+    // v0.4.1 — mirror v0.2.5's `in` RHS tolerance (evalSimpleCondition,
+    // ~line 1462): a string value that JSON-parses to an array iterates
+    // as the parsed array. Lets `foreach I in $(RAW):` work when RAW is
+    // a JSON-string-typed `# Vars:` value or a `~` op result that came
+    // back as stringified JSON. `$ json_parse` users already get
+    // structured arrays via resolveRef, so this case is the string-
+    // typed-var fallback.
+    if (typeof val === "string") {
+      try {
+        const parsed = JSON.parse(val) as unknown;
+        if (Array.isArray(parsed)) return parsed;
+      } catch {
+        /* not JSON — fall through to single-element wrap */
+      }
+    }
     return [val];
   }
   const list = /^\[(.*)\]$/.exec(trimmed);

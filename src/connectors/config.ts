@@ -22,8 +22,10 @@
 // `connectors.json` is secret-bearing. Default `.gitignore` excludes it;
 // `connectors.json.example` ships at repo root as the template. See README.
 
-import { readFileSync } from "node:fs";
+import { readFileSync, existsSync } from "node:fs";
+import { dirname, basename, resolve } from "node:path";
 import { CallbackMcpConnector } from "./mcp.js";
+import { RemoteMcpConnector } from "./mcp-remote.js";
 import type { McpConnector, McpConnectorClass } from "./types.js";
 
 /**
@@ -51,8 +53,15 @@ export interface ConnectorClassEntry {
   fromConfig?: (config: Record<string, unknown>) => McpConnector;
 }
 
-export const KNOWN_CONNECTOR_CLASSES: ReadonlyMap<string, ConnectorClassEntry> = new Map([
+export const KNOWN_CONNECTOR_CLASSES: ReadonlyMap<string, ConnectorClassEntry> = new Map<string, ConnectorClassEntry>([
   ["CallbackMcpConnector", { ctor: CallbackMcpConnector }],
+  [
+    "RemoteMcpConnector",
+    {
+      ctor: RemoteMcpConnector,
+      fromConfig: (config: Record<string, unknown>) => RemoteMcpConnector.fromConfig(config),
+    },
+  ],
 ]);
 
 /** Listable for error messages + runtime_capabilities discovery. */
@@ -71,6 +80,13 @@ export interface ConfiguredConnector {
   config: Record<string, unknown>;
   /** Constructed instance when the class declares a `fromConfig`. `undefined` otherwise (lint catches this as `unknown-connector-class`). */
   instance: McpConnector | undefined;
+  /**
+   * v0.4.1 — per-connector tool allowlist. `undefined` means "no
+   * allowlist configured → allow all" (backward-compat with v0.4.0).
+   * Empty array means "explicitly empty → allow none." Listed array
+   * means "exactly these, nothing else." Lint + runtime both consult.
+   */
+  allowedTools?: string[];
 }
 
 export interface LoadConnectorsConfigResult {
@@ -85,6 +101,59 @@ export interface LoadConnectorsConfigOpts {
   path: string;
   /** Process env for `${VAR}` resolution. Defaults to `process.env`. */
   env?: NodeJS.ProcessEnv;
+}
+
+/**
+ * v0.4.1 — credential-discipline backstop. Walk up from `connectors.json`'s
+ * dir looking for `.git/`. If found, check whether any `.gitignore` between
+ * the file and the git root excludes `connectors.json`. Returns a warning
+ * string when the file appears to be in a git repo BUT not gitignored.
+ * `null` means either (a) not in a git repo, or (b) gitignored cleanly.
+ *
+ * Heuristic — not a full gitignore parser. Recognizes the canonical
+ * exclusion patterns: `connectors.json`, `/connectors.json`, `*.json`
+ * (broad), and anchored ancestor-dir matches. False negatives (warning
+ * fires on a gitignored file) are possible with exotic gitignore shapes;
+ * those are operator-fixable. False positives (warning suppressed on a
+ * tracked file) are the worse outcome and the heuristic biases against.
+ */
+export function detectGitignoreRisk(configPath: string): string | null {
+  let dir = dirname(resolve(configPath));
+  const filename = basename(configPath);
+  const gitignorePaths: string[] = [];
+  let gitRoot: string | null = null;
+  // Walk up looking for .git/ and collecting any .gitignore files along the way.
+  while (true) {
+    if (existsSync(`${dir}/.git`)) {
+      gitRoot = dir;
+      const rootGitignore = `${dir}/.gitignore`;
+      if (existsSync(rootGitignore)) gitignorePaths.push(rootGitignore);
+      break;
+    }
+    const localGitignore = `${dir}/.gitignore`;
+    if (existsSync(localGitignore)) gitignorePaths.push(localGitignore);
+    const parent = dirname(dir);
+    if (parent === dir) break; // hit filesystem root
+    dir = parent;
+  }
+  if (gitRoot === null) return null; // not in a git repo
+  // Scan all collected .gitignore files for any line that would exclude
+  // the connectors.json filename. Patterns recognized: bare name, anchored
+  // `/<name>`, anchored to subdir, or wildcard `*.json` (rare but valid).
+  const patterns = [filename, `/${filename}`];
+  for (const giPath of gitignorePaths) {
+    let raw: string;
+    try { raw = readFileSync(giPath, "utf8"); } catch { continue; }
+    const lines = raw.split("\n").map((l) => l.trim()).filter((l) => l !== "" && !l.startsWith("#"));
+    for (const line of lines) {
+      if (patterns.includes(line)) return null; // explicitly ignored
+      // Wildcard match: `*.json` or `*` — broad, assume covers the file.
+      if (line === "*" || line === "*.json") return null;
+    }
+  }
+  // In a git repo, but no .gitignore entry seems to cover connectors.json.
+  // Warn (informational; not blocking).
+  return `connectors.json appears to be in a git-tracked directory (${gitRoot}) without a .gitignore entry. Credentials in this file may end up committed. Add '/connectors.json' to your .gitignore — or use the bundled \`connectors.json.example\` template + \${ENV} substitution pattern instead.`;
 }
 
 /**
@@ -169,9 +238,47 @@ export function loadConnectorsConfig(opts: LoadConnectorsConfigOpts): LoadConnec
       continue;
     }
 
+    // v0.4.1 env-block-as-scope: resolve `config.env` against process.env
+    // FIRST, then merge into the substitution scope for the rest of the
+    // config. Lets authors compose values like:
+    //   env: { AUTH_HEADER: "Bearer ${YOUTRACK_TOKEN}" }
+    //   args: ["--header", "Authorization:${AUTH_HEADER}"]
+    // Matches Claude Desktop's `mcp.json` convention.
     let resolvedConfig: Record<string, unknown>;
     try {
-      resolvedConfig = resolveConfigEnv(rawConfig, env) as Record<string, unknown>;
+      const cfgObj = rawConfig as Record<string, unknown>;
+      const rawEnv = cfgObj["env"];
+      let resolvedEnv: Record<string, string> | undefined;
+      let scopedEnv: NodeJS.ProcessEnv = env;
+      if (rawEnv !== undefined) {
+        if (rawEnv === null || typeof rawEnv !== "object" || Array.isArray(rawEnv)) {
+          errors.push(`connectors.json: entry '${name}' field 'config.env' must be an object of string values.`);
+          continue;
+        }
+        resolvedEnv = {};
+        for (const [k, v] of Object.entries(rawEnv)) {
+          if (typeof v !== "string") {
+            errors.push(`connectors.json: entry '${name}': config.env['${k}'] must be a string (got ${typeof v}).`);
+            resolvedEnv = undefined;
+            break;
+          }
+          resolvedEnv[k] = resolveEnvSubstitution(v, env);
+        }
+        if (resolvedEnv === undefined) continue;
+        scopedEnv = { ...env, ...resolvedEnv };
+      }
+      // Resolve the rest of the config using the scoped env (process.env
+      // plus the just-resolved env block). The env block itself goes in
+      // pre-resolved to skip a redundant second pass.
+      const restConfig: Record<string, unknown> = {};
+      for (const [k, v] of Object.entries(cfgObj)) {
+        if (k === "env") {
+          if (resolvedEnv !== undefined) restConfig["env"] = resolvedEnv;
+          continue;
+        }
+        restConfig[k] = resolveConfigEnv(v, scopedEnv);
+      }
+      resolvedConfig = restConfig;
     } catch (err) {
       errors.push(`connectors.json: entry '${name}': ${(err as Error).message}`);
       continue;
@@ -199,7 +306,25 @@ export function loadConnectorsConfig(opts: LoadConnectorsConfigOpts): LoadConnec
       continue;
     }
 
-    connectors.push({ name, className, config: resolvedConfig, instance });
+    // v0.4.1 — `allowed_tools` allowlist. Optional. Undefined = allow-all;
+    // [] = allow-none (staging disable); listed = exactly-these.
+    let allowedTools: string[] | undefined;
+    const rawAllowed = obj["allowed_tools"];
+    if (rawAllowed !== undefined) {
+      if (!Array.isArray(rawAllowed) || !rawAllowed.every((t) => typeof t === "string")) {
+        errors.push(`connectors.json: entry '${name}' field 'allowed_tools' must be an array of strings (got ${Array.isArray(rawAllowed) ? "array with non-string element" : typeof rawAllowed}).`);
+        continue;
+      }
+      allowedTools = rawAllowed as string[];
+    }
+
+    connectors.push({
+      name,
+      className,
+      config: resolvedConfig,
+      instance,
+      ...(allowedTools !== undefined ? { allowedTools } : {}),
+    });
   }
 
   return { connectors, errors };

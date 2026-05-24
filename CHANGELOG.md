@@ -1,5 +1,130 @@
 # Changelog
 
+## 0.4.1 — 2026-05-24
+
+**`RemoteMcpConnector` + per-connector tool allowlist + YouTrack proving
+end-to-end.** First "external-MCP-in-Skillscript" release. v0.4.0
+shipped the config-plumbing mechanism (loader, validation, lint,
+discovery, discipline); v0.4.1 ships the first JSON-instantiable
+connector class and proves it works against real YouTrack through the
+`mcp-remote` bridge.
+
+Spec: Perry kickoff `c65e77af` + amendments `8a7356dc` (allowlist) +
+`89e2752d` (Scott's framing/scope answers).
+
+### Added
+
+- **`RemoteMcpConnector` class** (`src/connectors/mcp-remote.ts`). Child-
+  process spawn + JSON-RPC stdio bridge. Lifecycle: initialize
+  handshake, `tools/call` dispatch, clean shutdown via `shutdown` request
+  → SIGTERM → SIGKILL fallback. No auto-restart in v0.4.1 — child crash
+  puts the connector into an error state; subsequent dispatch throws
+  `RemoteMcpDispatchError`. Library-level `connector.call()` returns the
+  raw MCP `{content, isError}` envelope; runtime's `unwrapToolResult`
+  does the convention-aware unwrap (text → `JSON.parse`).
+
+- **Closed-set class registry adds `RemoteMcpConnector`** with
+  `fromConfig` factory. Existing v0.4.0 `connectors.json` shapes pointing
+  at this class now instantiate cleanly.
+
+- **`framing` config option** — `"lsp"` (default) or `"newline"`. The
+  YouTrack proving case exposed that `mcp-remote` speaks newline-
+  delimited JSON-RPC, NOT LSP `Content-Length` headers. The
+  config-driven option (item 5 of the kickoff) is exactly the escape
+  hatch needed. Lint rejects unknown framing values.
+
+- **Per-connector `allowed_tools` allowlist**. Optional config field on
+  connectors.json entries. Semantics: `undefined` = allow-all
+  (backward-compat with v0.4.0); `[]` = allow-none (staging disable
+  pattern); listed = exactly these tools, nothing else.
+  - New tier-1 lint rule `disallowed-tool` fires at compile time on
+    `$ name.tool` where `tool` isn't in the allowlist
+  - Runtime defense-in-depth: dispatcher refuses disallowed calls even
+    if lint is bypassed (the "fail closed even when lint missed it"
+    backstop per `8a7356dc`)
+  - `runtime_capabilities` surfaces effective allowlist per connector
+    (or `null` for allow-all)
+
+- **Env-block-as-scope `${VAR}` substitution.** v0.4.0 only resolved
+  `${VAR}` from `process.env`. v0.4.1 resolves the connector's `env`
+  block first, then merges into the substitution scope for the rest of
+  the config. Composable shape from Claude Desktop's `mcp.json`:
+
+  ```json
+  "args": [..., "--header", "Authorization:${AUTH_HEADER}"],
+  "env":  { "AUTH_HEADER": "Bearer ${YOUTRACK_TOKEN}" }
+  ```
+
+  `YOUTRACK_TOKEN` resolves from process env; `AUTH_HEADER` derives once
+  in the env block; args reference the derived value.
+
+- **Loader-time gitignore-detection warning** (folded v0.4.0 deferral).
+  At startup, if `connectors.json` is detected in a `.git`-tracked
+  directory without a `.gitignore` entry covering it, emit a one-time
+  stderr warning. Informational; doesn't block startup.
+
+- **`unknown-connector` lint auto-wires from runtime registry** (folded
+  v0.4.0 deferral, closes Perry's signoff observation `a4ae08a6`). MCP
+  `lint_skill` + `compile_skill` handlers auto-pass the running
+  runtime's `registry` to lint, so `unknown-connector` + `disallowed-
+  tool` fire by default without callers having to remember explicit
+  options. Cold-author callers targeting a different runtime can
+  override via explicit `mcpConnectorNames` / `mcpConnectorAllowedTools`.
+
+- **`foreach` over parsed-JSON arrays** (folded v0.4.0 deferral). v0.2.5
+  extended `in`-RHS to tolerate JSON-string values that parse to arrays;
+  v0.4.1 mirrors that tolerance into `foreach`. Lets
+  `foreach I in $(RAW):` work when `RAW` is a string that JSON-parses
+  to an array (e.g., from a `~` op response). `$ json_parse`-bound
+  arrays already worked since the parsed structure is in the vars map
+  directly.
+
+- **Kwarg type coercion in `$` op calls.** Pre-v0.4.1, `limit=5` in
+  `$ youtrack.search_issues query="for: me" limit=5` was sent as the
+  string `"5"`. YouTrack (and other typed MCPs) rejected with "expected
+  integer, got String." v0.4.1 adds `coerceKwargValue` in
+  `parseToolArgs`: unquoted `^-?\d+$` → integer, `^-?\d+\.\d+$` →
+  number, `true`/`false` → boolean, `null` → null,
+  `[...]`/`{...}` shapes → JSON-parsed if valid. Quoted strings force
+  the string type (`count="5"` stays "5").
+
+- **YouTrack proving end-to-end** (`tests/v0.4.1-youtrack-proving.test.ts`).
+  8 tests covering direct connector dispatch (initialize, tools/list,
+  `get_current_user`, `search_issues` with integer kwarg), full skill
+  chain (`examples/youtrack-morning-sweep.skill.md` compile + execute),
+  kwarg type coercion regression-lock, allowlist enforcement (positive +
+  negative against real YouTrack). Always-fail-if-`YOUTRACK_TEST_TOKEN`-
+  missing per Scott's call (`89e2752d`). CI workflow updated.
+
+### Example skill
+
+`examples/youtrack-morning-sweep.skill.md` checked in — the canonical
+"external remote MCP in Skillscript" proving case. Compiles + executes
+against real YouTrack given a configured `youtrack` connector.
+
+### Implementation notes
+
+- **Narrow-core LOC ceiling 6000 → 6600.** ~330 LOC for the
+  `mcp-remote.ts` connector class (spawn + framing + lifecycle), ~60
+  LOC across Registry + config + lint + runtime for allowlist
+  plumbing, ~40 LOC for env-block-as-scope substitution refactor, ~50
+  LOC for kwarg coercion + foreach JSON tolerance + lint auto-wire
+  threading. ~50 LOC for the gitignore-detection helper. New file
+  takes us to 15 narrow-core files; ceiling stays under 20.
+
+- **Tests:** 50 new across `tests/v0.4.1-mcp-remote.test.ts` (21 —
+  bridge core via mock child processes), `tests/v0.4.1-allowlist.test.ts`
+  (17 — allowed_tools loader + lint + runtime + discovery),
+  `tests/v0.4.1-folded.test.ts` (12 — gitignore detection, lint auto-
+  wire, foreach over parsed-JSON), plus 8 in
+  `tests/v0.4.1-youtrack-proving.test.ts` (live YouTrack chain). Total
+  58 new; 955 passing in the suite (3 long-skip browser dogfood).
+
+- **CI requires `YOUTRACK_TEST_TOKEN` secret.** Set in repo settings.
+  Token should be allowlist-scoped (read-only YouTrack tools), not a
+  personal admin token. Failure-mode is loud: missing token → CI fails
+  at the test step → no publish (avoids silent regression).
+
 ## 0.4.0 — 2026-05-24
 
 **`connectors.json` loader + credential discipline (config plumbing).**

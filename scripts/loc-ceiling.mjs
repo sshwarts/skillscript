@@ -68,6 +68,16 @@
 //            loader, env-substitution, registry, error paths). Lint
 //            additions ~50 LOC. First MCP-scripting-era release;
 //            v0.4.1 adds RemoteMcpConnector for stdio bridge.
+//   v0.4.1:  nudged narrow ceiling 6000 → 6600 for RemoteMcpConnector
+//            class + per-connector allowed_tools allowlist + env-block-
+//            as-scope substitution + framing config + gitignore-detect
+//            warning + lint auto-wiring + foreach-over-parsed-JSON +
+//            kwarg type coercion. New file: connectors/mcp-remote.ts
+//            (~330 LOC — spawn, LSP+newline framing, init handshake,
+//            tool dispatch, lifecycle). Allowlist plumbing ~60 LOC
+//            across Registry + config + lint + runtime. The first
+//            "external-MCP-in-Skillscript" release; proven end-to-end
+//            against real YouTrack via mcp-remote bridge.
 //
 // Run: `pnpm run loc-check`. CI fails the build if the narrow ceiling is
 // breached. The broad count is reported but does NOT fail the build.
@@ -90,7 +100,7 @@ const CORE_PATHS = [
   "connectors/",
 ];
 
-const NARROW_MAX_LOC = 6000;
+const NARROW_MAX_LOC = 6600;
 const NARROW_MAX_FILES = 20;
 const BROAD_INFO_LOC = 9500;
 const BROAD_INFO_FILES = 28;
