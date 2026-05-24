@@ -244,6 +244,32 @@ Skills don't know what they're talking to. Five contracts decouple language from
 
 Wire your own by implementing the interface and registering in `connectors.json`. See [`docs/language-reference.md`](docs/language-reference.md) §10 for full contracts.
 
+### `connectors.json` (v0.4.0)
+
+Per-host MCP connector configuration. The runtime loads it at startup; each top-level entry becomes a named connector instance referenced via `$ name.tool` in skill source.
+
+```json
+{
+  "youtrack": {
+    "class": "RemoteMcpConnector",
+    "config": {
+      "command": "npx",
+      "args": ["mcp-remote", "https://example.youtrack.cloud/mcp"],
+      "env": { "AUTH_HEADER": "Bearer ${YOUTRACK_TOKEN}" }
+    }
+  }
+}
+```
+
+Two credential shapes:
+
+- **Literal**: `"AUTH_HEADER": "Bearer plnt-XXX..."` — the credential lives in the file
+- **Env-var substitution**: `"AUTH_HEADER": "Bearer ${YOUTRACK_TOKEN}"` — `${NAME}` resolves from `process.env` at load time. Missing env var → clear startup error (not silent empty string).
+
+**Credential discipline (hard requirement):** `connectors.json` is secret-bearing. The repo's `.gitignore` excludes it by default. Use the version-controlled `connectors.json.example` as the template — copy it to `connectors.json` (gitignored), fill in real values. For deployments, prefer `${VAR}` substitution over in-file literals; commit the `${...}` references but keep the actual credentials in deployment env.
+
+**Closed-set class registry:** the runtime ships a fixed list of `class:` values it recognizes. v0.4.0 ships with `CallbackMcpConnector` (wired via embedder code only, not configurable from JSON). v0.4.1 adds `RemoteMcpConnector` for the stdio-bridged remote MCP pattern. Plugin-style runtime-arbitrary class loading is deliberately out of scope — see [ARCHITECTURE.md](ARCHITECTURE.md) for the rationale. Use `runtime_capabilities({include:["mcpConnectorClasses"]})` to introspect the available set in your runtime.
+
 ## CLI
 
 14 commands cover the full authoring + ops lifecycle:

@@ -11,6 +11,7 @@ import { Registry } from "./connectors/registry.js";
 import { FilesystemSkillStore } from "./connectors/skill-store.js";
 import { OllamaLocalModel } from "./connectors/local-model.js";
 import { SqliteMemoryStore } from "./connectors/memory-store.js";
+import { loadConnectorsConfig } from "./connectors/config.js";
 import { FilesystemTraceStore } from "./trace.js";
 import { Scheduler, type ResolvableTriggerSource, type TriggerRegistration } from "./scheduler.js";
 import type { TraceConfig } from "./trace.js";
@@ -44,6 +45,14 @@ export interface BootstrapOpts {
    * v0.2.7 addition.
    */
   mode?: "serve" | "dashboard";
+  /**
+   * Path to `connectors.json` (v0.4.0). When set + existing, the loader
+   * parses + validates the file and registers each declared MCP
+   * connector instance into the Registry. Missing file is graceful;
+   * malformed JSON / unknown class / unset `${VAR}` surface as
+   * structured errors via the result's `connectorConfigErrors`.
+   */
+  connectorsConfigPath?: string;
 }
 
 export interface BootstrapResult {
@@ -58,6 +67,13 @@ export interface BootstrapResult {
   mode: "serve" | "dashboard";
   /** Imperative-trigger persistence path, when configured. */
   triggersFilePath?: string;
+  /**
+   * Names of MCP connectors wired from `connectors.json` (v0.4.0).
+   * Surfaced through `runtime_capabilities` for cold-author discovery.
+   */
+  configuredConnectorNames: string[];
+  /** Errors from the `connectors.json` load pass (v0.4.0). Empty when no file is configured or load was clean. */
+  connectorConfigErrors: string[];
 }
 
 /** v0.2.7 — wire-format for `$SKILLSCRIPT_HOME/triggers.json`. */
@@ -121,6 +137,32 @@ export function bootstrap(opts: BootstrapOpts): BootstrapResult {
   const enableUnsafeShell = opts.enableUnsafeShell ?? false;
   const mode = opts.mode ?? "dashboard";
 
+  // v0.4.0 — load and register configured MCP connectors from connectors.json.
+  // Errors surface via the result; bootstrap doesn't throw (lets the caller
+  // decide whether a malformed config should abort startup or warn).
+  const configuredConnectorNames: string[] = [];
+  const connectorConfigErrors: string[] = [];
+  if (opts.connectorsConfigPath !== undefined) {
+    const result = loadConnectorsConfig({ path: opts.connectorsConfigPath });
+    connectorConfigErrors.push(...result.errors);
+    for (const c of result.connectors) {
+      if (c.instance !== undefined) {
+        registry.registerMcpConnector(c.name, c.instance);
+        configuredConnectorNames.push(c.name);
+      }
+    }
+    if (result.errors.length > 0) {
+      for (const err of result.errors) {
+        process.stderr.write(`[bootstrap] ${err}\n`);
+      }
+    }
+    if (configuredConnectorNames.length > 0) {
+      process.stderr.write(
+        `[bootstrap] connectors.json: wired ${configuredConnectorNames.length} connector(s): ${configuredConnectorNames.join(", ")}\n`,
+      );
+    }
+  }
+
   // v0.2.7 — wire write-through to the persistent registry, then hydrate
   // any existing imperative triggers from disk before scheduler.start()
   // is called downstream. Declarative triggers are layered on top via
@@ -163,6 +205,8 @@ export function bootstrap(opts: BootstrapOpts): BootstrapResult {
     traceStore,
     enableUnsafeShell,
     mode,
+    configuredConnectorNames,
+    connectorConfigErrors,
     ...(opts.triggersFilePath !== undefined ? { triggersFilePath: opts.triggersFilePath } : {}),
   };
 }

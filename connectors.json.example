@@ -1,0 +1,31 @@
+{
+  "_comment_": "connectors.json — per-host MCP connector configuration (v0.4.0). Copy to `connectors.json` (which is gitignored) and fill in real values. Each top-level key is a connector instance name referenced via `$ name.tool` in skill source.",
+
+  "_comment_security_": "Credentials in this file are SECRET-BEARING. Default `.gitignore` excludes `connectors.json` from version control. For deployed environments, prefer the `${VAR}` substitution shape (resolved from process env at load time) over literal in-file values.",
+
+  "_comment_classes_": "v0.4.0 closed-set: `CallbackMcpConnector` (wired via embedder code only, not configurable via JSON). v0.4.1 adds `RemoteMcpConnector` for stdio-bridged remote MCPs (mcp-remote, etc.). Use `runtime_capabilities({include:['mcpConnectorClasses']})` to introspect the available set in your runtime.",
+
+  "_example_v041_youtrack": {
+    "class": "RemoteMcpConnector",
+    "comment": "Available starting v0.4.1. Bridges to YouTrack's remote MCP via npx mcp-remote.",
+    "config": {
+      "command": "npx",
+      "args": ["mcp-remote", "https://example.youtrack.cloud/mcp", "--header", "Authorization:${AUTH_HEADER}"],
+      "env": {
+        "AUTH_HEADER": "Bearer ${YOUTRACK_TOKEN}"
+      }
+    }
+  },
+
+  "_example_v041_literal_credential": {
+    "class": "RemoteMcpConnector",
+    "comment": "Same as above but with an in-file literal credential (less safe; document discipline says prefer ${VAR}).",
+    "config": {
+      "command": "npx",
+      "args": ["mcp-remote", "https://example.com/mcp"],
+      "env": {
+        "AUTH_HEADER": "Bearer plnt-XXXXXXXXXXXXXXXXXXXX"
+      }
+    }
+  }
+}

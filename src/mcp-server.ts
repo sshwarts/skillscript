@@ -5,6 +5,7 @@ import type { Registry } from "./connectors/registry.js";
 import { healthMetrics, type HealthMetrics } from "./metrics.js";
 import { lint } from "./lint.js";
 import { compile } from "./compile.js";
+import { listKnownConnectorClasses } from "./connectors/config.js";
 import { LintFailureError, MissingSkillReferenceError } from "./errors.js";
 import {
   executeSkillByName,
@@ -355,7 +356,7 @@ export class McpServer {
             type: "array",
             items: {
               type: "string",
-              enum: ["localModels", "mcpConnectors", "memoryStores", "skillStores", "agentConnectors", "shellExecution", "runtimeVersion", "runtimeMode", "triggersFilePath"],
+              enum: ["localModels", "mcpConnectors", "mcpConnectorClasses", "memoryStores", "skillStores", "agentConnectors", "shellExecution", "runtimeVersion", "runtimeMode", "triggersFilePath"],
             },
             description: "Filter which categories to return. Omit for all.",
           },
@@ -691,6 +692,14 @@ export class McpServer {
     if (want("memoryStores")) out["memoryStores"] = reg ? reg.listMemoryStores().map((e) => describeEntry(e)) : [];
     if (want("localModels")) out["localModels"] = reg ? reg.listLocalModels().map((e) => describeEntry(e)) : [];
     if (want("mcpConnectors")) out["mcpConnectors"] = reg ? reg.listMcpConnectors().map((e) => describeEntry(e)) : [];
+    if (want("mcpConnectorClasses")) {
+      // v0.4.0 — closed-set of MCP connector classes that can be wired
+      // via `connectors.json`. Cold authors check this before writing
+      // a `class: "..."` field. Plugin-style runtime-arbitrary class
+      // loading is deliberately out of scope; the set grows via
+      // CHANGELOG-tracked runtime releases.
+      out["mcpConnectorClasses"] = listKnownConnectorClasses();
+    }
     if (want("agentConnectors")) out["agentConnectors"] = reg ? reg.listAgentConnectors().map((e) => describeEntry(e)) : [];
     if (want("shellExecution")) {
       // The runtime has no fixed command allowlist — `@ <cmd> ...` ops are

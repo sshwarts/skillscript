@@ -82,6 +82,22 @@ export interface LintOptions {
    * warning fires.
    */
   enableUnsafeShell?: boolean;
+  /**
+   * Names of registered MCP connector instances (v0.4.0). When provided,
+   * `unknown-connector` lint rule fires tier-1 on `$ name.tool` refs to
+   * names not in the list. When undefined, the rule is silent (caller
+   * doesn't know what's wired). Derived from `registry` if only the
+   * registry is provided.
+   */
+  mcpConnectorNames?: string[];
+  /**
+   * Errors from `connectors.json` load pass (v0.4.0). When provided,
+   * `unknown-connector-class` lint rule re-surfaces the subset of these
+   * about unknown class names so cold-author tooling sees them through
+   * the lint API. Other config errors flow through `parse-error`-style
+   * surfacing in the bootstrap result.
+   */
+  connectorConfigErrors?: string[];
 }
 
 interface LintContext {
@@ -91,6 +107,8 @@ interface LintContext {
   hasSkillStore: boolean;
   callSite: "cli" | "api" | "compile-preflight";
   enableUnsafeShell: boolean | undefined;
+  mcpConnectorNames: string[] | undefined;
+  connectorConfigErrors: string[];
 }
 
 export interface LintRule {
@@ -112,6 +130,8 @@ export async function lint(source: string, options?: LintOptions): Promise<LintR
     hasSkillStore: options?.skillStore !== undefined,
     callSite: options?.callSite ?? "api",
     enableUnsafeShell: options?.enableUnsafeShell,
+    mcpConnectorNames: options?.mcpConnectorNames ?? collectMcpConnectorNamesFromRegistry(options?.registry),
+    connectorConfigErrors: options?.connectorConfigErrors ?? [],
   };
   const findings: LintFinding[] = [];
   for (const rule of RULES) {
@@ -148,6 +168,8 @@ export function lintSync(source: string, options?: LintOptions): LintResult {
     hasSkillStore: options?.skillStore !== undefined,
     callSite: options?.callSite ?? "api",
     enableUnsafeShell: options?.enableUnsafeShell,
+    mcpConnectorNames: options?.mcpConnectorNames ?? collectMcpConnectorNamesFromRegistry(options?.registry),
+    connectorConfigErrors: options?.connectorConfigErrors ?? [],
   };
   const findings: LintFinding[] = [];
   for (const rule of RULES) {
@@ -540,6 +562,60 @@ const UNKNOWN_RETRIEVAL_ARG: LintRule = {
     }
     return findings;
   },
+};
+
+// v0.4.0 — `$ name.tool` references a connector name not registered.
+// `connectorNames` is the authoritative list from the Registry (passed
+// through LintOptions); when undefined (caller doesn't know what's
+// wired) the rule is silent rather than risk false positives.
+const UNKNOWN_CONNECTOR: LintRule = {
+  id: "unknown-connector",
+  severity: "error",
+  description: "A `$ name.tool` op references a connector name that's not registered. Either the name is misspelled or `connectors.json` is missing an entry.",
+  remediation: "Check the connector name against `connectors.json` (or whatever wired the registry). Either fix the spelling or add the entry. `runtime_capabilities()` lists the names currently wired.",
+  check: (ctx) => {
+    if (ctx.mcpConnectorNames === undefined) return [];
+    const known = new Set(ctx.mcpConnectorNames);
+    const findings: LintFinding[] = [];
+    const reported = new Set<string>();
+    for (const [targetName, target] of ctx.parsed.targets) {
+      walkOps(target.ops, (op) => {
+        if (op.kind !== "$" || op.mcpConnector === undefined) return;
+        const ref = op.mcpConnector;
+        if (known.has(ref)) return;
+        const key = `${targetName}:${ref}`;
+        if (reported.has(key)) return;
+        reported.add(key);
+        findings.push({
+          rule: "unknown-connector",
+          severity: "error",
+          message: `\`$ ${ref}.<tool>\` in target '${targetName}' references unknown connector '${ref}'. Wired connectors: ${known.size === 0 ? "(none)" : [...known].join(", ")}.`,
+          block: targetName,
+          extras: { referenced_connector: ref },
+        });
+      });
+    }
+    return findings;
+  },
+};
+
+// v0.4.0 — `connectors.json` declares `class: "Foo"` where `Foo` is not
+// in the closed-set class registry. The loader catches this at startup
+// and surfaces via `connectorConfigErrors`; this rule re-surfaces the
+// subset that's class-related into the lint diagnostic stream so cold-
+// author tooling (compile_skill / lint_skill MCP) sees them.
+const UNKNOWN_CONNECTOR_CLASS: LintRule = {
+  id: "unknown-connector-class",
+  severity: "error",
+  description: "`connectors.json` references a connector class that's not in the closed-set class registry (v0.4.0).",
+  remediation: "Use one of the known classes (see `runtime_capabilities()` for the list shipped in this runtime). Plugin-style runtime-arbitrary class loading is deliberately out of scope; future classes ship via CHANGELOG-tracked additions to the registry.",
+  check: (ctx) => ctx.connectorConfigErrors
+    .filter((msg) => /unknown connector class/.test(msg))
+    .map((msg) => ({
+      rule: "unknown-connector-class" as const,
+      severity: "error" as const,
+      message: msg,
+    })),
 };
 
 // v0.3.1: tier-3 advisory that fires alongside the demoted tier-2
@@ -1394,6 +1470,8 @@ const RULES: LintRule[] = [
   UNKNOWN_TEMPLATE_REFERENCE,
   DEFERRED_SKILL_REFERENCE,
   UNKNOWN_RETRIEVAL_ARG,
+  UNKNOWN_CONNECTOR,
+  UNKNOWN_CONNECTOR_CLASS,
   UNINITIALIZED_APPEND,
   FOREACH_LOCAL_ACCUMULATOR_TARGET,
   APPEND_TO_NON_LIST,
@@ -1541,6 +1619,11 @@ function collectClassesFromRegistry(
     ...registry.listLocalModelClasses(),
     ...registry.listMcpConnectorClasses(),
   ];
+}
+
+function collectMcpConnectorNamesFromRegistry(registry: Registry | undefined): string[] | undefined {
+  if (registry === undefined) return undefined;
+  return registry.listMcpConnectors().map((e) => e.name);
 }
 
 function buildFeatureSet(

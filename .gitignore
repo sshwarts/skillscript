@@ -16,3 +16,8 @@ coverage/
 !**/scaffold/**/*.skill
 *.skill.provenance.json
 *.provenance.json
+# v0.4.0 — `connectors.json` is secret-bearing (env credentials live there
+# alongside `${VAR}` references). Default-gitignored to prevent accidental
+# commit. Use `connectors.json.example` as the version-controlled template.
+# Root-anchored so the scaffold's bundled placeholder stays tracked.
+/connectors.json

@@ -60,6 +60,14 @@
 //            on the single-= rejection path (Bug D extension caught by
 //            v0.3.4 item-2 test). Closes the recurring "conditional
 //            grammar weak link" pattern named in dev-log §14.
+//   v0.4.0:  nudged narrow ceiling 5750 → 6000 for connectors.json
+//            loader + credential resolution + closed-set class registry
+//            + two new tier-1 lint rules (unknown-connector +
+//            unknown-connector-class) + runtime_capabilities discovery
+//            extension. New file: `connectors/config.ts` (~170 LOC —
+//            loader, env-substitution, registry, error paths). Lint
+//            additions ~50 LOC. First MCP-scripting-era release;
+//            v0.4.1 adds RemoteMcpConnector for stdio bridge.
 //
 // Run: `pnpm run loc-check`. CI fails the build if the narrow ceiling is
 // breached. The broad count is reported but does NOT fail the build.
@@ -82,7 +90,7 @@ const CORE_PATHS = [
   "connectors/",
 ];
 
-const NARROW_MAX_LOC = 5750;
+const NARROW_MAX_LOC = 6000;
 const NARROW_MAX_FILES = 20;
 const BROAD_INFO_LOC = 9500;
 const BROAD_INFO_FILES = 28;

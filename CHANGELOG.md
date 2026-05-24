@@ -1,5 +1,107 @@
 # Changelog
 
+## 0.4.0 — 2026-05-24
+
+**`connectors.json` loader + credential discipline (config plumbing).**
+First MCP-scripting-era release. Wires the per-host connector
+configuration the ERD §3+§4 spec has called for since T2. Loads
+`connectors.json` at runtime startup, parses + validates, resolves
+`${VAR}` substitutions, and registers each declared instance into the
+Registry. Closed-set class registry + two new tier-1 lint rules. Spec
+at `b3f6c5ed` (Perry kickoff) + `58a9d3d3` (credential amendment) +
+`8f723b6a` (final approval).
+
+**Split note:** `RemoteMcpConnector` (the stdio-bridge class for remote
+MCPs via `mcp-remote` etc.) deferred to v0.4.1. v0.4.0 ships the
+mechanism — loader, validation, lint, discovery, credential discipline
+— but the only class in the v0.4.0 closed set (`CallbackMcpConnector`)
+isn't JSON-instantiable (it requires a dispatch function). v0.4.1
+adds `RemoteMcpConnector` as the first real configurable class, plus
+the YouTrack end-to-end proving test.
+
+### Added
+
+- **`connectors.json` loader.** Reads from `BootstrapOpts.connectorsConfigPath`
+  (caller-supplied path; bootstrap stays explicit, doesn't auto-discover).
+  Missing file → graceful empty result. Malformed JSON / structural
+  errors / unknown class / unset `${VAR}` → clear startup errors via
+  `BootstrapResult.connectorConfigErrors`. Permissive on unknown
+  fields so v0.4.1 schema additions (`allowed_tools`, etc.) plug in
+  without breaking compat.
+
+- **Credential resolution: two shapes.** Matches Claude Desktop's
+  `mcp.json` convention:
+  - Literal: `"AUTH_HEADER": "Bearer plnt-..."` (in-file)
+  - Env-var substitution: `"AUTH_HEADER": "Bearer ${YOUTRACK_TOKEN}"`
+    (resolved from `process.env` at load time)
+
+  Missing `${VAR}` → clear error (not silent empty-string substitution).
+  Both shapes work; deployments should prefer `${VAR}` per the
+  credential-discipline section.
+
+- **Closed-set class registry.** v0.4.0 set: `{CallbackMcpConnector}`.
+  Plugin-style runtime-arbitrary class loading deliberately out of
+  scope (security surface, discoverability, API maturity). Unknown
+  class in `connectors.json` → clear startup error listing the known
+  set. The set grows via CHANGELOG-tracked runtime releases.
+
+- **`unknown-connector` tier-1 lint.** Fires on `$ name.tool` ops
+  where `name` isn't a wired connector. Includes the list of wired
+  names in the diagnostic so cold authors can correct typos quickly.
+  Silent when the caller doesn't know what's wired (no false positives).
+
+- **`unknown-connector-class` tier-1 lint** (Perry's sibling addition,
+  `8f723b6a`). Re-surfaces the loader's "unknown connector class"
+  errors via the lint API for tooling that consumes lint as the
+  primary diagnostic surface (compile_skill / lint_skill MCP).
+
+- **`runtime_capabilities` discovery extension.** New `include`
+  option: `mcpConnectorClasses` returns the closed-set class names.
+  Cold authors introspect "what classes can I configure?" before
+  writing `class: "..."` fields.
+
+- **Credential discipline (hard requirement).** Perry's amendment
+  promoted from footnote to ship requirement:
+  - `connectors.json` added to repo root `.gitignore` (root-anchored
+    so the scaffold's bundled placeholder stays tracked)
+  - `connectors.json.example` shipped at repo root as the version-
+    controlled template
+  - README "Connector model" section documents both credential
+    shapes + the gitignore default + the discipline rationale
+  - Loader-time gitignore-detection warning deferred to v0.4.1
+
+### New module
+
+- **`src/connectors/config.ts`** — loader + env substitution + closed-set
+  class registry. ~190 LOC including docstrings. Public surface:
+  `loadConnectorsConfig({path, env?})`, `listKnownConnectorClasses()`,
+  `resolveEnvSubstitution(value, env)`, `KNOWN_CONNECTOR_CLASSES`.
+
+### Implementation notes
+
+- **Narrow-core LOC ceiling 5750 → 6000.** Net ~190 LOC from the new
+  `connectors/config.ts` module plus ~50 for the two lint rules and
+  the `mcpConnectorNames` LintContext field. Consistent with v0.3.0's
+  200-LOC nudge for `$append`. History entry in `loc-ceiling.mjs`.
+
+- **`BootstrapOpts.connectorsConfigPath`** is explicit (no auto-
+  discovery from CWD). Embedders pass the path; the CLI's
+  `skillfile dashboard` / `skillfile serve` / `skillfile execute`
+  surfaces will auto-pass `${cwd()}/connectors.json` in v0.4.1+ once
+  RemoteMcpConnector makes the file practically useful. Until then,
+  embedders opt in explicitly.
+
+- **Tests:** 31 new in `tests/v0.4.0.test.ts` covering loader basics
+  (missing file, malformed JSON, structural errors, unknown class),
+  env substitution (literal pass-through, `${NAME}` resolution,
+  missing var error, multiple substitutions, lowercase-name ignore),
+  closed-set registry (v0.4.0 set, no RemoteMcpConnector yet),
+  bootstrap wiring (graceful missing, errors surface, no false adds),
+  both lint rules (positive + negative + silent-when-undefined),
+  runtime_capabilities surface, and credential discipline (gitignore +
+  example + README content). 897/901 passing (3 long-skip browser
+  dogfood).
+
 ## 0.3.4 — 2026-05-24
 
 **Conditional multi-filter chain + parse-error dedup + unified sink-scope
