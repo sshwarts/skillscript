@@ -1,5 +1,28 @@
 # Changelog
 
+## 0.4.3 — 2026-05-24
+
+**CLI auto-discovers `connectors.json` from `$SKILLSCRIPT_HOME`.** Closes
+the v0.4.x arc's last-mile gap: pre-v0.4.3, the loader + lint + runtime
++ allowlist all worked, but `skillfile dashboard` and `skillfile serve`
+(both via `cmdRuntimeHost`) called `bootstrap()` without
+`connectorsConfigPath`. The scaffold's `connectors.json` was dead-on-
+arrival via the canonical CLI path.
+
+### Fixed
+
+- **`cmdRuntimeHost` now passes `connectorsConfigPath: $SKILLSCRIPT_HOME/connectors.json`** to `bootstrap()`. The loader is graceful on missing files (returns empty result), so the default is safe for users without a connectors.json. Bug since v0.4.0.
+
+### Added
+
+- **`--connectors PATH` flag** on `skillfile dashboard` and `skillfile serve` — overrides the default for non-standard layouts. Useful for testing connectors-as-config without modifying `$SKILLSCRIPT_HOME/connectors.json`.
+
+### Implementation notes
+
+- **One-line behavior change.** No architecture impact; just wires the existing config-path through the existing bootstrap API.
+- **Tests:** 5 new in `tests/v0.4.3.test.ts` covering `--help` flag presence, bootstrap path resolution, graceful-missing handling, and a source-level regression-lock to guard against silent regression of the wire-up.
+- **LOC unchanged at 6593/6600.** Ergonomic patch; no language surface changes.
+
 ## 0.4.2 — 2026-05-24
 
 **Markdown support + strict-target detection + `# Autonomous: true`

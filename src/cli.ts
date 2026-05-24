@@ -178,27 +178,31 @@ const COMMAND_HELP: Readonly<Record<string, CommandHelp>> = {
   },
   serve: {
     description: "Start the headless runtime host: scheduler + MCP server, no browser SPA",
-    usage: "skillfile serve [--port N] [--host ADDR]",
+    usage: "skillfile serve [--port N] [--host ADDR] [--connectors PATH]",
     options: [
       { flag: "--port N", description: "TCP port (default: 7878)" },
       { flag: "--host ADDR", description: "Bind address (default: 127.0.0.1; container deploys override to 0.0.0.0)" },
+      { flag: "--connectors PATH", description: "Path to connectors.json (default: $SKILLSCRIPT_HOME/connectors.json)" },
     ],
     examples: [
       "skillfile serve",
       "skillfile serve --host 0.0.0.0 --port 7878   # container deployment",
+      "skillfile serve --connectors ./my-connectors.json",
     ],
   },
   dashboard: {
     description: "Start the full runtime host: scheduler + MCP server + browser dashboard SPA",
-    usage: "skillfile dashboard [--port N] [--host ADDR]",
+    usage: "skillfile dashboard [--port N] [--host ADDR] [--connectors PATH]",
     options: [
       { flag: "--port N", description: "TCP port (default: 7878)" },
       { flag: "--host ADDR", description: "Bind address (default: 127.0.0.1; container deploys override to 0.0.0.0)" },
+      { flag: "--connectors PATH", description: "Path to connectors.json (default: $SKILLSCRIPT_HOME/connectors.json; loader is graceful on missing file)" },
     ],
     examples: [
       "skillfile dashboard",
       "skillfile dashboard --port 8080",
       "skillfile dashboard --host 0.0.0.0 --port 7878   # container only",
+      "skillfile dashboard --connectors ./my-connectors.json",
     ],
   },
 };
@@ -649,11 +653,18 @@ async function cmdRuntimeHost(args: string[], opts: { mode: "serve" | "dashboard
   // (host port mapping still enforces 127.0.0.1 externally).
   const host = extractFlag(args, "--host") ?? "127.0.0.1";
   const triggersFilePath = join(HOME_DIR, "triggers.json");
+  // v0.4.3 — auto-discover connectors.json from HOME_DIR. Closes the
+  // last-mile gap of the v0.4.x arc: pre-v0.4.3 the loader + lint +
+  // runtime + allowlist all worked, but the canonical CLI entry point
+  // didn't read connectors.json. --connectors <path> overrides the
+  // default for non-standard layouts. Loader is graceful on missing.
+  const connectorsConfigPath = extractFlag(args, "--connectors") ?? join(HOME_DIR, "connectors.json");
   const wired = bootstrap({
     skillsDir: SKILLS_DIR,
     traceDir: TRACE_DIR,
     memoryDbPath: MEMORY_DB,
     triggersFilePath,
+    connectorsConfigPath,
     mode: opts.mode,
     // Scheduler-fired skills record traces by default; `fires` / `health` /
     // `health_metrics` (MCP) all read from the trace store.
