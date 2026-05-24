@@ -292,6 +292,7 @@ Skill files open with \`# Key: value\` headers. Order isn't significant.
 - \`# Triggers: cron: 0 9 * * *, session: start\` — autonomous-dispatch sources. Comma-separated entries split by source-keyword boundary; cron expressions with commas (\`30,45 9 * * 1-5\`) parse correctly.
 - \`# Output: text | slack: chan | prompt-context: agent | template: agent | file: path | card: id | none\` — output routing.
 - \`# OnError: <fallback-skill-name>\` — error-handler skill invoked when an op fails and no target-level \`else:\` catches.
+- \`# Autonomous: true | false\` — declarative authorship intent for unattended-execution skills (cron-fired, agent-fired, etc.). v0.4.2. Today silences \`unconfirmed-mutation\` lint warnings for the whole skill (since the user-confirmation pattern doesn't apply to autonomous skills); reserved as the canonical autonomous-skill category marker for future rules + scheduling defaults + discovery surfaces. Omitted = interactive (default).
 
 ## Augmenting / Template only
 
@@ -610,7 +611,7 @@ Three tiers per ERD §3:
 - \`unknown-retrieval-arg\` — \`>\` op carries kwargs outside mode/query/limit/connector/fallback (v0.2.12 Bug 26)
 - \`unknown-skill-reference\` — \`&\` or \`$ execute_skill\` references a skill not in the store (demoted from tier-1 in v0.3.1; runtime throws \`MissingSkillReferenceError\` if still unresolved at execute)
 - \`unknown-template-reference\` — \`# Templates: <name>\` references a skill not in the store (demoted from tier-1 in v0.3.1)
-- \`unconfirmed-mutation\` — \`$\` op invokes a tool whose name suggests mutation (write/update/delete) without a preceding \`??\` confirmation
+- \`unconfirmed-mutation\` — \`$\` op invokes a tool whose name suggests mutation (write/update/delete) without a preceding \`??\` confirmation. Silent when the skill declares \`# Autonomous: true\` (v0.4.2 — the autonomous-skill category exempts the rule since the user-confirmation pattern doesn't apply to unattended-execution skills)
 - \`model-contention\` — async + sync ops on the same model serialize on a single runtime worker
 - \`draft-with-trigger\` — \`# Status: Draft\` skill has \`# Triggers:\` declared; triggers won't fire until Approved
 - \`reference-to-disabled-skill\` — \`&\` op references a Disabled skill (also tier-1 in some contexts)

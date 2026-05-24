@@ -1130,9 +1130,13 @@ const MUTATING_TOOL_PATTERN = /^(?:write_|update_|delete_|remove_|set_|create_|i
 const UNCONFIRMED_MUTATION: LintRule = {
   id: "unconfirmed-mutation",
   severity: "warning",
-  description: "A `$` op invokes a tool whose name suggests mutation (write/update/delete/...) without a preceding `??` confirmation step.",
-  remediation: "Add a `??` confirmation op before the mutation, or restructure to make the mutation explicit in the skill's name/output.",
+  description: "A `$` op invokes a tool whose name suggests mutation (write/update/delete/...) without a preceding `??` confirmation step. Silent when the skill declares `# Autonomous: true` (v0.4.2).",
+  remediation: "Add a `??` confirmation op before the mutation, or declare `# Autonomous: true` at the skill header level when the skill is intentionally autonomous (cron-fired, agent-fired, etc.) and the user-confirmation pattern doesn't apply.",
   check: (ctx) => {
+    // v0.4.2 — `# Autonomous: true` skills are unattended by design;
+    // the user-confirmation pattern doesn't apply. Silent for the
+    // whole skill when the header is set.
+    if (ctx.parsed.autonomous === true) return [];
     const findings: LintFinding[] = [];
     for (const [targetName, target] of ctx.parsed.targets) {
       let sawConfirm = false;

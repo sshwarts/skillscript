@@ -180,6 +180,20 @@ export interface ParsedSkill {
    * steps. v0.2.6 addition.
    */
   templates: string[];
+  /**
+   * `# Autonomous: true` header — declarative authorship intent marker
+   * for unattended-execution skills (cron-fired, agent-fired, etc.).
+   * v0.4.2 addition. Today silences `unconfirmed-mutation` lint; the
+   * header is reserved for the broader autonomous-skill category so
+   * future rules + scheduling defaults + runtime_capabilities discovery
+   * can hook into the same field without breaking-change.
+   *
+   * `true` = explicitly autonomous. `false` = explicitly interactive
+   * (default). `null` = unspecified (treated as `false` for lint
+   * purposes; preserved so authors can distinguish "I forgot the header"
+   * from "I deliberately set it").
+   */
+  autonomous: boolean | null;
   parseErrors: string[];
 }
 
@@ -682,8 +696,45 @@ function popToDepth(stack: ScopeFrame[], targetDepth: number): void {
  * Parse a skill source string into an AST. Collects syntax errors in
  * `parseErrors`; never throws on bad input.
  */
+/**
+ * v0.4.2 — extract skill source from a markdown wrapper.
+ *
+ * `.skill.md` files contain prose + a fenced code block holding the
+ * actual skill source. This helper scans for the first
+ * ` ```skillscript ` or ` ```skill ` fenced block and returns its
+ * contents. Cold-author LLMs (and humans) writing `.skill.md` will
+ * naturally surround their skill code with markdown prose — the
+ * extension promised markdown support; this delivers it.
+ *
+ * Semantics per Perry approval `efad035f`:
+ *   - Fence label `skillscript` (primary) OR `skill` (alias)
+ *   - First-block-wins: subsequent fenced blocks treated as illustrative
+ *   - No-block files → returns `null` (caller surfaces `no-skill-code-block`)
+ *
+ * Callers that don't want extraction (loading `.skill` files, direct
+ * string input, library API consumers) should NOT call this — they
+ * pass raw source to `parse()` directly.
+ */
+export function extractSkillFromMarkdown(source: string): string | null {
+  // Match ` ```skillscript ` or ` ```skill ` at line start, then content
+  // up to the closing ` ``` ` fence. `m` flag for line-anchored `^` / `$`.
+  // `[\s\S]` instead of `.` to match newlines in the body.
+  const re = /^```(?:skillscript|skill)\s*\n([\s\S]*?)^```\s*$/m;
+  const match = re.exec(source);
+  if (match === null) return null;
+  return match[1]!;
+}
+
 export function parse(source: string): ParsedSkill {
-  const lines = foldQuotedContinuations(source.split("\n"));
+  // v0.4.2 — markdown unwrap. If the source has a ```skillscript or
+  // ```skill fenced block, parse the block's contents; otherwise parse
+  // the whole source as raw. Lenient by design: no error on missing
+  // fence so existing pure-code files continue to work unchanged.
+  // Cold authors who write markdown prose around their skill code get
+  // their code extracted automatically.
+  const extracted = extractSkillFromMarkdown(source);
+  const effectiveSource = extracted !== null ? extracted : source;
+  const lines = foldQuotedContinuations(effectiveSource.split("\n"));
   const result: ParsedSkill = {
     name: null,
     description: null,
@@ -701,6 +752,7 @@ export function parse(source: string): ParsedSkill {
     outputs: [],
     deliveryContext: null,
     templates: [],
+    autonomous: null,
     parseErrors: [],
   };
   const tabLines = findTabIndentedLines(source);
@@ -755,6 +807,16 @@ export function parse(source: string): ParsedSkill {
         } else {
           result.parseErrors.push(`\`# Status:\` value must be 'Draft', 'Approved', or 'Disabled' (got '${value}')`);
         }
+      } else if (key === "autonomous") {
+        // v0.4.2 — declarative authorship intent marker for unattended-
+        // execution skills. Today silences `unconfirmed-mutation` lint;
+        // the header is a category marker, future rules + scheduling +
+        // discovery can hook into the same field. Per Perry 8a7356dc /
+        // efad035f.
+        const lower = value.toLowerCase();
+        if (lower === "true") result.autonomous = true;
+        else if (lower === "false") result.autonomous = false;
+        else result.parseErrors.push(`\`# Autonomous:\` value must be 'true' or 'false' (got '${value}')`);
       } else if (key === "timeout") {
         // Per lesson ab6c19db: defer integer validation when value contains
         // `$(VAR)` ref. Runtime resolves via resolveIntParam at op dispatch.
@@ -921,6 +983,16 @@ export function parse(source: string): ParsedSkill {
       const colonIdx = line.indexOf(":");
       if (colonIdx === -1) continue;
       const name = line.slice(0, colonIdx).trim();
+      // v0.4.2 — strict-target-detection. Target names follow the
+      // canonical identifier shape `[A-Za-z_][\w-]*`. Lines like
+      // `## Use this:` or `Note that:` look like targets to the naive
+      // colon-finder but are actually markdown prose. Silently treat
+      // non-conforming names as comments instead of misparsing them
+      // as malformed target declarations (the original cold-author
+      // footgun from `fbf10206`). Pairs with markdown-extraction:
+      // even without a fenced block, prose lines no longer cascade
+      // into missing-dep errors.
+      if (!/^[A-Za-z_][\w-]*$/.test(name)) continue;
       let depsStr = line.slice(colonIdx + 1).trim();
       // Accept `target: needs: dep1 dep2` form per language reference §1
       // overview ("declares targets and their dependencies (`needs:` keyword)").

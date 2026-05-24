@@ -1,5 +1,87 @@
 # Changelog
 
+## 0.4.2 — 2026-05-24
+
+**Markdown support + strict-target detection + `# Autonomous: true`
+header.** Closes the cold-author footgun where `.skill.md` files with
+markdown prose around the skill code triggered misleading
+`missing-dependency` cascade errors (`fbf10206`). Adds the canonical
+declarative marker for autonomous-execution skills.
+
+Spec: Perry approval `08a08316` + amendment `f352413d` + final
+greenlight `efad035f`.
+
+### Added
+
+- **Markdown extraction at parser layer** — `parse()` scans the
+  source for the first ` ```skillscript ` or ` ```skill ` fenced block
+  and parses its contents. Cold-author LLMs writing markdown prose
+  around their skill code get extraction automatically. Lives in the
+  parser, not the skill store — clean layering per Scott's read
+  ("storage shouldn't be the format-dispatch layer").
+
+  **Lenient by design**: if no fenced block is found, the whole source
+  parses as raw (existing behavior). Backward-compatible with every
+  existing `.skill.md` file — no migration, no breakage. The fenced-
+  block convention is the *recommended* shape for files with prose;
+  pure-code files keep working as-is.
+
+  ```
+  # Welcome
+  Use this skill for the morning sweep.
+  
+  ```skillscript
+  # Skill: morning-sweep
+  # Status: Approved
+  run:
+      ! morning
+  default: run
+  \`\`\`
+  ```
+
+- **Strict-target-detection** — target declaration lines now require
+  `<ident>:` shape (matching `[A-Za-z_][\w-]*`). Prose lines like
+  `## Use this:` or `Note (important):` are silently treated as
+  comments instead of misread as malformed target declarations. Pairs
+  with markdown extraction: even without a fenced block, prose lines
+  no longer cascade into misleading missing-dep errors.
+
+- **`# Autonomous: true | false` header** — declarative authorship
+  intent marker for unattended-execution skills (cron-fired, agent-
+  fired, etc.). Today silences `unconfirmed-mutation` lint warnings
+  for the whole skill (since the user-confirmation pattern doesn't
+  apply to autonomous skills). Implemented as a category marker on
+  `ParsedSkill.autonomous` so future rules + scheduling defaults +
+  discovery surfaces can hook into the same field without breaking-
+  change — per Perry's framing in `efad035f`.
+
+### Fixed
+
+- **`unconfirmed-mutation` lint conditional on `# Autonomous`** —
+  pre-existing rule from v0.2.11 (`Bug 6`) now properly distinguishes
+  interactive skills from autonomous ones. Cold-author skills that
+  legitimately invoke mutating tools without `??` confirmation
+  (cron-fired log-monitoring → YouTrack issue creation, etc.) declare
+  intent via the header instead of seeing false-positive warnings.
+
+### Implementation notes
+
+- **Parser-layer extraction** matters because file-extension dispatch
+  (the rejected alternative path) would have coupled the skill store
+  to markdown semantics. Storage stays format-agnostic; parser handles
+  the markdown wrapper concern locally. No skill store changes in this
+  release.
+
+- **Tests:** 23 new across `tests/v0.4.2-autonomous.test.ts` (10 —
+  header recognition + lint conditional + help-content) and
+  `tests/v0.4.2-markdown.test.ts` (13 — extractor + parse integration +
+  strict-target-detection + end-to-end cold-author footgun closure).
+  Total 965 passing in the suite (3 long-skip browser dogfood).
+
+- **No LOC ceiling nudge.** 6593/6600 — under by 7. The ergonomic
+  fixes are small enough to fit in the v0.4.1 ceiling without
+  expansion.
+
 ## 0.4.1 — 2026-05-24
 
 **`RemoteMcpConnector` + per-connector tool allowlist + YouTrack proving
