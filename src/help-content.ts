@@ -108,30 +108,34 @@ foreach M in \${MEMORIES}:
 
 \`\`\`
 # Skill: morning-showstopper-sweep
-# Description: Cron-fired pre-triage; delivers triaged showstoppers to oncall agent via memory handoff
+# Description: Cron-fired pre-triage; delivers triaged showstoppers to oncall agent via prompt-context channel
 # Status: Approved
+# Autonomous: true
 # Vars: PROJECT=INFRA
 # Triggers: cron: 0 8 * * MON-FRI
+# Output: prompt-context: oncall
 
 run:
     $ ticketing_search query="project:\${PROJECT} severity:showstopper state:Open" limit=20 -> ISSUES
 
-    $set REPORT = "Morning showstoppers (\${ISSUES.totalCount}):\\n"
+    emit(text="Morning showstoppers for \${PROJECT} — \${ISSUES.totalCount} open:")
+    emit(text="")
     foreach ISSUE in \${ISSUES.items}:
         $ llm prompt="Two-line triage hypothesis for: \${ISSUE.summary}" -> ANALYSIS
-        $append REPORT <line>## \${ISSUE.id}: \${ISSUE.summary} — \${ANALYSIS}</line>
-
-    $ memory_write content="\${REPORT}" addressed_to="oncall" tags="morning-sweep" approved="cron-fired daily roundup" -> SWEEP_ID
-    emit(text="Roundup filed as \${SWEEP_ID}")
+        emit(text="## \${ISSUE.id}: \${ISSUE.summary}")
+        emit(text="\${ANALYSIS}")
+        emit(text="")
 
 default: run
 \`\`\`
 
 What this example demonstrates:
 - **Trigger** — cron at 8am weekdays
-- **Process** — \`$ ticketing_search\` MCP dispatch (substrate-portable: adopters wire whatever ticketing connector they have), \`foreach\` iteration with per-item \`$ llm\` sub-classification, \`$append\` building the report string
-- **Deliver** — \`$ memory_write\` with \`addressed_to=\` for the oncall mailbox, plus \`emit(text=...)\` confirmation receipt
-- **Authorization** — \`approved="..."\` kwarg authorizes the mutation without needing \`# Autonomous: true\` or a preceding \`ask(...)\` step
+- **Process** — \`$ ticketing_search\` MCP dispatch (substrate-portable: adopters wire whatever ticketing connector they have), \`foreach\` iteration with per-item \`$ llm\` sub-classification
+- **Deliver** — \`emit(text=...)\` per line accumulates as prompt-context, routed to the on-call agent via the \`# Output: prompt-context: oncall\` channel declaration
+- **Authorization** — \`# Autonomous: true\` declares this skill cron-fired and unattended; mutation ops within are silenced from the user-confirmation lint
+
+**Pattern note:** prefer \`emit(text="...")\` per line over building a multi-line accumulator string with \`$append\`. The runtime threads emissions into prompt-context naturally, and the per-line shape is what cold authors reach for. Multi-line string accumulators are a real pattern for file-writing scenarios; emit is the natural choice for prompt-context delivery.
 
 Use \`help({topic: "ops"})\`, \`help({topic: "frontmatter"})\`, \`help({topic: "examples"})\`,
 \`help({topic: "connectors"})\`, or \`help({topic: "lint-codes"})\` for deeper sections.
@@ -139,22 +143,123 @@ Use \`help({topic: "ops"})\`, \`help({topic: "frontmatter"})\`, \`help({topic: "
 **Note on legacy syntax.** Legacy symbol-form ops (\`~\`, \`>\`, \`@\`, \`!\`, \`??\`, \`&\`) and \`$(VAR)\` substitution continue to compile during the v0.7.x grace period with tier-2 deprecation warnings. CHANGELOG.md \`## 0.7.0 — Migration\` documents the rewrite rules.
 `;
 
-const OPS = `# Op symbols — full reference
+const OPS = `# Ops reference — v0.7.0 canonical surface
 
-## Dispatch ops (bind a result)
+Three op classes, two grammars:
 
-### \`$\` — MCP tool invocation
+| Class | Shape | When you reach for it |
+|---|---|---|
+| **Mutation statements** | \`$verb VAR = value\` / \`$verb VAR <value>\` | Bind / mutate a named variable in scope |
+| **Runtime-intrinsic function-calls** | \`verb(kwarg=value, ...) [-> BINDING]\` | Language-intrinsic side-effects: emit, ask, file I/O, shell, composition |
+| **External MCP dispatch** | \`$ <connector> kwarg=value, ... [-> BINDING]\` | Any tool resolved through \`connectors.json\` (LLM calls, memory queries, business tools) |
+
+The \`$\` prefix marks **state-affecting** ops (mutation OR external dispatch). Function-call shape marks **language-intrinsic** ops the runtime knows directly. Legacy symbol forms (\`~\` / \`>\` / \`@\` / \`!\` / \`??\` / \`&\`) compile during the v0.7.x grace period with tier-2 \`deprecated-symbol-op\` warnings.
+
+## Class 1: Mutation statements
+
+### \`$set VAR = value\`
+
+Bind a variable; runtime resolves \`\${REF}\` substitutions in the RHS at bind time (v0.5.0). Value can be a literal, a \`\${REF}\` interpolation, or a JSON literal (object / array / bool / null).
+
+\`\`\`
+$set GREETING = "Hello, \${USER}!"
+$set ITEMS = []
+$set CONFIG = {"timeout": 30, "retries": 3}
+\`\`\`
+
+### \`$append VAR <value>\`
+
+Append to a binding. v0.5.0 type-dispatches on the existing target:
+- **List-typed target** → push (\`$set FOUND = []\` then \`$append FOUND \${ID}\`)
+- **String-typed target** → concatenate (\`$set REPORT = ""\` then \`$append REPORT "more text"\`)
+
+Lint guards: \`uninitialized-append\` (no \`$set\` / \`# Vars:\` init); \`foreach-local-accumulator-target\` (init inside the same foreach as the append — silently loses data each iteration); \`append-to-non-list\` (numeric/boolean/null init).
+
+\`\`\`
+walk:
+    $set SEEN = []
+    $set REPORT = ""
+    foreach M in \${MESSAGES}:
+        if \${M.id} not in \${SEEN}:
+            $append SEEN \${M.id}
+            $append REPORT "\\n - \${M.id}: \${M.summary}"
+\`\`\`
+
+The append mutates the outer-scope binding (unlike \`$set\`, which is loop-local inside \`foreach\`).
+
+## Class 2: Runtime-intrinsic function-calls
+
+Closed set: \`emit\`, \`ask\`, \`inline\`, \`execute_skill\`, \`shell\`, \`file_read\`, \`file_write\`. Unknown function-call names fire \`unknown-runtime-op\` tier-1 with remediation "if this is an MCP tool, use \`$ tool args -> R\` shape instead."
+
+### \`emit(text="...")\` — output to skill consumer
+
+One-line emission. \`\${VAR}\` substitutes. No result binding by default.
+
+\`\`\`
+emit(text="Hello, \${NAME}!")
+emit(text="\${ISSUES.totalCount} open showstoppers in \${PROJECT}")
+\`\`\`
+
+### \`ask(prompt="...") -> R\` — prompt the user
+
+Interactive only. Autonomous-mode dispatch fails with a clean error (use \`# Autonomous: true\` skill flag to disable the gate).
+
+\`\`\`
+ask(prompt="Proceed with auto-assignment for P0/P1?") -> APPROVAL
+\`\`\`
+
+### \`shell(command="...", unsafe=true) [-> R]\` — local subprocess
+
+Default mode: structural spawn — one binary, no shell metacharacters, no pipes/redirects. \`unsafe=true\` opts into full bash; tier-2 lint warns.
+
+\`\`\`
+shell(command="git status --porcelain") -> STATUS
+shell(command="echo hi && date +%Y", unsafe=true) -> OUT
+\`\`\`
+
+### \`file_read(path="...") -> R\` — read file contents
+
+Reads via Node \`fs.readFile\`. Substitutes \`\${VAR}\` in the path. Optional \`(fallback: "...")\` trailer binds when read fails. **Container note:** when the runtime is sandboxed (Docker, container deployment), the runtime's filesystem is namespace-isolated from the author's host — \`/tmp/x\` in the skill maps to the runtime's \`/tmp/x\`, not the host's. Use absolute paths under a known shared volume for cross-namespace work.
+
+\`\`\`
+file_read(path="/var/reports/today.md") -> REPORT (fallback: "no report")
+\`\`\`
+
+### \`file_write(path="...", content="...", approved="...")\` — write file contents
+
+Writes via Node \`fs.writeFile\`. Auto-creates parent directories. Substitutes \`\${VAR}\` in path + content. The \`approved="reason"\` kwarg authorizes the mutation per-op (any non-empty string; presence is what matters); skip when \`# Autonomous: true\` skill flag is declared. Same container FS-isolation caveat as \`file_read\` — the runtime's filesystem ≠ the author's.
+
+\`\`\`
+file_write(path="/var/reports/sweep-\${DATE}.md", content="\${REPORT}", approved="nightly cron deliverable")
+\`\`\`
+
+### \`inline(skill="...")\` — compile-time skill composition
+
+References a \`# Type: data\` skill; the compiler inlines its emitted text at compile time so the compiled artifact is a single resolved document.
+
+\`\`\`
+inline(skill="common-prelude")
+\`\`\`
+
+### \`execute_skill(skill_name="...", ...kwargs) -> R\` — runtime skill composition
+
+Invokes another stored skill end-to-end against the runtime's connectors. Returns the full execution record (final vars, transcript, outputs). Access via \`\${R.final_vars.FIELD}\`, \`\${R.transcript}\`, etc.
+
+\`\`\`
+execute_skill(skill_name="extract-json-number", JSON_BLOB="\${RAW}", FIELD_PATH="total_count") -> RESULT
+emit(text="Extracted: \${RESULT.final_vars.VALUE|trim}")
+\`\`\`
+
+## Class 3: External MCP dispatch
 
 \`\`\`
 $ tool_name arg1=value1 arg2=value2 -> VAR [(fallback: "default")]
 $ connector.tool_name args -> VAR
 \`\`\`
 
-Calls an MCP tool. Without an explicit connector prefix, routes to the
-\`primary\` MCP connector. Fallback binds when dispatch errors.
+Resolves the tool name against the adopter's \`connectors.json\`. Flat form (\`$ youtrack_search ...\`) uses the connector that owns the tool; dotted form (\`$ youtrack.search ...\`) routes explicitly. Fallback binds when dispatch errors. The substrate-specific shapes — LLM calls (\`$ llm\`), memory queries (\`$ memory\`), memory writes (\`$ memory_write\`), business tools — all use this dispatch.
 
-**Kwarg value grammar.** Each \`key=value\` token follows a small literal
-grammar:
+**Kwarg value grammar.** Each \`key=value\` token follows a small literal grammar:
 
 | Form | Example | Type |
 |------|---------|------|
@@ -165,123 +270,37 @@ grammar:
 | Null | \`assignee=null\` | null |
 | JSON array | \`tags=["a","b"]\` | array \`["a","b"]\` |
 | JSON object | \`payload={"k":"v"}\` | object \`{"k":"v"}\` |
-| Substitution | \`id=$(BUG_ID)\` | resolved at dispatch time |
-| Quoted substitution | \`query="$(QUERY)"\` | quoted resolution (recommended when value may contain whitespace) |
+| Substitution | \`id=\${BUG_ID}\` | resolved at dispatch time |
+| Quoted substitution | \`query="\${QUERY}"\` | quoted resolution (recommended when value may contain whitespace) |
 
-**v0.5.0 lint warning** \`unquoted-substitution-in-kwarg-value\` fires when
-an unquoted \`$(VAR)\` substitution sits in kwarg-value position and VAR's
-binding origin suggests whitespace (\`# Vars:\` default with whitespace,
-\`$set\` literal with whitespace, \`~\`/\`$\`/\`>\` op output, or foreach
-iterator). Wrap as \`key="$(VAR)"\` to prevent silent arg truncation if
-the resolved value contains spaces — the MCP arg tokenizer respects
-quoted regions.
+**v0.5.0 lint warning** \`unquoted-substitution-in-kwarg-value\` fires when an unquoted \`\${VAR}\` sits in kwarg-value position and VAR's binding origin suggests whitespace. Wrap as \`key="\${VAR}"\` to prevent silent arg truncation if the resolved value contains spaces.
 
-**Built-in (v0.2.8):** \`$ execute_skill skill_name=child -> RESULT\` invokes
-another stored skill end-to-end without requiring an MCP connector — pass
-input vars as additional kwargs.
-
-**Built-in (v0.3.3):** \`$ json_parse $(VAR) -> P\` parses the input as JSON
-and binds the structured value to \`P\`. Dotted descent via \`$(P.field)\`
-works in conditions and emit — no filter+field grammar gymnastics.
+**\`$ json_parse \${VAR} -> P\`** (v0.3.3) parses input as JSON and binds the structured value to \`P\`. Dotted descent via \`\${P.field}\` works in conditions and emit. Throws on malformed JSON (caught by \`else:\` / \`# OnError:\`).
 
 \`\`\`
 # Vars: PAYLOAD={"status":"ok","count":3}
 
 read:
-    $ json_parse $(PAYLOAD) -> P
-    if $(P.status) == "ok" and $(P.count) > "0":
-        ! processing $(P.count) items
+    $ json_parse \${PAYLOAD} -> P
+    if \${P.status} == "ok" and \${P.count} > "0":
+        emit(text="processing \${P.count} items")
 \`\`\`
 
-Throws on malformed JSON (caught by \`else:\` / \`# OnError:\`). Replaces
-the v0.3.2 \`|json_parse\` filter, which couldn't propagate parsed
-structure through \`.field\` access.
+## Substrate-portable LLM + memory dispatch
 
-### \`~\` — LocalModel call
+The canonical paths for LLM calls and memory queries are MCP dispatch through adopter-wired connectors. Connector names are convention — \`llm\` / \`memory\` / \`memory_write\` are descriptive, but adopters wire whatever names match their substrate.
 
 \`\`\`
-~ prompt="..." model=qwen maxTokens=400 -> VAR [(fallback: "...")]
+$ llm prompt="Classify priority: \${ISSUE.summary}" -> VERDICT
+$ memory mode=fts query="recent incidents" limit=10 -> CONTEXT
+$ memory_write content="\${REPORT}" addressed_to="oncall" tags="morning-sweep" approved="cron deliverable" -> R
 \`\`\`
 
-LLM call against a configured LocalModel. \`model\` selects the named model;
-default is \`default\`. Multi-line prompts via \`"..."\` are supported (parser
-folds quoted-string continuations).
-
-### \`>\` — Memory retrieval
-
-\`\`\`
-> mode=fts query="..." limit=20 -> VAR [(fallback: "...")]
-\`\`\`
-
-Queries the configured MemoryStore. \`mode\` is substrate-specific
-(\`fts\` / \`semantic\` / \`rerank\` are common). \`limit\` is required.
-
-### \`@\` — Shell exec
-
-\`\`\`
-@ command arg1 arg2 -> VAR [(fallback: "...")]
-@ unsafe full-shell-command -> VAR
-\`\`\`
-
-Default mode: structural spawn — one binary, no shell metacharacters,
-no pipes/redirects. \`@ unsafe\` opts into full bash; lint-flags tier-2.
-
-## Emission + control ops
-
-### \`!\` — Emit text
-
-\`\`\`
-! Hello, $(NAME)!
-\`\`\`
-
-One-line literal emission. Variables substitute. No result binding.
-
-### \`??\` — Ask user
-
-\`\`\`
-?? Are you sure? -> CONFIRM
-\`\`\`
-
-Interactive only. Autonomous-mode dispatch fails with a clean error.
-
-### \`$set\` — Explicit binding
-
-\`\`\`
-$set NAME=value
-$set NAME=$(OTHER_VAR|trim)
-\`\`\`
-
-### \`$append\` — Accumulator (v0.3.0)
-
-\`\`\`
-$append VAR <value>
-\`\`\`
-
-Single-value append to a list-typed VAR. The target must be initialized in an enclosing scope before the append fires:
-
-\`\`\`
-walk:
-    $set FOUND = []
-    foreach M in $(MESSAGES):
-        if $(M.id) not in $(FOUND):
-            $append FOUND $(M.id)
-            ! NEW: $(M.id)
-\`\`\`
-
-The append mutates the outer-scope binding (unlike \`$set\`, which is loop-local inside \`foreach\`). Lint catches: missing init (\`uninitialized-append\`), init inside the same foreach as the append (\`foreach-local-accumulator-target\` — would silently lose data each iteration), init pointing at a non-list value (\`append-to-non-list\`). List-only in v0.3.0 — string concat and map-shaped accumulation deferred.
-
-### \`&\` — Inline data-skill
-
-\`\`\`
-& source-skill-name arg=value -> VAR
-\`\`\`
-
-References a \`# Type: data\` skill; the compiler inlines its emitted text
-at compile time so the compiled artifact is a single resolved document.
+**Today's reality (v0.7.x grace period).** No \`llm\` or \`memory\` MCP connector ships by default — bridge classes (\`LocalModelMcpConnector\` + \`MemoryStoreMcpConnector\`) land in v0.7.2. Until then, the legacy \`~ prompt=...\` and \`> mode=... query=...\` ops continue to dispatch through the bundled \`LocalModel\` / \`MemoryStore\` contracts (Ollama + SQLite by default) — v0.7.x grace.
 
 ## Pipe filters
 
-Apply on \`$(VAR|filter)\` references; chain left-to-right.
+Apply on \`\${VAR|filter}\` references; chain left-to-right.
 
 | Filter | Effect |
 |---|---|
@@ -290,33 +309,29 @@ Apply on \`$(VAR|filter)\` references; chain left-to-right.
 | \`json\` | JSON.stringify |
 | \`trim\` | Whitespace trim |
 | \`length\` | Array element count or string char count (v0.2.5) |
-| \`fallback:"X"\` | (v0.5.0) Coalesce-on-missing: when the upstream ref is unresolved, substitute literal \`X\` and continue the chain. Positional — \`$(VAR|fallback:"-"|upper)\` defaults-then-uppercases. Named to align with op-level \`(fallback: ...)\` vocabulary. |
-| \`isodate\` | (v0.5.0) Format an epoch timestamp (ms or sec, auto-detected by magnitude) as ISO-8601. Passes already-ISO strings through unchanged. \`$(EVENT.fired_at_unix|isodate)\`. |
+| \`fallback:"X"\` | (v0.5.0) Coalesce-on-missing: when the upstream ref is unresolved, substitute literal \`X\` and continue the chain. Positional — \`\${VAR|fallback:"-"|upper}\` defaults-then-uppercases. |
+| \`isodate\` | (v0.5.0) Format an epoch timestamp (ms or sec, auto-detected by magnitude) as ISO-8601. Passes already-ISO strings through unchanged. \`\${EVENT.fired_at_unix|isodate}\`. |
 
-**v0.5.0 $(NOW) note.** \`$(NOW)\` now substitutes as an ISO-8601 string per
-the documented spec (was: raw epoch ms pre-v0.5.0 — a docs/runtime drift
-identified by R3 minion 2). Numeric epoch values remain available as
-\`$(EVENT.fired_at)\` (ms) and \`$(EVENT.fired_at_unix)\` (sec).
+**\`\${NOW}\` ambient ref** substitutes as an ISO-8601 string per v0.5.0 spec. Numeric epoch values remain available as \`\${EVENT.fired_at}\` (ms) and \`\${EVENT.fired_at_unix}\` (sec).
 
 ## Conditional grammar
 
 \`\`\`
-if $(VAR):                            ← truthy check
-if not $(VAR):                        ← falsy check (v0.3.2)
-if $(VAR) == "literal":               ← equality vs literal
-if $(VAR) == $(OTHER):                ← equality vs ref
-if $(VAR) != "literal":               ← inequality
-if $(N) < "10":                       ← numeric comparison (v0.2.5)
-if $(N) >= $(THRESHOLD):              ← numeric vs ref
-if $(M.id) in $(SEEN):                ← set membership
-if $(M.id) not in $(SEEN):
-if $(A) == "ok" and $(B) == "ok":     ← logical AND (v0.3.2)
-if $(A) == "urgent" or $(B) > "5":    ← logical OR (v0.3.2)
-if not $(A) and ($(B) or $(C)):       ← compound with parens + not (v0.3.2)
+if \${VAR}:                            ← truthy check
+if not \${VAR}:                        ← falsy check (v0.3.2)
+if \${VAR} == "literal":               ← equality vs literal
+if \${VAR} == \${OTHER}:                ← equality vs ref
+if \${VAR} != "literal":               ← inequality
+if \${N} < "10":                       ← numeric comparison (v0.2.5)
+if \${N} >= \${THRESHOLD}:              ← numeric vs ref
+if \${M.id} in \${SEEN}:                ← set membership
+if \${M.id} not in \${SEEN}:
+if \${A} == "ok" and \${B} == "ok":     ← logical AND (v0.3.2)
+if \${A} == "urgent" or \${B} > "5":    ← logical OR (v0.3.2)
+if not \${A} and (\${B} or \${C}):      ← compound with parens + not (v0.3.2)
 \`\`\`
 
-Branches via \`if:\` / \`elif COND:\` / \`else:\`. The \`else:\` after a target
-body is a separate error-handler block (distinguished by indentation scope).
+Branches via \`if:\` / \`elif COND:\` / \`else:\`. The \`else:\` after a target body is a separate error-handler block (distinguished by indentation scope).
 
 ### Compound conditions (v0.3.2)
 
@@ -324,7 +339,23 @@ body is a separate error-handler block (distinguished by indentation scope).
 
 - **Precedence** (tight → loose): comparison ops (\`==\`/\`<\`/etc.) > \`not\` > \`and\` > \`or\`
 - **Parentheses** override precedence: \`(a or b) and c\`
-- **Short-circuit evaluation**: AND skips RHS if LHS is false; OR skips RHS if LHS is true. Useful for the validate-then-access pattern — \`if $(X) == "ok" and $(X.field) ...\` won't error on the field access when \`$(X) == "ok"\` is false.
+- **Short-circuit evaluation**: AND skips RHS if LHS is false; OR skips RHS if LHS is true. Useful for the validate-then-access pattern — \`if \${X} == "ok" and \${X.field} ...\` won't error on the field access when \`\${X} == "ok"\` is false.
+
+## Legacy syntax (grace period — tier-2 deprecated)
+
+| Legacy | Canonical |
+|---|---|
+| \`! text\` | \`emit(text="text")\` |
+| \`?? "prompt" -> R\` | \`ask(prompt="prompt") -> R\` |
+| \`@ cmd args [-> R]\` | \`shell(command="cmd args") [-> R]\` |
+| \`@ unsafe cmd\` | \`shell(command="cmd", unsafe=true)\` |
+| \`& skill-name\` | \`inline(skill="skill-name")\` |
+| \`~ prompt="..." -> R\` | \`$ llm prompt="..." -> R\` (requires \`llm\` MCP connector wired — v0.7.2 bridge classes) |
+| \`> mode=... query=... -> R\` | \`$ memory mode=... query=... -> R\` (requires \`memory\` MCP connector wired) |
+| \`$(VAR)\` | \`\${VAR}\` |
+| \`(approved: "reason")\` trailer | \`approved="reason"\` kwarg |
+
+All legacy forms compile during v0.7.x with tier-2 \`deprecated-symbol-op\` / \`deprecated-substitution-shape\` warnings. Tier-1 promotion (refuse-to-compile) lands in v0.8/v0.9.
 `;
 
 const FRONTMATTER = `# Frontmatter headers — full reference
@@ -339,7 +370,7 @@ Skill files open with \`# Key: value\` headers. Order isn't significant.
 ## Common
 
 - \`# Description: <prose>\` — human-readable explanation; surfaces in dashboards.
-- \`# Type: procedural | data\` — \`procedural\` (default) for runtime-fired skills; \`data\` for compile-time-inlined fragments referenced by \`&\` ops.
+- \`# Type: procedural | data\` — \`procedural\` (default) for runtime-fired skills; \`data\` for compile-time-inlined fragments referenced by \`inline(skill="...")\` (canonical) or legacy \`& <skill-name>\` ops.
 - \`# Vars: NAME=default, OTHER\` — declared variables. \`NAME=default\` provides a default; bare \`NAME\` is required at invocation.
 - \`# Triggers: cron: 0 9 * * *, session: start\` — autonomous-dispatch sources. Comma-separated entries split by source-keyword boundary; cron expressions with commas (\`30,45 9 * * 1-5\`) parse correctly.
 - \`# Output: text | slack: chan | prompt-context: agent | template: agent | file: path | card: id | none\` — output routing. **Value shape per kind (v0.5.0 clarification):** \`prompt-context:\` / \`template:\` / \`slack:\` / \`card:\` default to **joined emissions string** (the \`!\` lines concatenated with newlines) — these are human-readable delivery surfaces. \`text\` / \`file:\` default to the **last-bound variable value** (structured), falling back to the emissions array when no var was bound. If your skill emits multiple \`!\` lines and a downstream consumer only sees the final tool output via \`outputs.text\`, that's the structured-default behavior — use \`# Output: prompt-context: <agent>\` (or another text-coerced kind) to publish the joined emissions instead.
@@ -411,7 +442,7 @@ $(VAR.field|filter) field-access then filter
 Unresolved refs: tier-1 \`undeclared-var\` at compile, \`UnresolvedVariableError\` at runtime.
 `;
 
-const EXAMPLES = `# Three canonical worked skills
+const EXAMPLES = `# Five canonical worked skills (v0.7.0+ canonical surface)
 
 ## 1. Minimal (single target, no dependencies)
 
@@ -422,13 +453,13 @@ const EXAMPLES = `# Three canonical worked skills
 # Vars: WHO=world
 
 greet:
-    ! Hello, $(WHO)!
-    ! Welcome to Skillscript.
+    emit(text="Hello, \${WHO}!")
+    emit(text="Welcome to Skillscript.")
 
 default: greet
 \`\`\`
 
-Demonstrates: required headers, variable defaults, \`!\` emission with substitution.
+Demonstrates: required headers, variable defaults, \`emit(text="...")\` with \`\${VAR}\` substitution.
 
 ## 2. Cron-fired numeric threshold + count
 
@@ -436,25 +467,27 @@ Demonstrates: required headers, variable defaults, \`!\` emission with substitut
 # Skill: queue-length-monitor
 # Description: Count pending items in a queue and alert when the count exceeds threshold
 # Status: Approved
+# Autonomous: true
 # Vars: QUEUE_PATH=/var/queue/pending.json, THRESHOLD=10
 # Triggers: cron: */5 * * * *
 
 fetch:
-    @ cat $(QUEUE_PATH) -> ITEMS (fallback: "[]")
+    file_read(path="\${QUEUE_PATH}") -> ITEMS_JSON (fallback: "[]")
+    $ json_parse \${ITEMS_JSON} -> ITEMS
 
 evaluate:
     needs: fetch
-    if $(ITEMS|length) > $(THRESHOLD):
-        ! Queue backlog: $(ITEMS|length) items pending (threshold $(THRESHOLD)). Action required.
+    if \${ITEMS|length} > \${THRESHOLD}:
+        emit(text="Queue backlog: \${ITEMS|length} items pending (threshold \${THRESHOLD}). Action required.")
     else:
-        ! Queue healthy: $(ITEMS|length) items pending (under $(THRESHOLD)).
+        emit(text="Queue healthy: \${ITEMS|length} items pending (under \${THRESHOLD}).")
 
 default: evaluate
 \`\`\`
 
-Demonstrates: \`# Triggers:\` cron, shell \`@\` op with fallback, \`needs:\` body-line dep, numeric comparison, \`|length\` filter, \`if\` / \`else\`.
+Demonstrates: \`# Triggers:\` cron, \`# Autonomous: true\` for unattended skills, \`file_read\` with fallback, \`$ json_parse\` for structured parsing, \`needs:\` body-line dep, numeric comparison, \`|length\` filter, \`if\` / \`else\`.
 
-## 3. LocalModel branching with agent delivery
+## 3. LLM branching with agent delivery
 
 \`\`\`
 # Skill: classify-support-ticket
@@ -466,21 +499,21 @@ Demonstrates: \`# Triggers:\` cron, shell \`@\` op with fallback, \`needs:\` bod
 # Output: prompt-context: oncall
 
 classify:
-    ~ prompt="Classify this support ticket as one of: 'critical', 'normal', 'low'. Reply with only the label. Ticket: $(TICKET_BODY)" model=qwen -> VERDICT
+    $ llm prompt="Classify this support ticket as one of: 'critical', 'normal', 'low'. Reply with only the label. Ticket: \${TICKET_BODY}" -> VERDICT
 
 route: classify
-    if $(VERDICT|trim) == "critical":
-        ! CRITICAL ticket needs immediate attention:
-        ! $(TICKET_BODY)
-    elif $(VERDICT|trim) == "normal":
-        ! Normal-priority ticket queued.
+    if \${VERDICT|trim} == "critical":
+        emit(text="CRITICAL ticket needs immediate attention:")
+        emit(text="\${TICKET_BODY}")
+    elif \${VERDICT|trim} == "normal":
+        emit(text="Normal-priority ticket queued.")
     else:
-        ! Low-priority ticket logged.
+        emit(text="Low-priority ticket logged.")
 
 default: route
 \`\`\`
 
-Demonstrates: \`~\` LocalModel op, named model selection, \`|trim\` filter on LLM output, ref-vs-literal comparison, agent delivery via \`prompt-context:\`, augmenting headers (\`# Delivery-context:\` + \`# Templates:\`).
+Demonstrates: \`$ llm\` MCP dispatch (substrate-portable — adopter wires their LLM substrate under the \`llm\` connector name), \`|trim\` filter on LLM output, ref-vs-literal comparison, agent delivery via \`prompt-context:\`, augmenting headers (\`# Delivery-context:\` + \`# Templates:\`).
 
 ## 4. Composition — orchestrator invoking child skills
 
@@ -491,136 +524,153 @@ Demonstrates: \`~\` LocalModel op, named model selection, \`|trim\` filter on LL
 # Vars: USER_NAME=Scott
 
 gather:
-    $ execute_skill skill_name=calendar-today USER=$(USER_NAME) -> CAL (fallback: "(no calendar data)")
-    $ execute_skill skill_name=mailbox-triage USER=$(USER_NAME) -> MAIL (fallback: "(mailbox empty)")
-    $ execute_skill skill_name=weather-summary -> WX (fallback: "(weather unavailable)")
+    execute_skill(skill_name="calendar-today", USER="\${USER_NAME}") -> CAL (fallback: "(no calendar data)")
+    execute_skill(skill_name="mailbox-triage", USER="\${USER_NAME}") -> MAIL (fallback: "(mailbox empty)")
+    execute_skill(skill_name="weather-summary") -> WX (fallback: "(weather unavailable)")
 
 render: gather
-    ! Good morning, $(USER_NAME). Today:
-    ! • Calendar: $(CAL)
-    ! • Mailbox: $(MAIL)
-    ! • Weather: $(WX)
+    emit(text="Good morning, \${USER_NAME}. Today:")
+    emit(text="• Calendar: \${CAL}")
+    emit(text="• Mailbox: \${MAIL}")
+    emit(text="• Weather: \${WX}")
 
 default: render
 \`\`\`
 
-Demonstrates: in-skill \`$ execute_skill\` composition (each child runs through the runtime under a depth-counted chain), per-call \`(fallback: ...)\` for resilience, kwarg forwarding (\`USER=$(USER_NAME)\`), \`->\` binding child output for downstream reference.
+Demonstrates: \`execute_skill(...)\` runtime composition (each child runs through the runtime under a depth-counted chain), per-call \`(fallback: ...)\` for resilience, kwarg forwarding, \`->\` binding child output for downstream reference.
 
-## 5. Dedup-by-id with the accumulator (v0.3.0)
+## 5. Dedup-by-id with the accumulator (v0.3.0+)
 
 \`\`\`
 # Skill: dedup-walk
 # Description: Walk a result list, skip items whose id was already seen.
 # Status: Approved
+# Vars: TOPIC=infrastructure
 
 walk:
-    > mode=topical query="$(TOPIC)" limit=50 -> CANDIDATES
+    $ memory mode=topical query="\${TOPIC}" limit=50 -> CANDIDATES
     $set SEEN = []
-    foreach C in $(CANDIDATES):
-        if $(C.id) not in $(SEEN):
-            $append SEEN $(C.id)
-            ! NEW: $(C.id) — $(C.summary)
+    foreach C in \${CANDIDATES.items}:
+        if \${C.id} not in \${SEEN}:
+            $append SEEN \${C.id}
+            emit(text="NEW: \${C.id} — \${C.summary}")
         else:
-            ! dup: $(C.id)
-    ! Total novel items: $(SEEN|length)
+            emit(text="dup: \${C.id}")
+    emit(text="Total novel items: \${SEEN|length}")
 
 default: walk
 \`\`\`
 
-Demonstrates: \`$append\` accumulator pattern, \`$set SEEN = []\` init at the target body (before the foreach) so mutations persist across iterations, \`not in\` membership check against the accumulating list, \`|length\` filter on the final collected list. Pre-v0.3.0 this pattern was structurally unimplementable — \`$set\` inside foreach is loop-local, so the SEEN list reset every iteration.
+Demonstrates: \`$ memory\` MCP dispatch (substrate-portable memory query), \`$append\` accumulator pattern, \`$set SEEN = []\` init at the target body (before the foreach) so mutations persist across iterations, \`not in\` membership check against the accumulating list, \`|length\` filter on the final collected list. **Note** — most MCP memory tools wrap the array in an envelope object (e.g., \`{items: [...], hasNextPage}\`); the example assumes \`.items\` is the array field. Check your tool's response shape; tier-3 \`object-iteration-advisory\` lint helps when you forget the field accessor.
+
+## Triggered cron deliverable — memory handoff
+
+\`\`\`
+# Skill: morning-showstopper-sweep
+# Description: Cron pre-triage; delivers triaged showstoppers to oncall via prompt-context
+# Status: Approved
+# Autonomous: true
+# Vars: PROJECT=INFRA
+# Triggers: cron: 0 8 * * MON-FRI
+# Output: prompt-context: oncall
+
+run:
+    $ ticketing_search query="project:\${PROJECT} severity:showstopper state:Open" limit=20 -> ISSUES
+
+    emit(text="Morning showstoppers for \${PROJECT} — \${ISSUES.totalCount} open:")
+    foreach ISSUE in \${ISSUES.items}:
+        $ llm prompt="Two-line triage hypothesis for: \${ISSUE.summary}" -> ANALYSIS
+        emit(text="")
+        emit(text="## \${ISSUE.id}: \${ISSUE.summary}")
+        emit(text="\${ANALYSIS}")
+
+default: run
+\`\`\`
+
+Demonstrates: end-to-end trigger → process → deliver pattern. Trigger fires cron; process pulls data + sub-classifies each issue with \`$ llm\`; delivers via prompt-context channel (each \`emit(text=...)\` becomes a line in the agent's session-start context).
 `;
 
-const COMPOSITION = `# Composition
+const COMPOSITION = `# Composition — composing skills from other skills
 
-Skillscript has three composition primitives — all let one skill draw on another's output, with different semantics around when, where, and how the child runs.
+Skillscript has two composition primitives in v0.7.0+ canonical form. Both let one skill draw on another's output, with different semantics around when the child runs.
 
-## 1. \`& <skill-name>\` — data-skill inline (compile-time)
+## 1. \`inline(skill="<name>")\` — compile-time data-skill inline
 
 Inlines an *Approved data skill* into the host skill's compiled artifact at the call site. The data skill's body becomes part of the rendered prompt. Use for *static* knowledge or templated content (style guides, voice rules, runbooks).
 
 \`\`\`
 brief:
-    ~ prompt="$(VOICE_RULES) Now write a one-line status:" model=qwen -> RESULT
-    & voice-rules
+    $ llm prompt="\${VOICE_RULES} Now write a one-line status:" -> RESULT
+    inline(skill="voice-rules")
 \`\`\`
 
 - Resolved at \`compile()\` time — the data skill's \`content_hash\` is recorded in the host's provenance block.
 - Provenance lets \`skillfile audit\` detect stale recompiles when a referenced data skill changes.
-- The data skill must be marked \`# Skill-kind: data\` (or live in a path the SkillStore recognizes as data); otherwise it's treated as procedural and won't inline.
+- The data skill must be marked \`# Type: data\` (or live in a path the SkillStore recognizes as data); otherwise it's treated as procedural and won't inline.
 
-## 2. \`& invoke <skill-name>\` — runtime call (per-fire)
+## 2. \`execute_skill(skill_name="<child>", ...kwargs) -> R\` — runtime invocation
 
-Calls a procedural skill at runtime. Each call goes through the runtime under a depth-counted chain (default limit 5) — same recursion guard as Style 3 below.
-
-\`\`\`
-escalate:
-    & invoke notify-oncall
-\`\`\`
-
-- Child skill's outputs flow into the parent's variable scope.
-- Failures propagate as \`OpError\`s.
-
-## 3. \`$ execute_skill skill_name="<child>" ...kwargs -> VAR\` — in-skill execute (per-fire)
-
-The most general form: the host \`$\`-dispatches the literal tool name \`execute_skill\` (intercepted by the runtime, not sent to any MCP server). Same depth-counted chain as Style 2, plus full kwarg forwarding and \`-> VAR\` binding for downstream use.
+The general composition form: the host calls another skill at runtime, capturing its full execution record. Same depth-counted chain (default 5) as the recursion guard.
 
 \`\`\`
 gather:
-    $ execute_skill skill_name="calendar-today" USER=$(USER_NAME) -> CAL (fallback: "(no calendar data)")
-    $ execute_skill skill_name="mailbox-triage" inputs={"USER": "$(USER_NAME)"} -> MAIL
+    execute_skill(skill_name="calendar-today", USER="\${USER_NAME}") -> CAL (fallback: "(no calendar data)")
+    execute_skill(skill_name="mailbox-triage", inputs={"USER": "\${USER_NAME}"}) -> MAIL
 \`\`\`
 
-Two kwarg styles, both supported (v0.2.9 fix):
-- **Bare kwargs** — \`USER=$(USER_NAME)\` natural skill grammar
-- **\`inputs={...}\` JSON** — MCP-call parity, useful when forwarding many fields verbatim
+Two kwarg-forwarding styles, both supported (v0.2.9):
+- **Bare kwargs** — \`USER="\${USER_NAME}"\` natural skill grammar
+- **\`inputs={...}\` JSON** — useful when forwarding many fields verbatim
 
-The bound \`-> VAR\` carries the child's final emit through to the host's scope.
+The bound \`-> R\` carries the child's full execution record (final_vars, transcript, outputs) into the host's scope. Access via \`\${R.final_vars.FIELD}\`, \`\${R.transcript}\`, \`\${R.outputs.text}\`, etc.
 
 ## Limits & lint signals
 
-- **Recursion**: depth-5 chain by default (\`ExecuteSkillRecursionError\` if exceeded). Both \`& invoke\` and \`$ execute_skill\` share the counter.
-- **Lint** (\`unknown-skill-reference\`, tier-2 as of v0.3.1): \`& <name>\`, \`& invoke <name>\`, and \`$ execute_skill skill_name=<name>\` all validate the child skill exists in the SkillStore at compile time. Forward references are allowed: missing skills lint as a warning (not error), and the runtime throws \`MissingSkillReferenceError\` if still unresolved at execute time. Tier-3 \`deferred-skill-reference\` advisory confirms when the deferred-resolution path is engaged.
+- **Recursion**: depth-5 chain by default (\`ExecuteSkillRecursionError\` if exceeded).
+- **Lint** (\`unknown-skill-reference\`, tier-2 as of v0.3.1): both \`inline(skill="<name>")\` and \`execute_skill(skill_name="<name>", ...)\` validate the child exists in the SkillStore at compile time. Forward references are allowed: missing skills lint as warning (not error), runtime throws \`MissingSkillReferenceError\` if still unresolved at execute. Tier-3 \`deferred-skill-reference\` advisory confirms when the deferred-resolution path is engaged.
 - **Lint** (\`disabled-skill-reference\`, tier-1): any composition primitive pointing at a \`# Status: Disabled\` skill blocks compile.
 
 ## When to use which
 
 | Use case | Primitive |
 |---|---|
-| Static knowledge in a prompt | \`& <data-skill>\` |
-| Fire-and-forget child call | \`& invoke <skill>\` |
-| Child output bound into parent scope | \`$ execute_skill ... -> VAR\` |
-| Parallel orchestrators (v0.3.0 candidate — not yet shipped) | parked |
+| Static knowledge in a prompt | \`inline(skill="<data-skill>")\` |
+| Child output bound into parent scope | \`execute_skill(skill_name="<skill>", ...) -> R\` |
+
+## Legacy forms (grace period)
+
+- \`& <skill-name>\` → \`inline(skill="<skill-name>")\` (compile-time inline)
+- \`& invoke <skill-name>\` (removed concept) → \`execute_skill(skill_name="<skill-name>")\`
+- \`$ execute_skill skill_name="<child>" ... -> R\` → \`execute_skill(skill_name="<child>", ...) -> R\` (legacy MCP-dispatch shape still compiles during grace; canonical is the function-call shape)
 
 See \`help({topic: "examples"})\` example 4 for a worked orchestrator skill.
 `;
 
 const CONNECTORS_PROLOGUE = `# Connectors
 
-The runtime resolves \`$\` / \`~\` / \`>\` / \`# Output:\` dispatches through a
-typed registry of five contracts:
+Skillscript skills don't import packages — they invoke connectors. The runtime resolves dispatches through a typed registry of five contracts:
 
-| Contract | Purpose | Op |
+| Contract | Purpose | Op surface |
 |---|---|---|
-| SkillStore | Skill source persistence + status lifecycle | (implicit) |
-| MemoryStore | Knowledge retrieval | \`>\` |
-| LocalModel | LLM inference | \`~\` |
-| McpConnector | MCP tool dispatch | \`$\` |
-| AgentConnector | Deliver augment/template payloads | \`# Output: prompt-context:\` / \`template:\` |
+| \`SkillStore\` | Skill source persistence + status lifecycle | implicit (\`inline\` / \`execute_skill\` reference) |
+| \`LocalModel\` | LLM inference (Ollama by default) | legacy \`~\` op (grace period) + future \`$ llm\` MCP bridge (v0.7.2) |
+| \`MemoryStore\` | Knowledge retrieval (SQLite-FTS by default) | legacy \`>\` op (grace period) + future \`$ memory\` MCP bridge (v0.7.2) |
+| \`McpConnector\` | MCP tool dispatch — all external tools | \`$ <connector_name> args\` |
+| \`AgentConnector\` | Deliver augment/template payloads | \`# Output: prompt-context:\` / \`template:\` |
 
-Skills don't import packages — they invoke connectors. The set wired into
-this runtime, plus their feature flags, is discoverable via:
+**v0.7.0 substrate framing.** Canonical syntax routes substrate-specific dispatch through MCP (\`$ llm\` / \`$ memory\` rather than \`~\` / \`>\`). Tradita and adopters wire whatever substrate-backing connector names read well at the call sites; \`LocalModel\` + \`MemoryStore\` contracts continue to back the legacy \`~\` / \`>\` ops during the grace period. v0.7.2 adds \`LocalModelMcpConnector\` + \`MemoryStoreMcpConnector\` bridges so the canonical \`$ llm\` / \`$ memory\` paths work in default deployments.
 
-  \`runtime_capabilities()\`
+## Discovery
 
-Call that tool for the live picture of which connectors are registered,
-which feature flags they advertise, and which named instances exist
-(e.g., \`default\` / \`qwen\` LocalModels).
+\`runtime_capabilities()\` reports the live picture: which connectors are registered, which feature flags they advertise, and which named instances exist (e.g., \`default\` / \`qwen\` LocalModels, \`youtrack\` McpConnector).
 
-For shell execution (\`@\` op), \`runtime_capabilities\` also reports
-\`shellExecution.mode\` (\`"structural-spawn"\`) and
-\`shellExecution.unsafe_enabled\` (whether \`@ unsafe\` is permitted in
-this deployment).
+For shell execution (\`shell(...)\` op), \`runtime_capabilities\` also reports \`shellExecution.mode\` (\`"structural-spawn"\`) and \`shellExecution.unsafe_enabled\` (whether \`shell(command=..., unsafe=true)\` / legacy \`@ unsafe\` is permitted in this deployment).
+
+## Container filesystem isolation
+
+When the runtime is sandboxed (Docker container, deployed VM, etc.), the runtime's filesystem is namespace-isolated from the author's host. \`file_read("/tmp/x")\` and \`file_write(path="/tmp/x", ...)\` operate on the *runtime's* \`/tmp\`, not the host's. For cross-namespace work, use a known shared volume path or expose the file via a mount point both sides see. \`runtime_capabilities()\` (planned v0.7.2+) will report writable base paths to make this discoverable from cold-author position.
 `;
+
 
 const LINT_CODES = `# Lint rule index
 

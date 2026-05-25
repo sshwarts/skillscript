@@ -180,8 +180,7 @@ describe("v0.3.0 — render output (prompt + prose formats)", () => {
 describe("v0.3.0 — help surface", () => {
   it("ops topic includes $append entry", () => {
     const r = helpResponse("ops", "0.3.0") as { content: string };
-    expect(r.content).toMatch(/`\$append`/);
-    expect(r.content).toMatch(/Accumulator/);
+    expect(r.content).toMatch(/\$append/);
     expect(r.content).toMatch(/uninitialized-append/);
     expect(r.content).toMatch(/foreach-local-accumulator-target/);
   });

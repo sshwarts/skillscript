@@ -75,12 +75,12 @@ describe("T7 — distributed code surface", () => {
     expect(out.trim(), `found AMP identifiers: ${out}`).toBe("");
   });
 
-  it("7. narrow-core LOC ceiling holds (< 7250 / 20 files; v0.3.2 → 5650, v0.3.3 → 5700, v0.3.4 → 5750, v0.4.0 → 6000, v0.4.1 → 6600, v0.5.0 → 6800, v0.7.0 → 7150, v0.7.1 → 7250)", () => {
+  it("7. narrow-core LOC ceiling holds (< 7300 / 20 files; v0.3.2 → 5650, ..., v0.7.0 → 7150, v0.7.1 → 7250, v0.7.2 → 7300)", () => {
     const out = execSync("node scripts/loc-ceiling.mjs", { cwd: REPO_ROOT, encoding: "utf8" });
     const match = /CORE\s+(\d+) LOC across (\d+) files/.exec(out);
     expect(match).not.toBeNull();
     const [, locStr, filesStr] = match!;
-    expect(Number(locStr)).toBeLessThan(7250);
+    expect(Number(locStr)).toBeLessThan(7300);
     expect(Number(filesStr)).toBeLessThan(20);
   });
 

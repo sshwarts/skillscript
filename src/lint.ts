@@ -1861,6 +1861,50 @@ const DEPRECATED_SUBSTITUTION_SHAPE: LintRule = {
   },
 };
 
+/**
+ * v0.7.2 — tier-3 advisory for the R4 cold-author footgun (4 of 5 minions).
+ * `foreach IT in ${VAR}` where VAR's binding origin is a `$` MCP tool output
+ * (and the iteration expression has no `.field` accessor). MCP tools commonly
+ * wrap arrays in an envelope object (e.g., `{issuesPage: [...], hasNextPage}`,
+ * `{items: [...]}`, `{results: [...]}`) — cold authors iterating the bare
+ * bound var get silent stringification + a single-iteration loop with the
+ * stringification as the iterator value. Downstream `${IT.field}` errors.
+ *
+ * Placeholder for the v0.8 tool-schema-introspection solution that catches
+ * this precisely. Advisory hints at the common envelope-field names.
+ */
+const OBJECT_ITERATION_ADVISORY: LintRule = {
+  id: "object-iteration-advisory",
+  severity: "info",
+  description: "A `foreach IT in ${VAR}` iterates a bound variable whose origin is a `$` MCP tool output, without a `.field` accessor. MCP tools commonly wrap arrays in an envelope.",
+  remediation: "Check the tool's response shape — most MCP services wrap arrays under fields like `.items`, `.results`, `.issuesPage`, `.data`, `.records`. Rewrite as `foreach IT in ${VAR.items}` (or the correct field) once you know the shape. v0.8 tool-schema introspection will catch this precisely; today the advisory is a soft nudge.",
+  check: (ctx) => {
+    const findings: LintFinding[] = [];
+    const origins = buildBindingOrigins(ctx.parsed);
+    // Bare var ref pattern: `$(VAR)` or `${VAR}` — no dotted accessor, no filter chain.
+    const bareRef = /^\s*\$(?:\(([A-Za-z_]\w*)\)|\{([A-Za-z_]\w*)\})\s*$/;
+    for (const [targetName, target] of ctx.parsed.targets) {
+      walkOps(target.ops, (op) => {
+        if (op.kind !== "foreach" || op.foreachList === undefined) return;
+        const m = bareRef.exec(op.foreachList);
+        if (m === null) return;
+        const varName = (m[1] ?? m[2])!;
+        const origin = origins.get(varName);
+        if (origin === undefined) return;
+        if (origin.kind !== "op-output" || origin.op !== "$") return;
+        findings.push({
+          rule: "object-iteration-advisory",
+          severity: "info",
+          message: `In target '${targetName}': \`foreach ${op.foreachIter} in \${${varName}}\` iterates a bare \`$\` op output without a \`.field\` accessor. Most MCP tools wrap arrays in an envelope (e.g., \`.items\`, \`.results\`, \`.issuesPage\`, \`.data\`). Check the tool's response shape; rewrite as \`foreach ${op.foreachIter} in \${${varName}.items}\` (or the actual array field) if so.`,
+          block: targetName,
+          extras: { var_name: varName, foreach_iter: op.foreachIter },
+        });
+      });
+    }
+    return findings;
+  },
+};
+
 const RULES: LintRule[] = [
   // Tier-1 (error)
   PARSE_ERROR,
@@ -1910,6 +1954,7 @@ const RULES: LintRule[] = [
   DUPLICATE_SKILL_NAME,
   PLUGIN_COLLISION,
   UNPARSED_JSON_FIELD_ACCESS,
+  OBJECT_ITERATION_ADVISORY,
 ];
 
 /** Read-only view of the rule registry — for tooling that introspects v1 rules. */

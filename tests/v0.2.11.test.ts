@@ -204,6 +204,7 @@ describe("v0.2.11 docs — help() composition topic + 4th example", () => {
     const r = helpResponse("examples", "0.2.11") as { content: string };
     expect(r.content).toMatch(/## 4\. Composition/);
     expect(r.content).toMatch(/morning-brief-orchestrator/);
-    expect(r.content).toMatch(/execute_skill skill_name/);
+    // v0.7.2: function-call form replaces legacy $ execute_skill symbol-form
+    expect(r.content).toMatch(/execute_skill\(skill_name=/);
   });
 });

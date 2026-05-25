@@ -137,9 +137,11 @@ describe("v0.3.2 — help surface", () => {
 
   it("ops topic shows compound examples", () => {
     const r = helpResponse("ops", "0.3.2") as { content: string };
-    expect(r.content).toMatch(/and \$\(B\) == "ok"/);
-    expect(r.content).toMatch(/or \$\(B\)/);
-    expect(r.content).toMatch(/not \$\(VAR\)/);
+    // v0.7.2: ops topic uses ${VAR} canonical syntax; compound examples
+    // restated with new substitution form.
+    expect(r.content).toMatch(/and \$\{B\} == "ok"/);
+    expect(r.content).toMatch(/or \$\{B\}/);
+    expect(r.content).toMatch(/not \$\{VAR\}/);
   });
 });
 

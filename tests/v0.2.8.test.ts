@@ -70,9 +70,11 @@ describe("v0.2.8 — help MCP tool", () => {
     const result = await callTool(mcpServer, "help", { topic: "ops" });
     expect(result["topic"]).toBe("ops");
     const content = result["content"] as string;
-    expect(content).toMatch(/`\$` — MCP tool/);
-    expect(content).toMatch(/`~` — LocalModel/);
-    expect(content).toMatch(/`@` — Shell exec/);
+    // v0.7.2: ops topic refreshed to canonical surface — three op classes,
+    // function-call shapes, ${VAR} substitution, legacy as deprecated table at bottom.
+    expect(content).toMatch(/External MCP dispatch/);
+    expect(content).toMatch(/Runtime-intrinsic function-calls/);
+    expect(content).toMatch(/shell\(command=/);
     expect(content).toMatch(/execute_skill/);
   });
 
@@ -92,10 +94,10 @@ describe("v0.2.8 — help MCP tool", () => {
     const result = await callTool(mcpServer, "help", { topic: "examples" });
     expect(result["topic"]).toBe("examples");
     const content = result["content"] as string;
-    // Three numbered example sections.
+    // v0.7.2: examples topic refreshed to canonical surface
     expect(content).toMatch(/## 1\. Minimal/);
     expect(content).toMatch(/## 2\. Cron-fired/);
-    expect(content).toMatch(/## 3\. LocalModel branching/);
+    expect(content).toMatch(/## 3\. LLM branching/);
   });
 
   it("topic=connectors reports the wired set when a registry is present", async () => {

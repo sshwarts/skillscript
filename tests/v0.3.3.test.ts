@@ -210,7 +210,8 @@ describe("v0.3.3 — indent cascade sanity (Bug D)", () => {
 describe("v0.3.3 — help surface", () => {
   it("ops topic documents $ json_parse op with worked example", () => {
     const r = helpResponse("ops", "0.3.3") as { content: string };
-    expect(r.content).toMatch(/\$ json_parse \$\(VAR\)/);
+    // v0.7.2: ${VAR} canonical substitution in worked examples
+    expect(r.content).toMatch(/\$ json_parse \$\{VAR\}/);
     expect(r.content).toMatch(/binds the structured value/);
   });
 
