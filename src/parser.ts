@@ -246,12 +246,17 @@ const REQUIRES_LINE = /^(user-var|system-var):([A-Za-z0-9_-]+)\s*(?:→|->)\s*([
 const CAPABILITY_TOKEN = /^[a-z_][a-z0-9_]*\.[a-z_][a-z0-9_]*$/;
 /** `&` op: `& skill-name [arg=value ...] [-> VARNAME]`. Skill names follow the same charset as filesystem-safe identifiers (alphanumeric, hyphen, underscore). */
 const AMPERSAND_OP_REGEX = /^&\s+([A-Za-z0-9][\w-]*)\s*(.*?)(?:\s*->\s*([A-Za-z_]\w*))?(?:\s+\(fallback\s*:\s*(.+?)\))?\s*$/s;
-const SET_OP_REGEX = /^\$set\s+([A-Za-z_]\w*)\s*=\s*(.*)$/;
+// v0.7.2 — `(.*)` widened to `([\s\S]*)` so multi-line triple-quote
+// (`"""..."""`) values fold into a single $set value capture. Without the
+// dotall-equivalent, the `.` excludes newlines and the regex stops at the
+// first line's `"""` opening.
+const SET_OP_REGEX = /^\$set\s+([A-Za-z_]\w*)\s*=\s*([\s\S]*)$/;
 // v0.3.0 accumulator. `$append VAR <value>` — single-value append to a
 // list-typed VAR. Form: `$append IDENT <space> <value>`. Mirrors $set
 // in shape (var name + value) but the runtime mutates an outer-scope
 // list rather than overwriting. See spec memory `9d6079bb` + `442cf4bb`.
-const APPEND_OP_REGEX = /^\$append\s+([A-Za-z_]\w*)\s+(.+)$/;
+// v0.7.2 — `(.+)` widened to `([\s\S]+)` for same multi-line reason.
+const APPEND_OP_REGEX = /^\$append\s+([A-Za-z_]\w*)\s+([\s\S]+)$/;
 const FOREACH_OP_REGEX = /^foreach\s+([A-Za-z_]\w*)\s+in\s+(.+?):\s*$/;
 const IF_OP_REGEX = /^if\s+(.+?):\s*$/;
 const ELIF_OP_REGEX = /^elif\s+(.+?):\s*$/;
@@ -492,18 +497,31 @@ function splitVarsLine(value: string): string[] {
 function foldQuotedContinuations(lines: string[]): string[] {
   const out: string[] = [];
   let buffer: string | null = null;
+  // v0.7.2 — triple-quote folding engages regardless of op kind. Three
+  // consecutive `"` chars don't accidentally appear in natural English
+  // prose, so the "phantom-scope from apostrophe" risk that gates single-
+  // quote folding to kwarg-bearing ops doesn't apply. inTripleAccum tracks
+  // which fold mode the buffer is in so we know which closing condition
+  // to test against.
+  let inTripleAccum = false;
   for (const line of lines) {
     if (buffer === null) {
-      if (isKwargBearingLine(line) && hasUnclosedQuote(line)) {
+      if (hasUnclosedTriple(line)) {
         buffer = line;
+        inTripleAccum = true;
+      } else if (isKwargBearingLine(line) && hasUnclosedQuote(line)) {
+        buffer = line;
+        inTripleAccum = false;
       } else {
         out.push(line);
       }
     } else {
       buffer = buffer + "\n" + line;
-      if (!hasUnclosedQuote(buffer)) {
+      const closed = inTripleAccum ? !hasUnclosedTriple(buffer) : !hasUnclosedQuote(buffer);
+      if (closed) {
         out.push(buffer);
         buffer = null;
+        inTripleAccum = false;
       }
     }
   }
@@ -533,6 +551,24 @@ function hasUnclosedQuote(text: string): boolean {
     else if (!inDouble && ch === "'") inSingle = !inSingle;
   }
   return inDouble || inSingle;
+}
+
+/**
+ * v0.7.2 — true if `text` contains an odd number of `"""` triple-quote
+ * delimiters (i.e., an unterminated triple-quote literal). Scans the
+ * string counting non-overlapping `"""` occurrences.
+ */
+function hasUnclosedTriple(text: string): boolean {
+  let count = 0;
+  for (let i = 0; i <= text.length - 3; ) {
+    if (text[i] === '"' && text[i + 1] === '"' && text[i + 2] === '"') {
+      count++;
+      i += 3;
+    } else {
+      i++;
+    }
+  }
+  return count % 2 === 1;
 }
 
 /**
@@ -572,6 +608,12 @@ function splitTriggersLine(value: string): string[] {
  */
 export function processSetValue(raw: string): string {
   const trimmed = raw.replace(/\s+$/, "");
+  // v0.7.2 — triple-quote `"""..."""` multi-line literal. Check before the
+  // single-quote pair check; a value like `"""abc"""` shouldn't be shortened
+  // to `""abc""` via the `"..."` branch.
+  if (trimmed.length >= 6 && trimmed.startsWith('"""') && trimmed.endsWith('"""')) {
+    return interpretDoubleQuotedEscapes(trimmed.slice(3, -3));
+  }
   if (trimmed.length >= 2) {
     const first = trimmed[0]!;
     const last = trimmed[trimmed.length - 1]!;
@@ -612,12 +654,32 @@ export function tokenizeKeywordArgs(input: string): string[] {
   const tokens: string[] = [];
   let current = "";
   let inQuote: '"' | "'" | null = null;
+  let inTriple = false;  // v0.7.2 — triple-quote `"""..."""` state
   let bracketDepth = 0;
   for (let i = 0; i < input.length; i++) {
     const ch = input[i]!;
+    // Triple-quote state takes precedence: inside `"""..."""`, single `"`
+    // and whitespace are content, not delimiters.
+    if (inTriple) {
+      current += ch;
+      if (ch === '"' && input[i + 1] === '"' && input[i + 2] === '"') {
+        current += input[i + 1]!;
+        current += input[i + 2]!;
+        i += 2;
+        inTriple = false;
+      }
+      continue;
+    }
     if (inQuote) {
       current += ch;
       if (ch === inQuote) inQuote = null;
+      continue;
+    }
+    // Check for triple-quote OPEN before single-quote (greedy match).
+    if (ch === '"' && input[i + 1] === '"' && input[i + 2] === '"') {
+      current += '"""';
+      i += 2;
+      inTriple = true;
       continue;
     }
     if (ch === '"' || ch === "'") {
@@ -648,10 +710,23 @@ function extractParenBody(text: string, openIdx: number): { body: string; endIdx
   if (text[openIdx] !== "(") return null;
   let depth = 1;
   let inQuote: '"' | "'" | null = null;
+  let inTriple = false;  // v0.7.2 — `"""..."""` state
   for (let i = openIdx + 1; i < text.length; i++) {
     const ch = text[i]!;
+    if (inTriple) {
+      if (ch === '"' && text[i + 1] === '"' && text[i + 2] === '"') {
+        i += 2;
+        inTriple = false;
+      }
+      continue;
+    }
     if (inQuote !== null) {
       if (ch === inQuote) inQuote = null;
+      continue;
+    }
+    if (ch === '"' && text[i + 1] === '"' && text[i + 2] === '"') {
+      i += 2;
+      inTriple = true;
       continue;
     }
     if (ch === '"' || ch === "'") { inQuote = ch; continue; }

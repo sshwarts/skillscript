@@ -90,11 +90,15 @@
 //            runtime.ts (chain parser + condition-context applier +
 //            ConnectorNotFoundError fold) + filters.ts (parseFilterChain
 //            + isodate). 50+ new tests across 5 v0.5.0 test files.
-//   v0.7.2:  nudged narrow ceiling 7250 → 7300 for v0.7.2 R4-driven
-//            additions: tier-3 object-iteration-advisory lint (~40 LOC).
-//            More v0.7.2 work pending (string-escape parser, ${VAR} in
-//            frontmatter, bridge classes) will likely nudge again at
-//            ship time. Help-content refresh is content swap, no net LOC.
+//   v0.7.2:  nudged narrow ceiling 7250 → 7400 for v0.7.2 R4-driven
+//            additions: tier-3 object-iteration-advisory lint (~40 LOC) +
+//            string escape interpretation in double-quoted strings
+//            (~20 LOC) + triple-quote `"""..."""` multi-line literal
+//            tokenizer state across foldQuotedContinuations,
+//            tokenizeKeywordArgs, splitTopLevelCommas, and
+//            extractParenBody (~70 LOC). More v0.7.2 work pending
+//            (${VAR} in frontmatter, bridge classes). Help-content
+//            refresh is content swap, no net LOC.
 //   v0.7.1:  nudged narrow ceiling 7150 → 7250 for grace-period polish:
 //            deprecated-symbol-op + deprecated-substitution-shape tier-2
 //            lints (~85 LOC across lint.ts) + unconfirmed-mutation
@@ -137,7 +141,7 @@ const CORE_PATHS = [
   "connectors/",
 ];
 
-const NARROW_MAX_LOC = 7300;
+const NARROW_MAX_LOC = 7400;
 const NARROW_MAX_FILES = 20;
 const BROAD_INFO_LOC = 9500;
 const BROAD_INFO_FILES = 28;
