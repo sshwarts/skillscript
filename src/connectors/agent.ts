@@ -12,7 +12,7 @@
 //   - file-watch:   write to `<path>/augment-<id>.txt`
 //   - Slack thread: post to monitored thread
 //   - IPC pipe:     write to named pipe
-//   - AMP memory:   write `prompt-context:` memory with recipients (T8)
+//   - AMP memory:   write `agent:` memory with recipients (T8)
 //
 // The bundled default is `NoOpAgentConnector` — list_agents returns [],
 // deliver/wake resolve with a warning log. Lets the runtime start cleanly
@@ -37,7 +37,7 @@ export interface TriggerProvenance {
 /**
  * Discriminated payload union for `deliver`. The runtime picks `kind`
  * based on the source declaration:
- *   - `# Output: prompt-context: <agent>` → `{ kind: "augment", ... }`
+ *   - `# Output: agent: <name>` → `{ kind: "augment", ... }`
  *   - `# Output: template: <agent>`       → `{ kind: "template", ... }`
  *
  * Common-shaped provenance + augmenting-context fields apply to both

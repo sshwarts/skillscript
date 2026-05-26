@@ -2,7 +2,7 @@
 // no resolution against external state. Semantic analysis (variable resolution,
 // data-skill inlining, topo-sort) lives in compile.ts.
 
-export type OpKind = "$" | "$set" | "$append" | "?" | "@" | "!" | "??" | "foreach" | "if" | ">" | "~" | "&" | "file_read" | "file_write";
+export type OpKind = "$" | "$set" | "$append" | "?" | "@" | "!" | "??" | "foreach" | "if" | ">" | "~" | "&" | "file_read" | "file_write" | "notify";
 
 /**
  * v0.7.0 — runtime-intrinsic function-call names. Closed set of ops the
@@ -18,8 +18,9 @@ export const RUNTIME_INTRINSIC_FN_NAMES = [
   "inline",        // → & (compile-time skill composition)
   "execute_skill", // → $ execute_skill (runtime skill invocation)
   "shell",         // → @ (local subprocess)
-  "file_read",     // new — read file contents at runtime
-  "file_write",    // new — write file contents at runtime
+  "file_read",     // read file contents at runtime
+  "file_write",    // write file contents at runtime
+  "notify",        // v0.8.0 — mid-skill synchronous agent alert via AgentConnector(s)
 ] as const;
 
 export interface SkillOp {
@@ -101,6 +102,15 @@ export interface SkillOp {
    */
   fileParams?: { path: string; content?: string };
   /**
+   * v0.8.0 — notify() op params. `agent` is the target agent identifier
+   * (required, may contain `${VAR}` substitutions resolved at runtime).
+   * `message` is the explicit message body (optional — runtime defaults to
+   * the joined accumulated emissions when absent). `connectors` is an
+   * optional restriction list — when present, only AgentConnectors whose
+   * registered name is in this list are dispatched to.
+   */
+  notifyParams?: { agent: string; message?: string; connectors?: string[] };
+  /**
    * v0.7.0 — inline `approved="reason"` kwarg captured on mutation-class
    * function-call ops. Author intent marker; lint's `unconfirmed-mutation`
    * rule accepts presence (any non-empty string) as per-op authorization
@@ -150,7 +160,7 @@ export interface TriggerDecl {
   name: string;
 }
 
-export type OutputKind = "text" | "prompt-context" | "template" | "file" | "none";
+export type OutputKind = "text" | "agent" | "template" | "file" | "none";
 
 export interface OutputDecl {
   kind: OutputKind;
@@ -1093,14 +1103,14 @@ export function parse(source: string): ParsedSkill {
         for (const raw of splitVarsLine(value)) {
           const decl = raw.trim();
           if (decl === "") continue;
-          const allowedKinds = ["text", "prompt-context", "template", "file", "none"] as const;
+          const allowedKinds = ["text", "agent", "template", "file", "none"] as const;
           const colon = decl.indexOf(":");
           if (colon === -1) {
             const bareKind = normalizeEnumValue(decl, allowedKinds);
             if (bareKind === "text" || bareKind === "none") {
               result.outputs.push({ kind: bareKind });
             } else {
-              result.parseErrors.push(`\`# Output:\` kind '${decl}' missing target — kinds 'prompt-context', 'template', 'file' require '<kind>: <target>'. Only 'text' and 'none' are bare-only.`);
+              result.parseErrors.push(`\`# Output:\` kind '${decl}' missing target — kinds 'agent', 'template', 'file' require '<kind>: <target>'. Only 'text' and 'none' are bare-only.`);
             }
             continue;
           }
@@ -1627,6 +1637,48 @@ export function parse(source: string): ParsedSkill {
             body: stripped0,
             fileParams: { path, content },
             ...(outputVar !== undefined ? { outputVar } : {}),
+            ...(approved !== undefined ? { approved } : {}),
+            sourceForm: "function-call",
+          });
+          continue;
+        }
+        if (fnName === "notify") {
+          // v0.8.0 — notify(agent, message?, connectors?) -> ACK. Mid-skill
+          // synchronous agent alert via wired AgentConnector(s). `agent` is
+          // required; `message` defaults to joined accumulated emissions at
+          // dispatch time; `connectors` optionally restricts the fan-out.
+          const agent = kwArgs["agent"] ?? "";
+          const message = kwArgs["message"];
+          const connectorsRaw = kwArgs["connectors"];
+          // `connectors` arrives as a JSON array literal string (per the v0.7.0
+          // kwarg value grammar). Parse here; runtime sees a real string[].
+          let connectors: string[] | undefined;
+          if (connectorsRaw !== undefined) {
+            try {
+              const parsed = JSON.parse(connectorsRaw) as unknown;
+              if (Array.isArray(parsed) && parsed.every((c) => typeof c === "string")) {
+                connectors = parsed as string[];
+              } else {
+                result.parseErrors.push(
+                  `notify(connectors=...) in target '${currentTarget.name}' must be a JSON array of strings (got: ${connectorsRaw}).`,
+                );
+              }
+            } catch {
+              result.parseErrors.push(
+                `notify(connectors=...) in target '${currentTarget.name}' must be a JSON array literal (got: ${connectorsRaw}).`,
+              );
+            }
+          }
+          opBucket.push({
+            kind: "notify",
+            body: stripped0,
+            notifyParams: {
+              agent,
+              ...(message !== undefined ? { message } : {}),
+              ...(connectors !== undefined ? { connectors } : {}),
+            },
+            ...(outputVar !== undefined ? { outputVar } : {}),
+            ...(fallback !== undefined ? { fallback } : {}),
             ...(approved !== undefined ? { approved } : {}),
             sourceForm: "function-call",
           });

@@ -60,7 +60,7 @@ describe("v0.2.6 — Item 3: parser captures # Delivery-context: + # Templates:"
       "# Status: Approved",
       "# Delivery-context: Heads up — overnight queue depth has crossed the alert threshold.",
       "# Templates: queue-drain-procedure, ops-page",
-      "# Output: prompt-context: oncall",
+      "# Output: agent: oncall",
       "",
       "main:",
       "    ! alert body",
@@ -81,7 +81,7 @@ describe("v0.2.6 — Item 3: parser captures # Delivery-context: + # Templates:"
   });
 
   it("# Templates: (none) parses as empty list", () => {
-    const src = "# Skill: x\n# Status: Approved\n# Output: prompt-context: a\n# Templates: (none)\nm:\n    ! hi\ndefault: m\n";
+    const src = "# Skill: x\n# Status: Approved\n# Output: agent: a\n# Templates: (none)\nm:\n    ! hi\ndefault: m\n";
     const parsed = parse(src);
     expect(parsed.templates).toEqual([]);
   });
@@ -127,7 +127,7 @@ describe("v0.2.6 — Item 3: unused-augmenting-header lint rule", () => {
       "# Status: Approved",
       "# Delivery-context: legitimate use",
       "# Templates: follow-up-skill",
-      "# Output: prompt-context: assistant",
+      "# Output: agent: assistant",
       "m:",
       "    ! hi",
       "default: m",
@@ -157,7 +157,7 @@ describe("v0.2.6 — Item 2 + 3 end-to-end: DeliveryPayload threading", () => {
       "# Status: Approved",
       "# Delivery-context: Queue backlog exceeds threshold — drain procedure recommended.",
       "# Templates: queue-drain, ops-page",
-      "# Output: prompt-context: oncall",
+      "# Output: agent: oncall",
       "",
       "main:",
       "    ! Queue at 47 items.",
@@ -217,7 +217,7 @@ describe("v0.2.6 — Item 2 + 3 end-to-end: DeliveryPayload threading", () => {
     const src = [
       "# Skill: cron-fired-alert",
       "# Status: Approved",
-      "# Output: prompt-context: oncall",
+      "# Output: agent: oncall",
       "",
       "main:",
       "    ! cron tick",
@@ -249,7 +249,7 @@ describe("v0.2.6 — Item 2 + 3 end-to-end: DeliveryPayload threading", () => {
     const src = [
       "# Skill: minimal",
       "# Status: Approved",
-      "# Output: prompt-context: anon",
+      "# Output: agent: anon",
       "",
       "main:",
       "    ! hi",

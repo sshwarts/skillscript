@@ -128,7 +128,8 @@ export interface ExecuteResult {
   /**
    * Delivery receipts from `AgentConnector.deliver` calls fired after the
    * skill completes. Populated when the skill declares
-   * `# Output: prompt-context: <agent>` or `# Output: template: <agent>`.
+   * `# Output: agent: <name>` or `# Output: template: <name>`. (v0.8.0
+   * renamed `prompt-context:` → `agent:` per substrate-neutrality.)
    * Empty array (not undefined) when no agent-targeted output decls fired.
    * Skipped in `mechanical` mode — placeholders aren't delivered to real
    * substrates during previews.
@@ -138,7 +139,7 @@ export interface ExecuteResult {
 
 export interface AgentDeliveryReceiptRecord {
   agent_id: string;
-  output_kind: "prompt-context" | "template";
+  output_kind: "agent" | "template";
   receipt: DeliveryReceipt;
 }
 
@@ -246,9 +247,9 @@ export async function execute(
   }
 
   // Outputs map per `# Output:` declarations. Per-kind value semantics:
-  //   - Human-readable surfaces (`prompt-context:`, `slack:`, `card:`):
-  //     default to joined emissions. These deliver content for an agent
-  //     or human to *read*; trailing `>`/`~` JSON values are the wrong shape.
+  //   - Agent-bound surfaces (`agent:`, `template:`): default to joined
+  //     emissions. These deliver content for an agent to read or execute;
+  //     trailing op JSON values are the wrong shape.
   //   - Programmatic surfaces (`text`, `file:`): default to lastBoundVar
   //     (structured), fall back to emissions array. Callers consuming
   //     `outputs.text` typically want the structured return value.
@@ -258,7 +259,7 @@ export async function execute(
   // string in `outputs[key]`; otherwise we pass the last bound variable
   // through structurally. Membership here is about payload shape, not
   // semantic destination.
-  const TEXT_COERCED_OUTPUT_KINDS = new Set<OutputDecl["kind"]>(["prompt-context", "template"]);
+  const TEXT_COERCED_OUTPUT_KINDS = new Set<OutputDecl["kind"]>(["agent", "template"]);
   // Agent-bound dispatch uses literal kind checks below so TS can narrow
   // `decl.kind` to the discriminated `DeliveryPayload.kind` automatically;
   // a runtime Set forces a type predicate. Keep the literals colocated
@@ -280,19 +281,19 @@ export async function execute(
   }
 
   // Dispatch agent-targeted output decls through AgentConnector.deliver
-  // (T7.1). `prompt-context: <agent>` routes as `kind: "augment"`,
-  // `template: <agent>` as `kind: "template"`. Skipped in mechanical mode
-  // so previews don't deliver placeholder content to real substrates.
-  // Connector fallback: Registry.getAgentConnector() returns a transparent
-  // NoOpAgentConnector when no adapter is wired, so the dispatch loop
-  // never throws on missing-substrate; the no-op logs to stderr.
+  // (T7.1). `agent: <name>` routes as `kind: "augment"` (v0.8.0 rename
+  // of legacy `prompt-context:`); `template: <name>` as `kind: "template"`.
+  // Skipped in mechanical mode so previews don't deliver placeholder content
+  // to real substrates. Connector fallback: Registry.getAgentConnector()
+  // returns a transparent NoOpAgentConnector when no adapter is wired, so
+  // the dispatch loop never throws on missing-substrate; the no-op logs to stderr.
   const agentDeliveryReceipts: AgentDeliveryReceiptRecord[] = [];
   if (ctx.mechanical !== true) {
     for (const decl of outputDecls) {
       if (decl.target === undefined) continue;
       // Agent-bound output kinds: literal `===` so TS narrows decl.kind
       // for the deliver() payload discriminator below.
-      if (decl.kind !== "prompt-context" && decl.kind !== "template") continue;
+      if (decl.kind !== "agent" && decl.kind !== "template") continue;
       const key = `${decl.kind}:${decl.target}`;
       const body = String(outputs[key] ?? emissions.join("\n"));
       const agent = ctx.registry.getAgentConnector();
@@ -314,7 +315,7 @@ export async function execute(
         ...(parsed.templates.length > 0 ? { templates: parsed.templates } : {}),
       };
       try {
-        const receipt = decl.kind === "prompt-context"
+        const receipt = decl.kind === "agent"
           ? await agent.deliver(decl.target, { kind: "augment", content: body, ...common })
           : await agent.deliver(decl.target, { kind: "template", prompt: body, ...common });
         agentDeliveryReceipts.push({ agent_id: decl.target, output_kind: decl.kind, receipt });
@@ -635,6 +636,65 @@ async function execOpInner(
         );
       }
       return { lastBoundVar: null, lastValue: undefined };
+    }
+    case "notify": {
+      // v0.8.0 — mid-skill synchronous agent alert via wired AgentConnector(s).
+      // `agent` is required; `message` defaults to joined accumulated emissions
+      // when absent (per the Q1 lockdown — `notify(agent="X")` with no message
+      // delivers what's been emitted so far). `connectors` optionally restricts
+      // the fan-out to a named subset.
+      const rawAgent = op.notifyParams?.agent ?? "";
+      const agent = substituteRuntime(rawAgent, vars);
+      const rawMessage = op.notifyParams?.message;
+      const message = rawMessage !== undefined
+        ? substituteRuntime(rawMessage, vars)
+        : emissions.join("\n");
+      const restrictConnectors = op.notifyParams?.connectors;
+      const flatKey = `${targetName}.output`;
+
+      if (ctx.mechanical === true) {
+        const ack = { agent, dispatched: [{ connector: "[mechanical]", ok: true }] };
+        emissions.push(`Would notify agent '${agent}' (${message.length} chars; mechanical: true preview).`);
+        vars.set(flatKey, ack);
+        if (op.outputVar !== undefined) vars.set(op.outputVar, ack);
+        return { lastBoundVar: op.outputVar ?? flatKey, lastValue: ack };
+      }
+
+      // Walk all registered AgentConnectors; filter to those that claim the
+      // target agent in their list_agents(); optionally further filter by
+      // the explicit connectors=[...] kwarg if specified. Best-effort: per-
+      // connector failures are recorded in the ACK but don't propagate.
+      const allConnectors = ctx.registry.listAgentConnectors();
+      const dispatched: Array<{ connector: string; ok: boolean; error?: string }> = [];
+      for (const entry of allConnectors) {
+        if (restrictConnectors !== undefined && !restrictConnectors.includes(entry.name)) continue;
+        let agents: Array<{ agent_id: string }>;
+        try {
+          agents = await entry.instance.list_agents();
+        } catch {
+          // If list_agents() fails, skip this connector — can't confirm it
+          // claims the target.
+          continue;
+        }
+        if (!agents.some((a) => a.agent_id === agent)) continue;
+        try {
+          await entry.instance.deliver(agent, {
+            kind: "augment",
+            content: message,
+          });
+          dispatched.push({ connector: entry.name, ok: true });
+        } catch (err) {
+          dispatched.push({
+            connector: entry.name,
+            ok: false,
+            error: err instanceof Error ? err.message : String(err),
+          });
+        }
+      }
+      const ack = { agent, dispatched };
+      vars.set(flatKey, ack);
+      if (op.outputVar !== undefined) vars.set(op.outputVar, ack);
+      return { lastBoundVar: op.outputVar ?? flatKey, lastValue: ack };
     }
     case "$": {
       const body = substituteRuntime(op.body, vars);

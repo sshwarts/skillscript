@@ -39,6 +39,7 @@ import type {
   StaticCapabilities,
   ManifestInfo,
   MemoryStore,
+  MemoryWrite,
   QueryFilters,
 } from "./types.js";
 
@@ -54,6 +55,7 @@ export class MemoryStoreMcpConnector implements McpConnector {
         supports_identity_propagation: false,
         supports_streaming_responses: false,
         supports_batch: false,
+        supports_write: true,
       },
     };
   }
@@ -61,10 +63,21 @@ export class MemoryStoreMcpConnector implements McpConnector {
   constructor(private readonly memoryStore: MemoryStore) {}
 
   async call(
-    _toolName: string,
+    toolName: string,
     args: Record<string, unknown>,
     _ctxOverrides?: McpDispatchCtx,
   ): Promise<unknown> {
+    // v0.8.0 — toolName discrimination. The same bridge instance can be
+    // registered under multiple connector names (e.g., "memory" + "memory_write")
+    // so bare-form dispatch via name-match routes both to this impl. The
+    // toolName tells us which substrate method to invoke.
+    if (toolName === "memory_write") {
+      return this.dispatchWrite(args);
+    }
+    return this.dispatchQuery(args);
+  }
+
+  private async dispatchQuery(args: Record<string, unknown>): Promise<unknown> {
     const query = typeof args["query"] === "string" ? args["query"] : "";
     if (query === "") {
       throw new Error("MemoryStoreMcpConnector: `query` kwarg is required and must be a non-empty string.");
@@ -90,6 +103,30 @@ export class MemoryStoreMcpConnector implements McpConnector {
     // pattern: `foreach M in ${R.items}` (consistent with the v0.7.2
     // object-iteration-advisory's hint).
     return { items };
+  }
+
+  private async dispatchWrite(args: Record<string, unknown>): Promise<unknown> {
+    // v0.8.0 — canonical `$ memory_write content=... [recipients=...] [tags=...]
+    // [expires_at=N] [metadata={...}] -> R` shape. Returns the substrate-
+    // assigned `{id, created_at}`.
+    const content = typeof args["content"] === "string" ? args["content"] : "";
+    if (content === "") {
+      throw new Error("MemoryStoreMcpConnector: `content` kwarg is required for memory_write and must be a non-empty string.");
+    }
+    const entry: MemoryWrite = { content };
+    if (Array.isArray(args["tags"]) && args["tags"].every((t) => typeof t === "string")) {
+      entry.tags = args["tags"] as string[];
+    }
+    if (Array.isArray(args["recipients"]) && args["recipients"].every((r) => typeof r === "string")) {
+      entry.recipients = args["recipients"] as string[];
+    }
+    if (typeof args["expires_at"] === "number") {
+      entry.expires_at = args["expires_at"];
+    }
+    if (args["metadata"] !== undefined && args["metadata"] !== null && typeof args["metadata"] === "object" && !Array.isArray(args["metadata"])) {
+      entry.metadata = args["metadata"] as Record<string, unknown>;
+    }
+    return this.memoryStore.write(entry);
   }
 
   async manifest(): Promise<ManifestInfo> {

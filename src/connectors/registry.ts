@@ -116,7 +116,7 @@ export class Registry {
   /**
    * Returns the registered AgentConnector or a transparent `NoOpAgentConnector`
    * when none is wired. Unlike the other `get*` methods, this never throws —
-   * the no-op fallback lets `# Output: prompt-context:` dispatch resolve
+   * the no-op fallback lets `# Output: agent:` dispatch resolve
    * cleanly in test/dev environments without an explicit substrate setup.
    * Adopters wire a real impl for production via `registerAgentConnector`.
    */

@@ -107,6 +107,8 @@ export interface LintOptions {
    * surfacing in the bootstrap result.
    */
   connectorConfigErrors?: string[];
+  /** v0.8.0 — registered AgentConnector names (empty = none wired). */
+  agentConnectorNames?: string[];
 }
 
 interface LintContext {
@@ -119,6 +121,7 @@ interface LintContext {
   mcpConnectorNames: string[] | undefined;
   connectorConfigErrors: string[];
   mcpConnectorAllowedTools: Map<string, string[]>;
+  agentConnectorNames: string[] | undefined;
 }
 
 export interface LintRule {
@@ -143,6 +146,7 @@ export async function lint(source: string, options?: LintOptions): Promise<LintR
     mcpConnectorNames: options?.mcpConnectorNames ?? collectMcpConnectorNamesFromRegistry(options?.registry),
     connectorConfigErrors: options?.connectorConfigErrors ?? [],
     mcpConnectorAllowedTools: options?.mcpConnectorAllowedTools ?? collectMcpConnectorAllowedToolsFromRegistry(options?.registry),
+    agentConnectorNames: options?.agentConnectorNames ?? collectAgentConnectorNamesFromRegistry(options?.registry),
   };
   const findings: LintFinding[] = [];
   for (const rule of RULES) {
@@ -182,6 +186,7 @@ export function lintSync(source: string, options?: LintOptions): LintResult {
     mcpConnectorNames: options?.mcpConnectorNames ?? collectMcpConnectorNamesFromRegistry(options?.registry),
     connectorConfigErrors: options?.connectorConfigErrors ?? [],
     mcpConnectorAllowedTools: options?.mcpConnectorAllowedTools ?? collectMcpConnectorAllowedToolsFromRegistry(options?.registry),
+    agentConnectorNames: options?.agentConnectorNames ?? collectAgentConnectorNamesFromRegistry(options?.registry),
   };
   const findings: LintFinding[] = [];
   for (const rule of RULES) {
@@ -1375,11 +1380,11 @@ const PLUGIN_COLLISION: LintRule = {
 const UNUSED_AUGMENTING_HEADER: LintRule = {
   id: "unused-augmenting-header",
   severity: "warning",
-  description: "`# Delivery-context:` or `# Templates:` set on a skill that has no `prompt-context:` or `template:` output declaration. The fields route through `DeliveryPayload`; without an agent-bound output they don't reach a substrate.",
-  remediation: "Either add an agent-bound output (`# Output: prompt-context: <agent>` or `# Output: template: <agent>`) so the augmenting fields fire, or remove `# Delivery-context:` / `# Templates:` from the frontmatter if the skill is genuinely Headless.",
+  description: "`# Delivery-context:` or `# Templates:` set on a skill that has no `agent:` or `template:` output declaration. The fields route through `DeliveryPayload`; without an agent-bound output they don't reach a substrate.",
+  remediation: "Either add an agent-bound output (`# Output: agent: <name>` or `# Output: template: <name>`) so the augmenting fields fire, or remove `# Delivery-context:` / `# Templates:` from the frontmatter if the skill is genuinely Headless.",
   check: (ctx) => {
     const hasAgentBoundOutput = ctx.parsed.outputs.some(
-      (o) => o.kind === "prompt-context" || o.kind === "template",
+      (o) => o.kind === "agent" || o.kind === "template",
     );
     if (hasAgentBoundOutput) return [];
     const findings: LintFinding[] = [];
@@ -1387,14 +1392,66 @@ const UNUSED_AUGMENTING_HEADER: LintRule = {
       findings.push({
         rule: "unused-augmenting-header",
         severity: "warning",
-        message: "`# Delivery-context:` is set but this skill has no `prompt-context:` or `template:` output — the value won't reach any agent.",
+        message: "`# Delivery-context:` is set but this skill has no `agent:` or `template:` output — the value won't reach any agent.",
       });
     }
     if (ctx.parsed.templates.length > 0) {
       findings.push({
         rule: "unused-augmenting-header",
         severity: "warning",
-        message: `\`# Templates:\` lists ${ctx.parsed.templates.length} skill(s) but this skill has no \`prompt-context:\` or \`template:\` output — the field won't reach any agent.`,
+        message: `\`# Templates:\` lists ${ctx.parsed.templates.length} skill(s) but this skill has no \`agent:\` or \`template:\` output — the field won't reach any agent.`,
+      });
+    }
+    return findings;
+  },
+};
+
+// v0.8.0 — tier-2 lint warns per the delivery-model lockdown (`bb34de4e`).
+const OUTPUT_AGENT_TARGET_NO_EMIT: LintRule = {
+  id: "output-agent-target-no-emit",
+  severity: "warning",
+  description: "`# Output: agent: <name>` or `# Output: template: <name>` declared but skill has no `emit()` ops; delivery fires with empty content.",
+  remediation: "Add at least one `emit(text=\"...\")` op so the skill produces content for the lifecycle hook delivery, or remove the `# Output:` header if the skill produces no agent-targeted output.",
+  check: (ctx) => {
+    const findings: LintFinding[] = [];
+    const agentBoundOutputs = ctx.parsed.outputs.filter(
+      (o) => (o.kind === "agent" || o.kind === "template") && o.target !== undefined,
+    );
+    if (agentBoundOutputs.length === 0) return findings;
+    let hasEmit = false;
+    for (const [, target] of ctx.parsed.targets) {
+      walkOps(target.ops, (op) => { if (op.kind === "!") hasEmit = true; });
+      if (hasEmit) break;
+    }
+    if (hasEmit) return findings;
+    for (const decl of agentBoundOutputs) {
+      findings.push({
+        rule: "output-agent-target-no-emit",
+        severity: "warning",
+        message: `\`# Output: ${decl.kind}: ${decl.target}\` declared but skill has no \`emit()\` ops; delivery fires with empty content.`,
+      });
+    }
+    return findings;
+  },
+};
+
+const OUTPUT_AGENT_TARGET_NO_CONNECTOR: LintRule = {
+  id: "output-agent-target-no-connector",
+  severity: "warning",
+  description: "`# Output: agent: <name>` or `# Output: template: <name>` declared but no `AgentConnector` is wired; delivery silently no-ops via the NoOp default.",
+  remediation: "Wire an AgentConnector implementation in your bootstrap (`registry.registerAgentConnector(name, instance)`). See `docs/adopter-playbook.md` for the contract.",
+  check: (ctx) => {
+    if (ctx.agentConnectorNames === undefined) return [];
+    if (ctx.agentConnectorNames.length > 0) return [];
+    const findings: LintFinding[] = [];
+    const agentBoundOutputs = ctx.parsed.outputs.filter(
+      (o) => (o.kind === "agent" || o.kind === "template") && o.target !== undefined,
+    );
+    for (const decl of agentBoundOutputs) {
+      findings.push({
+        rule: "output-agent-target-no-connector",
+        severity: "warning",
+        message: `\`# Output: ${decl.kind}: ${decl.target}\` declared but no AgentConnector is wired; delivery silently no-ops via the NoOp default.`,
       });
     }
     return findings;
@@ -1994,6 +2051,8 @@ const RULES: LintRule[] = [
   DRAFT_WITH_TRIGGER,
   REFERENCE_TO_DISABLED_SKILL,
   UNUSED_AUGMENTING_HEADER,
+  OUTPUT_AGENT_TARGET_NO_EMIT,
+  OUTPUT_AGENT_TARGET_NO_CONNECTOR,
   // Tier-3 (info)
   NO_DEFAULT_TARGET,
   DUPLICATE_SKILL_NAME,
@@ -2153,6 +2212,13 @@ function collectClassesFromRegistry(
 function collectMcpConnectorNamesFromRegistry(registry: Registry | undefined): string[] | undefined {
   if (registry === undefined) return undefined;
   return registry.listMcpConnectors().map((e) => e.name);
+}
+
+function collectAgentConnectorNamesFromRegistry(registry: Registry | undefined): string[] | undefined {
+  if (registry === undefined) return undefined;
+  // listAgentConnectors() excludes the implicit NoOp fallback (per
+  // registry.ts) — empty array means "no real AgentConnector wired."
+  return registry.listAgentConnectors().map((e) => e.name);
 }
 
 function collectMcpConnectorAllowedToolsFromRegistry(registry: Registry | undefined): Map<string, string[]> {

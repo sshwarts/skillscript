@@ -17,7 +17,7 @@ import { AgentConnectorConformance } from "../src/testing/conformance.js";
  *
  * Covers:
  *   1. NoOpAgentConnector ships as Registry fallback (no explicit register call needed)
- *   2. `# Output: prompt-context: <agent>` dispatch routes through deliver(kind=augment)
+ *   2. `# Output: agent: <agent>` dispatch routes through deliver(kind=augment)
  *   3. `# Output: template: <agent>` dispatch routes through deliver(kind=template)
  *   4. Mechanical mode skips agent dispatch (placeholders don't reach substrates)
  *   5. Multiple agent-targeted outputs dispatch independently
@@ -88,13 +88,13 @@ describe("AgentConnector — dispatch wiring", () => {
     expect(agent).toBeInstanceOf(NoOpAgentConnector);
   });
 
-  it("2. # Output: prompt-context: <agent> routes through deliver(kind=augment)", async () => {
+  it("2. # Output: agent: <agent> routes through deliver(kind=augment)", async () => {
     const reg = new Registry();
     const recorder = new RecordingAgentConnector();
     reg.registerAgentConnector("primary", recorder);
     const result = await executeSkill(`# Skill: ctx-out
 # Status: Approved
-# Output: prompt-context: perry
+# Output: agent: perry
 
 greet:
     ! morning brief one
@@ -108,7 +108,7 @@ default: greet
     expect((recorder.deliveries[0]!.payload as { kind: "augment"; content: string }).content)
       .toContain("morning brief one");
     expect(result.agentDeliveryReceipts.length).toBe(1);
-    expect(result.agentDeliveryReceipts[0]!.output_kind).toBe("prompt-context");
+    expect(result.agentDeliveryReceipts[0]!.output_kind).toBe("agent");
   });
 
   it("3. # Output: template: <agent> routes through deliver(kind=template) with source_skill", async () => {
@@ -138,7 +138,7 @@ default: build
     reg.registerAgentConnector("primary", recorder);
     const result = await executeSkill(`# Skill: mech-skip
 # Status: Approved
-# Output: prompt-context: perry
+# Output: agent: perry
 
 greet:
     ! preview only
@@ -155,7 +155,7 @@ default: greet
     reg.registerAgentConnector("primary", recorder);
     await executeSkill(`# Skill: multi-out
 # Status: Approved
-# Output: prompt-context: perry
+# Output: agent: perry
 # Output: template: claude
 
 emit:
@@ -173,7 +173,7 @@ default: emit
     reg.registerAgentConnector("primary", new FailingAgentConnector());
     const result = await executeSkill(`# Skill: fail-out
 # Status: Approved
-# Output: prompt-context: perry
+# Output: agent: perry
 
 greet:
     ! still emits

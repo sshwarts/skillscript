@@ -1,10 +1,10 @@
 # Skill: morning-brief
 # Status: Approved
-# Description: Compose a daily morning brief from calendar, mailbox, and overnight memory writes when the cron trigger fires at 7am. Delivers via prompt-context to the receiving agent, who decides whether to surface to Slack / Discord / etc.
+# Description: Compose a daily morning brief from calendar, mailbox, and overnight memory writes when the cron trigger fires at 7am. Delivers via the agent: lifecycle hook to the receiving agent, who decides whether to surface to Slack / Discord / etc.
 # Vars: AGENT, BRIEF_HORIZON_HOURS=24
 # Triggers: cron: 0 7 * * *
 # OnError: morning-brief-degraded
-# Output: prompt-context: ${AGENT}
+# Output: agent: ${AGENT}
 
 calendar:
     $ calendar.list_events horizon_hours=${BRIEF_HORIZON_HOURS} -> EVENTS

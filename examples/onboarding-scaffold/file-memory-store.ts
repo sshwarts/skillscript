@@ -9,9 +9,12 @@
 // `write()` is deferred to v0.8.x bundled with the auth model — when
 // that lands, extend this file with the matching `write()` method.
 
-import { readFileSync, existsSync } from "node:fs";
+import { readFileSync, existsSync, writeFileSync } from "node:fs";
+import { randomUUID } from "node:crypto";
 import type {
   MemoryStore,
+  MemoryWrite,
+  MemoryWriteRecord,
   PortableMemory,
   QueryFilters,
   ManifestInfo,
@@ -68,6 +71,33 @@ export class FileMemoryStore implements MemoryStore {
     return scored.slice(0, filters.limit).map((s) => s.record);
   }
 
+  async write(entry: MemoryWrite): Promise<MemoryWriteRecord> {
+    const records = this.loadFile();
+    const id = randomUUID();
+    const created_at = Math.floor(Date.now() / 1000);
+    const firstLine = entry.content.split("\n")[0] ?? entry.content;
+    const summary = firstLine.length > 200 ? firstLine.slice(0, 197) + "..." : firstLine;
+    const newRecord: FileMemoryRecord = {
+      id,
+      summary,
+      detail: entry.content,
+      created_at,
+      ...(entry.tags !== undefined ? { domain_tags: entry.tags } : {}),
+      ...(entry.recipients !== undefined || entry.expires_at !== undefined || entry.metadata !== undefined
+        ? {
+            metadata: {
+              ...(entry.metadata ?? {}),
+              ...(entry.recipients !== undefined ? { recipients: entry.recipients } : {}),
+              ...(entry.expires_at !== undefined ? { expires_at: entry.expires_at } : {}),
+            },
+          }
+        : {}),
+    } as FileMemoryRecord;
+    records.push(newRecord);
+    writeFileSync(this.config.filePath, JSON.stringify(records, null, 2), "utf8");
+    return { id, created_at };
+  }
+
   async manifest(): Promise<ManifestInfo> {
     return {
       capabilities_version: "1",
@@ -75,6 +105,7 @@ export class FileMemoryStore implements MemoryStore {
         kind: "file-memory-store",
         file_path: this.config.filePath,
         record_count: this.loadFile().length,
+        supports_write: true,
       },
     };
   }

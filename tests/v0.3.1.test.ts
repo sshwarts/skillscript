@@ -49,7 +49,7 @@ describe("v0.3.1 — unknown-skill-reference demoted to tier-2", () => {
 
 describe("v0.3.1 — unknown-template-reference demoted to tier-2", () => {
   it("# Templates: <missing> fires WARNING (was error)", async () => {
-    const src = "# Skill: t\n# Status: Approved\n# Templates: missing-template\n# Output: prompt-context: agent\nm:\n    ! hi\ndefault: m\n";
+    const src = "# Skill: t\n# Status: Approved\n# Templates: missing-template\n# Output: agent: agent\nm:\n    ! hi\ndefault: m\n";
     const r = await lint(src, { skillStore: wired.skillStore });
     const f = r.findings.find((x) => x.rule === "unknown-template-reference");
     expect(f).toBeDefined();
@@ -57,7 +57,7 @@ describe("v0.3.1 — unknown-template-reference demoted to tier-2", () => {
   });
 
   it("compile succeeds with missing template", async () => {
-    const src = "# Skill: t\n# Status: Approved\n# Templates: missing-template\n# Output: prompt-context: agent\nm:\n    ! hi\ndefault: m\n";
+    const src = "# Skill: t\n# Status: Approved\n# Templates: missing-template\n# Output: agent: agent\nm:\n    ! hi\ndefault: m\n";
     await expect(compile(src, { skillStore: wired.skillStore })).resolves.toBeDefined();
   });
 });
@@ -75,7 +75,7 @@ describe("v0.3.1 — deferred-skill-reference tier-3 advisory", () => {
   });
 
   it("fires for missing # Templates: ref", async () => {
-    const src = "# Skill: t\n# Status: Approved\n# Templates: missing-template\n# Output: prompt-context: agent\nm:\n    ! hi\ndefault: m\n";
+    const src = "# Skill: t\n# Status: Approved\n# Templates: missing-template\n# Output: agent: agent\nm:\n    ! hi\ndefault: m\n";
     const r = await lint(src, { skillStore: wired.skillStore });
     const advisory = r.findings.find((x) => x.rule === "deferred-skill-reference");
     expect(advisory).toBeDefined();

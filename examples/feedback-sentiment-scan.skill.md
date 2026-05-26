@@ -3,7 +3,7 @@
 # Description: Each night, scan the previous 24h of customer feedback records, classify sentiment via local model, surface entries where sentiment is "frustrated" or "blocking" so the team sees them at start-of-day; skip entries already seen on prior nights
 # Triggers: cron: 0 3 * * *
 # Vars: SCAN_LIMIT=50
-# Output: prompt-context: support-lead
+# Output: agent: support-lead
 
 fetch_new:
     $ memory mode=fts query="customer feedback" limit=${SCAN_LIMIT} created_after=${EVENT.fired_at_unix} -> FEEDBACK

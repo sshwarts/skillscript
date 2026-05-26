@@ -13,7 +13,7 @@ import type { StaticCapabilities, ManifestInfo } from "./types.js";
  * Default AgentConnector — `list_agents` returns []; `deliver` and `wake`
  * resolve cleanly after logging a one-line warning so adopters notice the
  * dispatch happened without a wired substrate. Lets the runtime start
- * with no AgentConnector configured: `# Output: prompt-context:` decls
+ * with no AgentConnector configured: `# Output: agent:` decls
  * still complete (with a warning instead of a thrown error) so authors
  * don't have to wire a substrate before running mechanical previews.
  *

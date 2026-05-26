@@ -113,7 +113,7 @@ default: t
   it("parses # Triggers: and # Output: headers", () => {
     const src = `# Skill: notify
 # Triggers: cron: */5 * * * *
-# Output: prompt-context: oncall
+# Output: agent: oncall
 
 t:
     ! hi
@@ -123,7 +123,7 @@ default: t
     const p = parse(src);
     expect(p.parseErrors).toEqual([]);
     expect(p.triggers).toEqual([{ source: "cron", name: "*/5 * * * *" }]);
-    expect(p.outputs).toEqual([{ kind: "prompt-context", target: "oncall" }]);
+    expect(p.outputs).toEqual([{ kind: "agent", target: "oncall" }]);
   });
 
   it("rejects dropped substrate-specific output kinds (slack, card — removed in v0.7.3)", () => {

@@ -1,5 +1,121 @@
 # Changelog
 
+## 0.8.0 — 2026-05-26
+
+**Delivery model lockdown.** Closes the v0.8.x delivery-model design (Perry/CC
+threads `42a0cc41` → `6995d006` → `ef5219a9` → `bb34de4e` → `a39345f9`,
+May 26). Three substrate-portable output paths replace the v0.7.x
+`# Output:` enum's implicit-substrate behavior:
+
+1. **Substrate writes** — `$ memory_write` (NEW) + `file_write` (existing)
+2. **Programmatic return** — result binding `-> VAR` (existing)
+3. **Direct agent alerting** — `notify()` op (NEW) + `# Output: agent:` /
+   `template:` lifecycle hooks (substrate-neutral, end-of-skill)
+
+**Auth model deferred for rethinking.** The skill-author tracking + promotion
+gate work settled in `43178c86` / `1866302d` is kicked down the road per
+Scott's call ("needs to be better thought out and perhaps made simpler").
+`$ memory_write` ships with the current `approved=` lint gate (same as
+`file_write`); `# Status: Draft → Approved` stays self-promotable.
+
+### Changed — OutputKind shape (breaking change; pre-adoption rule applies)
+
+- **`prompt-context:` renamed to `agent:`.** The pre-v0.8.0 name leaned on
+  substrate-specific "prompt-context" terminology that doesn't apply to
+  Obsidian-vault-backed or mailbox-style agent substrates. `agent:` is
+  substrate-neutral — "deliver to whoever's wired for X via their
+  AgentConnector."
+- `# Output: agent: <name>` → `AgentConnector.deliver({kind: "augment",
+  content: <joined-emissions>})`
+- `# Output: template: <name>` (unchanged) → `AgentConnector.deliver({kind:
+  "template", prompt: <joined-emissions>})`
+- Internal v0.7.x value `prompt-context` removed from the OutputKind union;
+  internal `output_kind` discriminator in `AgentDeliveryReceiptRecord`
+  similarly updated.
+- Sweep across `examples/*.skill.md`, test fixtures, scaffold docs.
+
+### Added — `notify()` runtime-intrinsic op
+
+- **`notify(agent, message?, connectors?) -> ACK`** dispatches mid-skill
+  synchronous alerts via wired AgentConnector(s). Specialization vs the
+  `# Output: agent:` end-of-skill lifecycle hook (per Perry's
+  refactor-resistance argument: ordering puzzles dissolve when the
+  end-of-skill hook owns emission accumulation and `notify()` owns
+  mid-skill fires).
+- **Default behavior** when `message` is absent: dispatches the accumulated
+  emissions-so-far. Authors can write `notify(agent="X")` between emits to
+  fire a checkpoint without manually constructing the message.
+- **Fan-out**: dispatches to ALL wired AgentConnectors whose `list_agents()`
+  includes the target agent. `connectors=["webhook","tmux"]` restricts.
+- **Failure semantics**: best-effort by default. Per-connector errors are
+  captured in the ACK's `dispatched[]` array but don't propagate. `strict=true`
+  opt-in deferred to dogfooding signal (per Q3 lockdown).
+- **Return shape (signature lock)**: `{agent: string, dispatched:
+  Array<{connector: string, ok: boolean, error?: string}>}`. Fire-and-forget
+  callers ignore the binding; check-delivery callers inspect ACK.
+- **Substrate-neutrality**: nothing bundled. Adopters wire AgentConnector
+  impls (webhook, tmux, Slack, Discord, etc.). Substrate-specific delivery
+  destinations live in adopter-wired AgentConnectors, NOT in the language.
+- Closed-set RUNTIME_INTRINSIC_FN_NAMES expanded with `"notify"`.
+
+### Added — tier-2 `# Output:` lint contract warns
+
+- **`output-agent-target-no-emit`** — `# Output: agent: X` / `template: X`
+  declared but skill has no `emit()` ops in body; delivery would fire with
+  empty content. Warns to surface contract drift.
+- **`output-agent-target-no-connector`** — `# Output: agent: X` / `template: X`
+  declared but no AgentConnector wired; delivery would silently no-op via
+  the NoOp default. Warns when lint context provides registry info.
+- Per Q4 lockdown: tier-3 advisories for "header + notify(agent=X) both fire"
+  deferred to dogfooding signal (Perry's call — wait for real footgun
+  evidence before adding the lint).
+
+### Added — `$ memory_write` op + `MemoryStore.write()` contract
+
+- **`MemoryStore.write({content, tags?, recipients?, expires_at?, metadata?})
+  -> {id, created_at}`** — new method on the typed MemoryStore contract.
+  Bundled `SqliteMemoryStore` implements via the existing upsert schema with
+  generated UUIDs. Companion: onboarding-scaffold `FileMemoryStore.write()`
+  implements via JSON file append.
+- **`$ memory_write content="..." [recipients=[...]] [tags=[...]]
+  [expires_at=N] [metadata={...}] -> R`** — bare-form MCP dispatch through
+  the `MemoryStoreMcpConnector` bridge. Bridge dispatches on toolName:
+  `memory` routes to `query()`; `memory_write` routes to `write()`. Bootstrap
+  auto-registers the same bridge instance under both names.
+- Returns `{id, created_at}` envelope (per Q6 ack-shape lockdown).
+- `recipients[]` is a substrate-advisory hint — memory systems with alerting
+  (AMP) act on it; systems without (Obsidian-vault) ignore. Skillscript
+  doesn't enforce or implement alerting at the language layer.
+- **Memory handoff delivery channel** (the third "first-class" path
+  documented in QUICKSTART since v0.7.0) is now real, no longer paper.
+
+### Deferred to future v0.8.x or later
+
+- **Skill-author tracking + promotion gate.** Per Scott (2026-05-26):
+  "needs to be better thought out and perhaps made simpler." The
+  `43178c86` / `1866302d` design is reopened for re-thinking. Possible
+  simplification: promotion gate as operator-policy at the SkillStore layer
+  rather than language-level identity tracking. Until then,
+  `# Status: Draft → Approved` stays self-promotable as today.
+- **Drop `unconfirmed-mutation` lint + reframe `# Autonomous: true` as
+  documentation.** Pairs with the auth model rethink — under the current
+  approach the lint is still load-bearing. Defer with auth.
+- **R7 cold-author harness for NFR-6** — queued post-v0.8.0; tests
+  ops/filters/lint-rules extension surfaces against the new file layout.
+- **Portability stress-test scaffold** — v1.0 gate prep; vector-DB memory +
+  hosted-API LLM + webhook AgentConnector substrate combination.
+
+### Notes for cold authors
+
+- `# Output: prompt-context: X` from v0.7.x skills is a parse error in
+  v0.8.0. Rename to `# Output: agent: X` — pre-adoption rule applies (no
+  external installed base; sweep your own test fixtures).
+- `notify()` is for mid-skill alerts; `# Output: agent: X` is for end-of-skill
+  bulk delivery. See `docs/adopter-playbook.md` for the lifecycle distinction.
+- `$ memory_write content="..."` works against any MemoryStore impl that
+  implements the typed `write()` contract. Bundled `SqliteMemoryStore` and
+  the onboarding-scaffold `FileMemoryStore` both ship it.
+
 ## 0.7.3 — 2026-05-26
 
 **Agent-as-author hardening.** Closes structural gaps surfaced by the v0.7.3

@@ -73,7 +73,7 @@ describe("v0.2.10 Bug 2 — `# Vars:` doesn't split mid-value on commas", () => 
   });
 
   it("# Templates: with hyphenated skill names still splits (regression guard from v0.2.6)", () => {
-    const src = "# Skill: t\n# Status: Approved\n# Templates: queue-drain-procedure, ops-page\n# Output: prompt-context: oncall\nm:\n    ! hi\ndefault: m\n";
+    const src = "# Skill: t\n# Status: Approved\n# Templates: queue-drain-procedure, ops-page\n# Output: agent: oncall\nm:\n    ! hi\ndefault: m\n";
     const r = parse(src);
     expect(r.parseErrors).toEqual([]);
     expect(r.templates).toEqual(["queue-drain-procedure", "ops-page"]);

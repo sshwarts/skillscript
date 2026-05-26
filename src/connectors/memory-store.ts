@@ -1,13 +1,20 @@
 import { createRequire } from "node:module";
 import { dirname } from "node:path";
 import { mkdirSync, existsSync } from "node:fs";
+import { randomUUID } from "node:crypto";
 import type {
   MemoryStore,
+  MemoryWrite,
+  MemoryWriteRecord,
   PortableMemory,
   QueryFilters,
   StaticCapabilities,
   ManifestInfo,
 } from "./types.js";
+
+function generateMemoryId(): string {
+  return randomUUID();
+}
 
 const CONTRACT_VERSION = "1.0.0";
 
@@ -159,8 +166,36 @@ export class SqliteMemoryStore implements MemoryStore {
         supported_modes: ["fts"],
         score_range: "unbounded",
         supported_filters: ["domain_tags"],
+        supports_write: true,
       },
     };
+  }
+
+  /**
+   * v0.8.0 — `MemoryStore.write()` impl. Generates a substrate id; persists
+   * via the existing `upsert()` schema with tags + metadata. The `summary`
+   * field defaults to the first line of content (per the v0.7.x convention
+   * — adopters who want richer summaries pre-compose and pass via metadata).
+   * Recipients hint is stored in metadata for substrates that key alerts off it.
+   */
+  async write(entry: MemoryWrite): Promise<MemoryWriteRecord> {
+    const id = generateMemoryId();
+    const createdAt = Math.floor(Date.now() / 1000);
+    const firstLine = entry.content.split("\n")[0] ?? entry.content;
+    const summary = firstLine.length > 200 ? firstLine.slice(0, 197) + "..." : firstLine;
+    // Detail = full content. Summary = preview. Consistent with v0.7.x query() shape.
+    const metadata: Record<string, unknown> = { ...(entry.metadata ?? {}) };
+    if (entry.recipients !== undefined) metadata["recipients"] = entry.recipients;
+    if (entry.expires_at !== undefined) metadata["expires_at"] = entry.expires_at;
+    this.upsert({
+      id,
+      summary,
+      detail: entry.content,
+      ...(entry.tags !== undefined ? { domain_tags: entry.tags } : {}),
+      created_at: createdAt,
+      ...(Object.keys(metadata).length > 0 ? { metadata } : {}),
+    });
+    return { id, created_at: createdAt };
   }
 
   /** Helper for tests/seeding — insert a memory. */

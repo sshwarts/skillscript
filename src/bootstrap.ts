@@ -147,7 +147,12 @@ export function defaultRegistry(opts: DefaultRegistryOpts): { registry: Registry
   registry.registerMcpConnector("llm", new LocalModelMcpConnector(defaultLocalModel));
   const memoryStore = registry.listMemoryStores().find((e) => e.name === "primary");
   if (memoryStore !== undefined) {
-    registry.registerMcpConnector("memory", new MemoryStoreMcpConnector(memoryStore.instance));
+    // v0.8.0 — register the SAME bridge instance under both names so
+    // bare-form `$ memory mode=fts ...` and `$ memory_write content=...`
+    // both route to it. The bridge dispatches on toolName internally.
+    const bridge = new MemoryStoreMcpConnector(memoryStore.instance);
+    registry.registerMcpConnector("memory", bridge);
+    registry.registerMcpConnector("memory_write", bridge);
   }
 
   return { registry, skillStore };

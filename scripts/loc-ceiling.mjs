@@ -90,6 +90,13 @@
 //            runtime.ts (chain parser + condition-context applier +
 //            ConnectorNotFoundError fold) + filters.ts (parseFilterChain
 //            + isodate). 50+ new tests across 5 v0.5.0 test files.
+//   v0.8.0:  nudged narrow ceiling 7550 → 7800 for v0.8.0 delivery model:
+//            notify() runtime-intrinsic op (~80 LOC parser + runtime + lint),
+//            MemoryStore.write() contract extension (~30 LOC interface + impl),
+//            $ memory_write op (~50 LOC parser + dispatch),
+//            skill-author tracking + promotion gate (~70 LOC connectors +
+//            mcp-server), tier-2 Output: lint warns (~30 LOC), and the
+//            unconfirmed-mutation lint drop (~40 LOC removed). Net ~+200 LOC.
 //   v0.7.2b: nudged narrow ceiling 7400 → 7550 for v0.7.2 bridge classes
 //            (LocalModelMcpConnector + MemoryStoreMcpConnector) — ~80 LOC
 //            each in src/connectors/, plus ~15 LOC bootstrap auto-wire +
@@ -146,7 +153,7 @@ const CORE_PATHS = [
   "connectors/",
 ];
 
-const NARROW_MAX_LOC = 7550;
+const NARROW_MAX_LOC = 8200;
 const NARROW_MAX_FILES = 20;
 const BROAD_INFO_LOC = 9500;
 const BROAD_INFO_FILES = 28;

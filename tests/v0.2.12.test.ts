@@ -53,7 +53,7 @@ describe("v0.2.12 Bug 17 — # Templates: refs are lint-validated", () => {
   });
 
   it("fires unknown-template-reference for missing template", async () => {
-    const src = "# Skill: t\n# Status: Approved\n# Templates: missing-template\n# Output: prompt-context: agent\nm:\n    ! hi\ndefault: m\n";
+    const src = "# Skill: t\n# Status: Approved\n# Templates: missing-template\n# Output: agent: agent\nm:\n    ! hi\ndefault: m\n";
     const r = await lint(src, { skillStore: wired.skillStore });
     const f = r.findings.find((x) => x.rule === "unknown-template-reference");
     expect(f).toBeDefined();
@@ -61,7 +61,7 @@ describe("v0.2.12 Bug 17 — # Templates: refs are lint-validated", () => {
   });
 
   it("clean when template exists", async () => {
-    const src = "# Skill: t\n# Status: Approved\n# Templates: known-template\n# Output: prompt-context: agent\nm:\n    ! hi\ndefault: m\n";
+    const src = "# Skill: t\n# Status: Approved\n# Templates: known-template\n# Output: agent: agent\nm:\n    ! hi\ndefault: m\n";
     const r = await lint(src, { skillStore: wired.skillStore });
     expect(r.findings.find((x) => x.rule === "unknown-template-reference")).toBeUndefined();
   });

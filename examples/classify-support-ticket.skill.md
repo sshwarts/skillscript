@@ -2,7 +2,7 @@
 # Status: Approved
 # Description: Read an incoming support ticket and route it: severity-1 tickets get paged to ops-channel, billing tickets get tagged for finance review, everything else gets a draft reply queued for human review
 # Vars: TICKET_TEXT, TICKET_ID
-# Output: prompt-context: ops-oncall
+# Output: agent: ops-oncall
 
 classify:
     $ llm prompt="Categorize this support ticket. Reply with EXACTLY one of: 'sev-1', 'billing', 'general'. No other text.\n\nTicket: ${TICKET_TEXT}" model=qwen maxTokens=10 -> CATEGORY

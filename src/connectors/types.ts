@@ -185,8 +185,41 @@ export interface QueryFilters {
   [key: string]: unknown;
 }
 
+/**
+ * Shape of a `MemoryStore.write()` input. `content` is required; other
+ * fields are optional hints to the substrate. `recipients` lets the
+ * memory system route alerts if it has alerting machinery (e.g., AMP's
+ * mailbox model) — purely advisory at the language layer. `metadata`
+ * carries substrate-specific extensions (e.g., AMP's `vault`,
+ * `confidence`, `payload_type` fields) without bloating the typed
+ * contract. v0.8.0.
+ */
+export interface MemoryWrite {
+  content: string;
+  tags?: string[];
+  recipients?: string[];
+  /** Unix seconds. */
+  expires_at?: number;
+  metadata?: Record<string, unknown>;
+}
+
+/**
+ * Return shape from `MemoryStore.write()`. `id` is the substrate-assigned
+ * identifier; `created_at` is unix seconds. v0.8.0.
+ */
+export interface MemoryWriteRecord {
+  id: string;
+  created_at: number;
+}
+
 export interface MemoryStore {
   query(filters: QueryFilters): Promise<PortableMemory[]>;
+  /**
+   * Persist a new memory entry. v0.8.0 — bundled with the passthrough
+   * auth model (substrate enforces credentials threaded through MCP
+   * dispatch context). Returns the substrate-assigned id + timestamp.
+   */
+  write(entry: MemoryWrite): Promise<MemoryWriteRecord>;
   manifest(): Promise<ManifestInfo>;
 }
 

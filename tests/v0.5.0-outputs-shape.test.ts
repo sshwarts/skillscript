@@ -63,21 +63,21 @@ describe("v0.5.0 item 7 — outputs.text shape (programmatic surface default)", 
 });
 
 describe("v0.5.0 item 7 — outputs.text vs human-readable kinds", () => {
-  it("# Output: prompt-context: agent → joined emissions string (not lastBoundVar)", async () => {
-    const src = `# Skill: t\n# Status: Approved\n# Output: prompt-context: assistant\nrun:\n    ! prelude\n    $set RESULT = "structured"\n    ! coda\ndefault: run\n`;
+  it("# Output: agent: agent → joined emissions string (not lastBoundVar)", async () => {
+    const src = `# Skill: t\n# Status: Approved\n# Output: agent: assistant\nrun:\n    ! prelude\n    $set RESULT = "structured"\n    ! coda\ndefault: run\n`;
     const result = await runSkill(src);
     expect(result.errors).toEqual([]);
-    expect(result.outputs["prompt-context:assistant"]).toBe("prelude\ncoda");
+    expect(result.outputs["agent:assistant"]).toBe("prelude\ncoda");
     // outputs.text is NOT published here — only the declared kind.
     expect(result.outputs.text).toBeUndefined();
   });
 
-  it("# Output: text + # Output: prompt-context: same skill → both shapes coexist", async () => {
-    const src = `# Skill: t\n# Status: Approved\n# Output: text\n# Output: prompt-context: assistant\nrun:\n    ! prelude\n    $set RESULT = "structured"\n    ! coda\ndefault: run\n`;
+  it("# Output: text + # Output: agent: same skill → both shapes coexist", async () => {
+    const src = `# Skill: t\n# Status: Approved\n# Output: text\n# Output: agent: assistant\nrun:\n    ! prelude\n    $set RESULT = "structured"\n    ! coda\ndefault: run\n`;
     const result = await runSkill(src);
     expect(result.errors).toEqual([]);
     expect(result.outputs.text).toBe("structured");
-    expect(result.outputs["prompt-context:assistant"]).toBe("prelude\ncoda");
+    expect(result.outputs["agent:assistant"]).toBe("prelude\ncoda");
   });
 });
 

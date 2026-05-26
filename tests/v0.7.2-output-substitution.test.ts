@@ -12,7 +12,7 @@ describe("v0.7.2 — ${VAR} substitution in # Output: target slot", () => {
       "# Skill: t",
       "# Status: Approved",
       "# Vars: TARGET_AGENT",
-      "# Output: prompt-context: ${TARGET_AGENT}",
+      "# Output: agent: ${TARGET_AGENT}",
       "run:",
       "    emit(text=\"hi\")",
       "default: run",
@@ -21,7 +21,7 @@ describe("v0.7.2 — ${VAR} substitution in # Output: target slot", () => {
     const result = await compile(src, { inputs: { TARGET_AGENT: "oncall" } });
     expect(result.outputs).toHaveLength(1);
     expect(result.outputs[0]!.target).toBe("oncall");
-    expect(result.outputs[0]!.kind).toBe("prompt-context");
+    expect(result.outputs[0]!.kind).toBe("agent");
   });
 
   it("resolves against # Vars: defaults", async () => {
@@ -29,7 +29,7 @@ describe("v0.7.2 — ${VAR} substitution in # Output: target slot", () => {
       "# Skill: t",
       "# Status: Approved",
       "# Vars: TARGET_AGENT=oncall-default",
-      "# Output: prompt-context: ${TARGET_AGENT}",
+      "# Output: agent: ${TARGET_AGENT}",
       "run:",
       "    emit(text=\"hi\")",
       "default: run",
@@ -44,7 +44,7 @@ describe("v0.7.2 — ${VAR} substitution in # Output: target slot", () => {
       "# Skill: t",
       "# Status: Approved",
       "# Vars: TARGET_AGENT=fallback-default",
-      "# Output: prompt-context: ${TARGET_AGENT}",
+      "# Output: agent: ${TARGET_AGENT}",
       "run:",
       "    emit(text=\"hi\")",
       "default: run",
@@ -91,7 +91,7 @@ describe("v0.7.2 — ${VAR} substitution in # Output: target slot", () => {
       "# Skill: t",
       "# Status: Approved",
       "# Vars: TARGET_AGENT=legacy-user",
-      "# Output: prompt-context: $(TARGET_AGENT)",
+      "# Output: agent: $(TARGET_AGENT)",
       "run:",
       "    emit(text=\"hi\")",
       "default: run",
@@ -105,7 +105,7 @@ describe("v0.7.2 — ${VAR} substitution in # Output: target slot", () => {
     const src = [
       "# Skill: t",
       "# Status: Approved",
-      "# Output: prompt-context: ${UNDEFINED_VAR}",
+      "# Output: agent: ${UNDEFINED_VAR}",
       "run:",
       "    emit(text=\"hi\")",
       "default: run",
@@ -137,7 +137,7 @@ describe("v0.7.2 — ${VAR} substitution in # Output: target slot", () => {
       "# Skill: t",
       "# Status: Approved",
       "# Vars: A=alice, B=bob",
-      "# Output: prompt-context: ${A}, file: /tmp/${B}.log",
+      "# Output: agent: ${A}, file: /tmp/${B}.log",
       "run:",
       "    emit(text=\"hi\")",
       "default: run",
@@ -145,9 +145,9 @@ describe("v0.7.2 — ${VAR} substitution in # Output: target slot", () => {
     ].join("\n");
     const result = await compile(src);
     expect(result.outputs).toHaveLength(2);
-    const promptContext = result.outputs.find((o) => o.kind === "prompt-context");
+    const agentOut = result.outputs.find((o) => o.kind === "agent");
     const file = result.outputs.find((o) => o.kind === "file");
-    expect(promptContext?.target).toBe("alice");
+    expect(agentOut?.target).toBe("alice");
     expect(file?.target).toBe("/tmp/bob.log");
   });
 });

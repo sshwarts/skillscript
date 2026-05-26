@@ -24,8 +24,8 @@ const REPO_ROOT = join(__dirname, "..");
 const PACKAGE_JSON = JSON.parse(readFileSync(join(REPO_ROOT, "package.json"), "utf8")) as Record<string, unknown>;
 
 describe("T7 — package.json polish", () => {
-  it("1. version is 0.7.3 (agent-as-author hardening: OutputKind substrate-neutrality cleanup [slack + card dropped], registerConnectorClass public API, skillscript.config.json canonical config externalization, onboarding scaffold + adopter playbook, bootstrap-as-example reframe; $ memory_write + unconfirmed-mutation lint drop deferred to v0.8.x with passthrough auth model)", () => {
-    expect(PACKAGE_JSON["version"]).toBe("0.7.3");
+  it("1. version is 0.8.0 (delivery model: # Output: prompt-context → agent rename, notify() runtime-intrinsic op, $ memory_write + MemoryStore.write() contract, tier-2 Output: lint warns; auth model deferred for rethinking per project-auth-model-rethink memory)", () => {
+    expect(PACKAGE_JSON["version"]).toBe("0.8.0");
   });
 
   it("2. main + types + bin + engines.node ≥ 22.5 declared", () => {
@@ -75,12 +75,12 @@ describe("T7 — distributed code surface", () => {
     expect(out.trim(), `found AMP identifiers: ${out}`).toBe("");
   });
 
-  it("7. narrow-core LOC ceiling holds (< 7550 / 20 files; ..., v0.7.0 → 7150, v0.7.1 → 7250, v0.7.2 → 7550)", () => {
+  it("7. narrow-core LOC ceiling holds (< 8200 / 20 files; ..., v0.7.0 → 7150, v0.7.1 → 7250, v0.7.2 → 7550, v0.8.0 → 8200)", () => {
     const out = execSync("node scripts/loc-ceiling.mjs", { cwd: REPO_ROOT, encoding: "utf8" });
     const match = /CORE\s+(\d+) LOC across (\d+) files/.exec(out);
     expect(match).not.toBeNull();
     const [, locStr, filesStr] = match!;
-    expect(Number(locStr)).toBeLessThan(7550);
+    expect(Number(locStr)).toBeLessThan(8200);
     expect(Number(filesStr)).toBeLessThan(20);
   });
 

@@ -617,6 +617,15 @@ function renderOpPrompt(op: SkillOp, targetName: string, resolved: Map<string, s
       const contentPreview = (p.content ?? "").length > 40 ? (p.content ?? "").slice(0, 40) + "..." : (p.content ?? "");
       return [`${prefix}- Write file: ${pathSub} (${(p.content ?? "").length} chars) — content: ${contentPreview}`];
     }
+    case "notify": {
+      const p = op.notifyParams!;
+      const agentSub = substitute(p.agent, resolved);
+      const messageTail = p.message !== undefined
+        ? ` with message="${substitute(p.message, resolved).slice(0, 40)}${(p.message ?? "").length > 40 ? "..." : ""}"`
+        : " (uses joined emissions)";
+      const connectorsTail = p.connectors !== undefined ? ` via [${p.connectors.join(", ")}]` : "";
+      return [`${prefix}- Notify agent: ${agentSub}${messageTail}${connectorsTail} — bind ACK to $(${op.outputVar ?? `${targetName}.output`})`];
+    }
   }
 }
 
@@ -722,6 +731,13 @@ function renderOpProse(op: SkillOp, resolved: Map<string, string>): string[] {
       const pathSub = substitute(p.path, resolved);
       const len = (p.content ?? "").length;
       return [`Writes file ${pathSub} (${len} chars).`];
+    }
+    case "notify": {
+      const p = op.notifyParams!;
+      const agentSub = substitute(p.agent, resolved);
+      const messagePart = p.message !== undefined ? `with explicit message` : `with the skill's joined emissions`;
+      const connectorsPart = p.connectors !== undefined ? ` (restricted to: ${p.connectors.join(", ")})` : "";
+      return [`Notifies agent ${agentSub} ${messagePart} via AgentConnector dispatch${connectorsPart}.`];
     }
   }
 }

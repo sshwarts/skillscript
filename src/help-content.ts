@@ -35,7 +35,7 @@ The three delivery channels are all first-class:
 
 | Channel | Op | When you'd use it |
 |---|---|---|
-| **Embedded prompt** | \`emit(text="...")\` | Skill output is injected into the agent's turn as prompt-context |
+| **Embedded prompt** | \`emit(text="...")\` | Skill output is delivered to the receiving agent via the \`# Output: agent: <name>\` lifecycle hook |
 | **File handoff** | \`file_write(path="...", content="...")\` | Skill writes a file at a known location for the agent to read |
 | **Memory handoff** *(v0.8.x)* | \`$ memory_write content="..." recipients=["agent"] -> R\` | Skill writes a memory the target agent picks up via mailbox. **Deferred to v0.8.x** bundled with the auth model; not available in v0.7.x. |
 
@@ -108,12 +108,12 @@ foreach M in \${MEMORIES}:
 
 \`\`\`
 # Skill: morning-showstopper-sweep
-# Description: Cron-fired pre-triage; delivers triaged showstoppers to oncall agent via prompt-context channel
+# Description: Cron-fired pre-triage; delivers triaged showstoppers to oncall agent via the agent: lifecycle hook
 # Status: Approved
 # Autonomous: true
 # Vars: PROJECT=INFRA
 # Triggers: cron: 0 8 * * MON-FRI
-# Output: prompt-context: oncall
+# Output: agent: oncall
 
 run:
     $ ticketing_search query="project:\${PROJECT} severity:showstopper state:Open" limit=20 -> ISSUES
@@ -132,10 +132,10 @@ default: run
 What this example demonstrates:
 - **Trigger** — cron at 8am weekdays
 - **Process** — \`$ ticketing_search\` MCP dispatch (substrate-portable: adopters wire whatever ticketing connector they have), \`foreach\` iteration with per-item \`$ llm\` sub-classification
-- **Deliver** — \`emit(text=...)\` per line accumulates as prompt-context, routed to the on-call agent via the \`# Output: prompt-context: oncall\` channel declaration
+- **Deliver** — \`emit(text=...)\` per line accumulates as agent-bound delivery, routed to the on-call agent via the \`# Output: agent: oncall\` lifecycle hook declaration
 - **Authorization** — \`# Autonomous: true\` declares this skill cron-fired and unattended; mutation ops within are silenced from the user-confirmation lint
 
-**Pattern note:** prefer \`emit(text="...")\` per line over building a multi-line accumulator string with \`$append\`. The runtime threads emissions into prompt-context naturally, and the per-line shape is what cold authors reach for. Multi-line string accumulators are a real pattern for file-writing scenarios; emit is the natural choice for prompt-context delivery.
+**Pattern note:** prefer \`emit(text="...")\` per line over building a multi-line accumulator string with \`$append\`. The runtime threads emissions into the agent-bound delivery naturally, and the per-line shape is what cold authors reach for. Multi-line string accumulators are a real pattern for file-writing scenarios; emit is the natural choice for agent-targeted delivery via \`# Output: agent:\`.
 
 Use \`help({topic: "ops"})\`, \`help({topic: "frontmatter"})\`, \`help({topic: "examples"})\`,
 \`help({topic: "connectors"})\`, or \`help({topic: "lint-codes"})\` for deeper sections.
@@ -375,7 +375,7 @@ Skill files open with \`# Key: value\` headers. Order isn't significant.
 - \`# Type: procedural | data\` — \`procedural\` (default) for runtime-fired skills; \`data\` for compile-time-inlined fragments referenced by \`inline(skill="...")\` (canonical) or legacy \`& <skill-name>\` ops.
 - \`# Vars: NAME=default, OTHER\` — declared variables. \`NAME=default\` provides a default; bare \`NAME\` is required at invocation.
 - \`# Triggers: cron: 0 9 * * *, session: start\` — autonomous-dispatch sources. Comma-separated entries split by source-keyword boundary; cron expressions with commas (\`30,45 9 * * 1-5\`) parse correctly.
-- \`# Output: text | prompt-context: agent | template: agent | file: path | none\` — output routing. Five kinds, all substrate-neutral. **Value shape per kind:** \`prompt-context:\` / \`template:\` default to **joined emissions string** (the \`emit(text=...)\` lines concatenated with newlines) — human-readable agent-delivery surfaces. \`text\` / \`file:\` default to the **last-bound variable value** (structured), falling back to the emissions array when no var was bound. If your skill emits multiple lines and a downstream consumer only sees the final tool output via \`outputs.text\`, that's the structured-default behavior — use \`# Output: prompt-context: <agent>\` (or another text-coerced kind) to publish the joined emissions instead. **For substrate-specific delivery destinations** (Slack, WhatsApp, Discord, pagerduty, custom dashboards, etc.) — that's contract-between-the-skill-and-the-substrate territory, downstream of the language. Two paths: (1) \`$ <connector>.<tool> ...\` inside the skill body to dispatch through an adopter-wired MCP connector, or (2) deliver via \`prompt-context:\` to an agent that decides how to surface the result.
+- \`# Output: text | agent: <name> | template: <name> | file: path | none\` — output routing. Five kinds, all substrate-neutral. **Two substrate-neutral lifecycle hooks** (v0.8.0): \`agent: <name>\` (renamed from \`prompt-context:\`) routes via AgentConnector as augment-kind delivery; \`template: <name>\` routes as template-kind delivery (receiving agent executes the rendered playbook). Both default to **joined emissions string** (the \`emit(text=...)\` lines concatenated with newlines). \`text\` / \`file:\` default to the **last-bound variable value** (structured), falling back to the emissions array when no var was bound. If your skill emits multiple lines and a downstream consumer only sees the final tool output via \`outputs.text\`, that's the structured-default behavior — use \`# Output: agent: <name>\` (or another text-coerced kind) to publish the joined emissions instead. **For substrate-specific delivery destinations** (Slack, WhatsApp, Discord, pagerduty, custom dashboards, etc.) — that's contract-between-the-skill-and-the-substrate territory, downstream of the language. Two paths: (1) \`$ <connector>.<tool> ...\` inside the skill body to dispatch through an adopter-wired MCP connector, or (2) deliver via \`agent: <name>\` to an agent whose AgentConnector decides how to surface the result.
 - \`# OnError: <fallback-skill-name>\` — error-handler skill invoked when an op fails and no target-level \`else:\` catches.
 - \`# Autonomous: true | false\` — declarative authorship intent for unattended-execution skills (cron-fired, agent-fired, etc.). v0.4.2. Today silences \`unconfirmed-mutation\` lint warnings for the whole skill (since the user-confirmation pattern doesn't apply to autonomous skills); reserved as the canonical autonomous-skill category marker for future rules + scheduling defaults + discovery surfaces. Omitted = interactive (default).
 
@@ -384,7 +384,7 @@ Skill files open with \`# Key: value\` headers. Order isn't significant.
 - \`# Delivery-context: <prose>\` — routed to the receiving agent alongside the augment payload. v0.2.6.
 - \`# Templates: <skill_name>, <skill_name>\` — comma-separated Template-skill names the receiving agent may fetch as follow-on actions. v0.2.6.
 
-(Both fire \`unused-augmenting-header\` lint warning if set on a Headless skill — one with no \`prompt-context:\` or \`template:\` output declaration.)
+(Both fire \`unused-augmenting-header\` lint warning if set on a Headless skill — one with no \`agent:\` or \`template:\` output declaration.)
 
 ## Capabilities + retrieval
 
@@ -498,7 +498,7 @@ Demonstrates: \`# Triggers:\` cron, \`# Autonomous: true\` for unattended skills
 # Vars: TICKET_BODY
 # Delivery-context: Urgent ticket triage — please assess + assign owner.
 # Templates: ticket-assignment-procedure
-# Output: prompt-context: oncall
+# Output: agent: oncall
 
 classify:
     $ llm prompt="Classify this support ticket as one of: 'critical', 'normal', 'low'. Reply with only the label. Ticket: \${TICKET_BODY}" -> VERDICT
@@ -515,7 +515,7 @@ route: classify
 default: route
 \`\`\`
 
-Demonstrates: \`$ llm\` MCP dispatch (substrate-portable — adopter wires their LLM substrate under the \`llm\` connector name), \`|trim\` filter on LLM output, ref-vs-literal comparison, agent delivery via \`prompt-context:\`, augmenting headers (\`# Delivery-context:\` + \`# Templates:\`).
+Demonstrates: \`$ llm\` MCP dispatch (substrate-portable — adopter wires their LLM substrate under the \`llm\` connector name), \`|trim\` filter on LLM output, ref-vs-literal comparison, agent delivery via \`agent:\` lifecycle hook, augmenting headers (\`# Delivery-context:\` + \`# Templates:\`).
 
 ## 4. Composition — orchestrator invoking child skills
 
@@ -569,12 +569,12 @@ Demonstrates: \`$ memory\` MCP dispatch (substrate-portable memory query), \`$ap
 
 \`\`\`
 # Skill: morning-showstopper-sweep
-# Description: Cron pre-triage; delivers triaged showstoppers to oncall via prompt-context
+# Description: Cron pre-triage; delivers triaged showstoppers to oncall via the agent: lifecycle hook
 # Status: Approved
 # Autonomous: true
 # Vars: PROJECT=INFRA
 # Triggers: cron: 0 8 * * MON-FRI
-# Output: prompt-context: oncall
+# Output: agent: oncall
 
 run:
     $ ticketing_search query="project:\${PROJECT} severity:showstopper state:Open" limit=20 -> ISSUES
@@ -589,7 +589,7 @@ run:
 default: run
 \`\`\`
 
-Demonstrates: end-to-end trigger → process → deliver pattern. Trigger fires cron; process pulls data + sub-classifies each issue with \`$ llm\`; delivers via prompt-context channel (each \`emit(text=...)\` becomes a line in the agent's session-start context).
+Demonstrates: end-to-end trigger → process → deliver pattern. Trigger fires cron; process pulls data + sub-classifies each issue with \`$ llm\`; delivers via the \`agent:\` lifecycle hook (each \`emit(text=...)\` becomes a line in the joined-emissions delivery to the named agent).
 `;
 
 const COMPOSITION = `# Composition — composing skills from other skills
@@ -658,7 +658,7 @@ Skillscript skills don't import packages — they invoke connectors. The runtime
 | \`LocalModel\` | LLM inference (Ollama by default) | \`$ llm\` MCP dispatch via auto-wired \`LocalModelMcpConnector\` bridge (v0.7.2); legacy \`~\` op during grace period |
 | \`MemoryStore\` | Knowledge retrieval (SQLite-FTS by default) | \`$ memory\` MCP dispatch via auto-wired \`MemoryStoreMcpConnector\` bridge (v0.7.2); legacy \`>\` op during grace period |
 | \`McpConnector\` | MCP tool dispatch — all external tools | \`$ <connector_name> args\` |
-| \`AgentConnector\` | Deliver augment/template payloads | \`# Output: prompt-context:\` / \`template:\` |
+| \`AgentConnector\` | Deliver augment/template payloads | \`# Output: agent:\` / \`template:\` |
 
 **v0.7.3 substrate framing.** Canonical syntax routes substrate-specific dispatch through MCP (\`$ llm\` / \`$ memory\` rather than legacy \`~\` / \`>\`). Default deployments auto-wire the \`llm\` and \`memory\` connector names via bundled bridges (\`LocalModelMcpConnector\` over \`LocalModel\`; \`MemoryStoreMcpConnector\` over \`MemoryStore\`), so \`$ llm\` and \`$ memory\` work zero-config. Adopters override by re-registering those same connector names against their own substrate (e.g., a hosted-model MCP server in place of the local Ollama bridge); the canonical call sites don't change.
 
