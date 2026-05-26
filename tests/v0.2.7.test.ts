@@ -61,7 +61,7 @@ describe("v0.2.7 Item 5 — persistent trigger registry", () => {
     });
     expect(existsSync(triggersPath)).toBe(true);
     const parsed = JSON.parse(readFileSync(triggersPath, "utf8"));
-    expect(parsed.schema_version).toBe(1);
+    expect(parsed.schema_version).toBe(2); // v0.9.0 bumped from 1 → 2 with `enabled` field
     expect(parsed.triggers).toHaveLength(1);
     expect(parsed.triggers[0].skill_name).toBe("hello");
     expect(parsed.triggers[0].source).toBe("cron");

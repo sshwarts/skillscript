@@ -4,6 +4,7 @@ import type { Registry } from "./connectors/registry.js";
 import type { SkillStore } from "./connectors/types.js";
 import type { TriggerSource } from "./parser.js";
 import type { TraceConfig, TraceStore } from "./trace.js";
+import { evaluateApprovalGate } from "./approval.js";
 
 /**
  * Trigger scheduler — the autonomous-dispatch surface per ERD §6.
@@ -38,6 +39,14 @@ export interface TriggerRegistration {
   expiresAt?: number;
   /** True if from `# Triggers:` header at skill-write time; false if imperative. */
   declarative: boolean;
+  /**
+   * v0.9.0 — per-trigger enable/disable for vacation / maintenance windows.
+   * Disabled triggers remain registered (scheduler.listTriggers shows them)
+   * but the poll loop skips firing. State persists via the onTriggersChanged
+   * hook to triggers.json so a restart preserves the disabled state.
+   * Default `true` on registration.
+   */
+  enabled: boolean;
 }
 
 export interface SchedulerConfig {
@@ -116,7 +125,7 @@ export class Scheduler {
    * boot-time hydration.
    */
   registerTrigger(
-    reg: Omit<TriggerRegistration, "id" | "registeredAt"> & { id?: string; registeredAt?: number },
+    reg: Omit<TriggerRegistration, "id" | "registeredAt" | "enabled"> & { id?: string; registeredAt?: number; enabled?: boolean },
     opts?: { seedFromPersistence?: boolean },
   ): TriggerRegistration {
     const id = reg.id ?? `trig-${this.nextId++}`;
@@ -132,6 +141,7 @@ export class Scheduler {
       name: reg.name,
       registeredAt: reg.registeredAt ?? Math.floor(this.now() / 1000),
       declarative: reg.declarative,
+      enabled: reg.enabled ?? true,
       ...(reg.expiresAt !== undefined ? { expiresAt: reg.expiresAt } : {}),
       id,
     };
@@ -150,6 +160,25 @@ export class Scheduler {
       this.fireOnTriggersChanged();
     }
     return removed;
+  }
+
+  /**
+   * v0.9.0 — toggle a trigger's enabled state. Disabled triggers remain
+   * registered but the poll loop skips firing them. Persists via
+   * onTriggersChanged for imperative triggers; declarative triggers don't
+   * round-trip to triggers.json (they're rederived from skill bodies at
+   * bootstrap), so toggling those only persists until the next reboot.
+   *
+   * Returns the updated registration, or `null` if no trigger has that id.
+   */
+  setTriggerEnabled(id: string, enabled: boolean): TriggerRegistration | null {
+    const existing = this.triggers.get(id);
+    if (existing === undefined) return null;
+    if (existing.enabled === enabled) return existing;
+    const updated: TriggerRegistration = { ...existing, enabled };
+    this.triggers.set(id, updated);
+    if (!existing.declarative) this.fireOnTriggersChanged();
+    return updated;
   }
 
   private fireOnTriggersChanged(): void {
@@ -237,6 +266,7 @@ export class Scheduler {
     const fires: Promise<void>[] = [];
     for (const trig of this.triggers.values()) {
       if (trig.source !== "cron") continue;
+      if (trig.enabled === false) continue; // v0.9.0 — disabled-trigger skip
       const state = this.cronState.get(trig.id) ?? { lastFiredMinuteEpoch: -1 };
       if (state.lastFiredMinuteEpoch === minuteEpoch) continue;
       if (!cronMatches(trig.name, date)) continue;
@@ -274,6 +304,14 @@ export class Scheduler {
       return null;
     }
     const loaded = await this.skillStore.load(skillName);
+    // v0.9.0 — universal execution gate. SkillStore metadata says Approved,
+    // but we must re-verify the hash token: body edits since approval
+    // (e.g. agent-modifies-then-fires-trigger) invalidate the prior stamp.
+    const gate = evaluateApprovalGate(loaded.source);
+    if (!gate.ok) {
+      this.log(`dispatch '${skillName}': approval gate refused (${gate.reason}); skipping`);
+      return null;
+    }
     const compiled = await compile(loaded.source);
     const nowMs = this.now();
     const ctx: ExecuteContext = {
@@ -340,7 +378,7 @@ export class Scheduler {
 
   private async fireSessionPhase(phase: "start" | "end"): Promise<void> {
     const matching = Array.from(this.triggers.values()).filter(
-      (t) => t.source === "session" && t.name === phase,
+      (t) => t.source === "session" && t.name === phase && t.enabled !== false,
     );
     const nowMs = this.now();
     await Promise.all(matching.map((t) => this.dispatchTrigger(t, nowMs)));

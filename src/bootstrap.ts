@@ -92,19 +92,38 @@ export interface BootstrapResult {
   connectorConfigErrors: string[];
 }
 
-/** v0.2.7 — wire-format for `$SKILLSCRIPT_HOME/triggers.json`. */
-interface PersistedTriggerFile {
-  schema_version: 1;
-  triggers: Array<{
-    id: string;
-    skill_name: string;
-    source: string;
-    name: string;
-    declarative: false;
-    registered_at: number;
-    expires_at: number | null;
-  }>;
+/**
+ * Wire-format for `$SKILLSCRIPT_HOME/triggers.json`.
+ *
+ * v0.2.7 introduced `schema_version: 1`. v0.9.0 bumps to `2` with the
+ * `enabled` field on each trigger record. The loader honors both versions:
+ * v1 records are hydrated with `enabled: true` (the v0.9.x default).
+ */
+interface PersistedTriggerV1 {
+  id: string;
+  skill_name: string;
+  source: string;
+  name: string;
+  declarative: false;
+  registered_at: number;
+  expires_at: number | null;
 }
+
+interface PersistedTriggerV2 extends PersistedTriggerV1 {
+  enabled: boolean;
+}
+
+interface PersistedTriggerFileV1 {
+  schema_version: 1;
+  triggers: PersistedTriggerV1[];
+}
+
+interface PersistedTriggerFileV2 {
+  schema_version: 2;
+  triggers: PersistedTriggerV2[];
+}
+
+type PersistedTriggerFile = PersistedTriggerFileV1 | PersistedTriggerFileV2;
 
 const VALID_TRIGGER_SOURCES: ReadonlyArray<ResolvableTriggerSource> = [
   "cron", "session", "event", "agent-event", "file-watch", "sensor",
@@ -269,7 +288,12 @@ export function bootstrap(opts: BootstrapOpts): BootstrapResult {
  * load. Re-writes the file with the pruned set so future hydrations don't
  * re-scan dead entries.
  */
-function hydratePersistedTriggers(
+/**
+ * Hydrate persisted triggers from `triggers.json` into a scheduler. Exported
+ * as a public surface for adopter bootstraps that wire their own scheduler
+ * but want the same on-disk format. v0.9.0.
+ */
+export function hydratePersistedTriggers(
   scheduler: Scheduler,
   path: string,
   log: (msg: string) => void = (msg) => process.stderr.write(`[bootstrap] ${msg}\n`),
@@ -282,7 +306,7 @@ function hydratePersistedTriggers(
     log(`triggers.json parse failed at '${path}': ${(err as Error).message}; ignoring file`);
     return { loaded: 0, pruned: 0 };
   }
-  if (parsed.schema_version !== 1 || !Array.isArray(parsed.triggers)) {
+  if ((parsed.schema_version !== 1 && parsed.schema_version !== 2) || !Array.isArray(parsed.triggers)) {
     log(`triggers.json at '${path}' has unsupported shape (schema_version=${parsed.schema_version}); ignoring`);
     return { loaded: 0, pruned: 0 };
   }
@@ -307,6 +331,8 @@ function hydratePersistedTriggers(
         name: t.name,
         declarative: false,
         registeredAt: t.registered_at,
+        // v0.9.0 — schema-v2 round-trips `enabled`; v1 records default to true.
+        enabled: "enabled" in t ? (t as PersistedTriggerV2).enabled : true,
         ...(t.expires_at !== null ? { expiresAt: t.expires_at } : {}),
       },
       { seedFromPersistence: true },
@@ -323,16 +349,22 @@ function hydratePersistedTriggers(
   return { loaded, pruned };
 }
 
-/** Serialize the scheduler's imperative-trigger set to disk atomically. */
-function writePersistedTriggers(
+/**
+ * Serialize the scheduler's imperative-trigger set to disk atomically.
+ * Exported as a public surface for adopter bootstraps; v0.9.0.
+ */
+export function writePersistedTriggers(
   path: string,
   triggers: ReadonlyArray<TriggerRegistration>,
 ): void {
   const dir = dirname(path);
   if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
   const imperative = triggers.filter((t) => !t.declarative);
+  // v0.9.0 — always write schema_version 2 with `enabled` field. Older
+  // runtimes loading a v2 file will reject (schema_version mismatch) — no
+  // installed base to worry about pre-1.0; matches pre-adoption-rule.
   const payload: PersistedTriggerFile = {
-    schema_version: 1,
+    schema_version: 2,
     triggers: imperative.map((t) => ({
       id: t.id,
       skill_name: t.skillName,
@@ -340,6 +372,7 @@ function writePersistedTriggers(
       name: t.name,
       declarative: false as const,
       registered_at: t.registeredAt,
+      enabled: t.enabled,
       expires_at: t.expiresAt ?? null,
     })),
   };

@@ -367,7 +367,7 @@ Skill files open with \`# Key: value\` headers. Order isn't significant.
 ## Required
 
 - \`# Skill: <name>\` — identity. Reserved keywords (\`default\`, \`needs\`, etc.) rejected.
-- \`# Status: Draft | Approved | Disabled\` — lifecycle state. Only Approved skills fire via triggers.
+- \`# Status: Draft | Approved v1:<token> | Disabled\` — lifecycle state. **v0.9.0**: Approved status requires a stamped \`vN:<token>\` (e.g. \`Approved v1:a1b2c3d4\`); the dashboard's approval flow stamps it. Naked \`Approved\` (no token) refuses to execute. Only Approved+verified skills fire via triggers, MCP \`execute_skill\`, in-skill \`$ execute_skill\`, or compile-time \`&\` inline.
 
 ## Common
 

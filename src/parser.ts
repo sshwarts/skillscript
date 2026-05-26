@@ -196,6 +196,13 @@ export interface ParsedSkill {
   /** `# Status:` header value. Null when omitted; lint defaults to `Draft` semantics. */
   status: SkillStatusLiteral | null;
   /**
+   * v0.9.0 — approval token from the `# Status: Approved <vN:token>` form.
+   * Null when the header is omitted, Draft/Disabled, or naked `Approved`
+   * (no token suffix). Runtime rejects Approved-without-token at execution
+   * time; the human-approval dashboard stamps a real token via `f(body)`.
+   */
+  approvalToken: string | null;
+  /**
    * `# Timeout:` header value in SECONDS. Number literal OR `$(VAR)` ref
    * string (resolved at runtime). Null when omitted; runtime resolves via
    * the 4-level chain (per-op kwarg > skill header > connector default >
@@ -960,6 +967,7 @@ export function parse(source: string): ParsedSkill {
     description: null,
     type: "procedural",
     status: null,
+    approvalToken: null,
     timeout: null,
     vars: [],
     requires: [],
@@ -1021,11 +1029,26 @@ export function parse(source: string): ParsedSkill {
           result.parseErrors.push(`\`# Type:\` value must be 'procedural' or 'data' (got '${value}')`);
         }
       } else if (key === "status") {
-        const norm = normalizeEnumValue(value, ["Draft", "Approved", "Disabled"] as const);
+        // v0.9.0 — `# Status: Approved` MAY carry a trailing approval token
+        // of the form `vN:<hex>` (e.g. `Approved v1:a1b2c3d4`). Split on the
+        // first run of whitespace: first segment is the status enum, anything
+        // after is the token. Naked `Approved` parses cleanly here but is
+        // rejected at runtime as unapproved until a real token is stamped.
+        const parts = value.split(/\s+/);
+        const statusRaw = parts[0] ?? "";
+        const tokenRaw = parts.slice(1).join(" ").trim();
+        const norm = normalizeEnumValue(statusRaw, ["Draft", "Approved", "Disabled"] as const);
         if (norm !== null) {
           result.status = norm;
+          if (tokenRaw.length > 0) {
+            if (norm !== "Approved") {
+              result.parseErrors.push(`\`# Status:\` only 'Approved' may carry an approval token (got status '${norm}' with token '${tokenRaw}')`);
+            } else {
+              result.approvalToken = tokenRaw;
+            }
+          }
         } else {
-          result.parseErrors.push(`\`# Status:\` value must be 'Draft', 'Approved', or 'Disabled' (got '${value}')`);
+          result.parseErrors.push(`\`# Status:\` value must be 'Draft', 'Approved', or 'Disabled' (got '${statusRaw}')`);
         }
       } else if (key === "autonomous") {
         // v0.4.2 — declarative authorship intent marker for unattended-

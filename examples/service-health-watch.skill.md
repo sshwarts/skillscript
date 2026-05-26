@@ -1,5 +1,5 @@
 # Skill: service-health-watch
-# Status: Approved
+# Status: Approved v1:7c93b4b4
 # Description: Every 5 minutes check named service endpoints — if latency or status degrades, write a signal memory and alert
 # Vars: SERVICES=[auth-api, ledger-api, search-api], LATENCY_BUDGET_MS=400
 # Triggers: cron: */5 * * * *

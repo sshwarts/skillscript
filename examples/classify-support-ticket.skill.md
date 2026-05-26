@@ -1,5 +1,5 @@
 # Skill: classify-support-ticket
-# Status: Approved
+# Status: Approved v1:99819a42
 # Description: Read an incoming support ticket and route it: severity-1 tickets get paged to ops-channel, billing tickets get tagged for finance review, everything else gets a draft reply queued for human review
 # Vars: TICKET_TEXT, TICKET_ID
 # Output: agent: ops-oncall

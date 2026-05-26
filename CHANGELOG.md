@@ -1,5 +1,87 @@
 # Changelog
 
+## 0.9.0 — 2026-05-26
+
+**Hash-token approval gate + trigger enable/disable.** Closes the v0.9.x
+auth-model design settled in thread `29b6208e` (Scott + Perry + CC,
+2026-05-26). Replaces the deferred `1866302d` lockdown's 6 moving parts
+with one substrate-neutral mechanism. 5-10× lighter implementation.
+
+### Added — hash-token approval gate
+
+- **Two states matter: Draft + Approved.** Draft skills can be authored,
+  compiled, linted, viewed — but cannot execute anywhere. Approved skills
+  with a valid stamped token execute via every dispatch path (manual MCP,
+  in-skill compose, scheduler dispatch, compile-time data-skill inline).
+- **`# Status: Approved v1:<token>`** — the dashboard's "Transition to
+  Approved" flow now computes `f(body − Status line)` and stamps the
+  token into the skill body. Runtime re-computes on every execution;
+  mismatch blocks with a clear "re-approve via dashboard" error.
+- **Version-prefix enumeration**: `v0:` reserved, `v1:` = CRC32 (bundled),
+  `v2:` reserved for HMAC-SHA256, `v3:` reserved for Ed25519. Adopters
+  substitute stronger functions via `registerApprovalFn(version, fn)`
+  without language changes.
+- **Content-change-resets is automatic** via the math — body edits
+  invalidate the prior hash, so the next execution fails the gate.
+- **Tamper-evident, not tamper-proof** out of the box. CRC32 is a
+  discipline barrier; adopters with adversarial threat models substitute
+  HMAC/Ed25519. Same protocol shape, stronger function.
+- **NEW exports**: `src/approval.ts` →
+  `computeApprovalToken`, `verifyApprovalToken`, `evaluateApprovalGate`,
+  `stampApprovalToken`, `registerApprovalFn`, `parseApprovalToken`,
+  `extractStatusFromBody`, `stripStatusLineForHashing`.
+- **NEW error**: `ApprovalRejectedError` (`src/errors.ts`) — flows
+  through `# OnError:` chains like other `ConnectorError` subclasses.
+
+### Added — trigger enable/disable
+
+- **`enabled: boolean` field on TriggerRegistration** (default `true`).
+  Disabled triggers stay registered but the scheduler skips firing them
+  — vacation / maintenance windows without losing the registration.
+- **`scheduler.setTriggerEnabled(id, enabled)`** — toggle API. Fires the
+  `onTriggersChanged` hook for imperative triggers (persists to
+  `triggers.json`); declarative triggers toggle in-memory only (they
+  rederive from skill bodies at bootstrap).
+- **NEW MCP tool** `set_trigger_enabled({trigger_id, enabled})` — 14th
+  bundled tool (was 13).
+- **`triggers.json` schema bumped 1 → 2.** v1 files load with
+  `enabled: true` (back-compat hydration); fresh writes use schema v2
+  with the `enabled` field.
+
+### Added — dashboard surface
+
+- **Approval-state badge on skill detail view.** Approved skills show
+  `verified` or `re-approval needed` based on runtime hash check. Stale
+  Approved (body edited after approval) surfaces a banner + a
+  "Re-approve (refresh token)" button alongside the standard transitions.
+- **Trigger enable/disable buttons in the Triggers view.** Each row now
+  shows `enabled` / `disabled` state with a one-click toggle alongside
+  the unregister button.
+- **`skill_metadata` MCP response includes `approval` field**:
+  `{gate_ok: true}` when the body verifies cleanly, or
+  `{gate_ok: false, reason: "..."}` with the human-readable refusal text.
+
+### Migration
+
+- **Existing skills with `# Status: Approved` (no token) refuse to
+  execute** until re-approved via the dashboard. Pre-adoption rule:
+  no installed base, no migration tooling needed beyond the one-time
+  dashboard click.
+- **`examples/*.skill.md` and `scaffold/examples/hello.skill.md`** stamped
+  with valid `v1` tokens via `scripts/stamp-examples.mjs` (re-run after
+  any body edit).
+- **Test fixtures** are auto-stamped at `SkillStore.store()` boundary via
+  `tests/setup.ts` — production code paths unaffected.
+
+### Notes
+
+- **R7 cold-author harness still queued.** v0.9.0 ships the auth gate;
+  R7 lands separately post-stabilization.
+- **`unconfirmed-mutation` lint** stays bundled in v0.9.0 — drop is a
+  separate concern; the hash-token gate is the real enforcement, but the
+  lint surfaces author-intent gaps at compile time, which is independent
+  value.
+
 ## 0.8.0 — 2026-05-26
 
 **Delivery model lockdown.** Closes the v0.8.x delivery-model design (Perry/CC

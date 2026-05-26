@@ -46,6 +46,23 @@ export class SkillNotFoundError extends ConnectorError {
   }
 }
 
+/**
+ * v0.9.0 — refused at the universal execution gate (scheduler dispatch,
+ * MCP execute_skill, in-skill `$ execute_skill`). Skill is Draft, Disabled,
+ * or carries an invalid/missing hash-token. Flows through `# OnError:` like
+ * any other connector-class error.
+ */
+export class ApprovalRejectedError extends ConnectorError {
+  constructor(
+    public readonly skill_name: string,
+    public readonly reason: string,
+    implementation: string,
+  ) {
+    super(`Approval rejected for skill '${skill_name}': ${reason}`, "skill_store", implementation);
+    this.name = "ApprovalRejectedError";
+  }
+}
+
 export class VersionNotFoundError extends ConnectorError {
   constructor(
     public readonly skill_name: string,

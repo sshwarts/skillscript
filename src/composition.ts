@@ -22,7 +22,8 @@ import { compile } from "./compile.js";
 import { execute, type ExecuteContext, type ExecuteResult } from "./runtime.js";
 import type { Registry } from "./connectors/registry.js";
 import type { SkillStore } from "./connectors/types.js";
-import { MissingSkillReferenceError } from "./errors.js";
+import { MissingSkillReferenceError, ApprovalRejectedError } from "./errors.js";
+import { evaluateApprovalGate } from "./approval.js";
 
 const DEFAULT_MAX_RECURSION_DEPTH = 10;
 
@@ -88,6 +89,14 @@ export async function executeSkillByName(
     // The legacy SkillNotFoundForCompositionError is kept exported for
     // backwards-compat but the new code path throws the OpError shape.
     throw new MissingSkillReferenceError(skillName, "$", "$ execute_skill");
+  }
+
+  // v0.9.0 — universal execution gate. Reject Draft/Disabled, naked
+  // Approved (no token), and tampered bodies (hash mismatch). Flows
+  // through `# OnError:` like any other ConnectorError subclass.
+  const gate = evaluateApprovalGate(loaded.source);
+  if (!gate.ok) {
+    throw new ApprovalRejectedError(skillName, gate.reason, "executeSkillByName");
   }
 
   const compiled = await compile(loaded.source, { inputs, skillStore });

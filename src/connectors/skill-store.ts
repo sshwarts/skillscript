@@ -12,6 +12,7 @@ import type {
   ManifestInfo,
 } from "./types.js";
 import { SkillNotFoundError, VersionNotFoundError, StorageConflictError } from "../errors.js";
+import { stampApprovalToken } from "../approval.js";
 
 const CONTRACT_VERSION = "1.0.0";
 
@@ -213,7 +214,17 @@ export class FilesystemSkillStore implements SkillStore {
       throw err;
     }
     const previous_status = extractStatus(source) ?? "Draft";
-    const updated = rewriteStatusHeader(source, status);
+    // v0.9.0 — transitions to Approved stamp `# Status: Approved vN:<token>`
+    // automatically; transitions to Draft/Disabled strip any prior token.
+    // Adopter dashboards can supplant this with a stronger `f()` by calling
+    // `registerApprovalFn("v2", hmacSha256Fn)` etc. before update_status.
+    let updated: string;
+    if (status === "Approved") {
+      const stamped = stampApprovalToken(rewriteStatusHeader(source, "Approved"));
+      updated = stamped;
+    } else {
+      updated = rewriteStatusHeader(source, status);
+    }
     await writeFile(path, updated, "utf8");
     const content_hash = hashSource(updated);
     const version = shortHash(content_hash);
@@ -272,29 +283,35 @@ function extractHeader(body: string, key: string): string | null {
 }
 
 function extractStatus(source: string): SkillStatus | null {
+  // v0.9.0 — split on whitespace; first token is the enum, remainder may
+  // be an approval token (`vN:<token>`). Substrate doesn't need to verify
+  // the token here — that's the runtime's job at dispatch time.
   const raw = extractHeader(source, "Status");
   if (raw === null) return null;
-  const lower = raw.toLowerCase();
-  if (lower === "draft") return "Draft";
-  if (lower === "approved") return "Approved";
-  if (lower === "disabled") return "Disabled";
+  const first = raw.trim().split(/\s+/)[0]?.toLowerCase() ?? "";
+  if (first === "draft") return "Draft";
+  if (first === "approved") return "Approved";
+  if (first === "disabled") return "Disabled";
   return null;
 }
 
 /**
  * Rewrite or insert the `# Status:` header. If absent, inserts after the
- * `# Skill:` line (or at the top of the file as a fallback).
+ * `# Skill:` line (or at the top of the file as a fallback). Optional
+ * trailing token (v0.9.0) lets the dashboard's approval path stamp
+ * `# Status: Approved v1:<token>` in one call.
  */
-function rewriteStatusHeader(source: string, status: SkillStatus): string {
+function rewriteStatusHeader(source: string, status: SkillStatus, token?: string): string {
+  const line = token !== undefined && token.length > 0 ? `# Status: ${status} ${token}` : `# Status: ${status}`;
   const re = /^#\s*Status\s*:\s*.+?\s*$/m;
   if (re.test(source)) {
-    return source.replace(re, `# Status: ${status}`);
+    return source.replace(re, line);
   }
   const skillLineRe = /^(#\s*Skill\s*:\s*.+?)\s*$/m;
   if (skillLineRe.test(source)) {
-    return source.replace(skillLineRe, `$1\n# Status: ${status}`);
+    return source.replace(skillLineRe, `$1\n${line}`);
   }
-  return `# Status: ${status}\n${source}`;
+  return `${line}\n${source}`;
 }
 
 function applyFilter(metas: SkillMeta[], filter?: SkillFilter): SkillMeta[] {

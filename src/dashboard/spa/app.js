@@ -154,19 +154,32 @@ function renderSkills() {
 
 async function renderSkillDetail(name) {
   try {
-    const { metadata, versions, source, recent_fires } = await callTool("skill_metadata", { name });
+    const { metadata, versions, source, recent_fires, approval } = await callTool("skill_metadata", { name });
     const metrics = state.metrics?.perSkill?.[name];
     const triggersForSkill = state.triggers.filter((t) => t.skillName === name);
+    // v0.9.0 — surface approval-gate state. When Approved + gate-not-ok,
+    // body was edited after approval so the human needs to re-stamp.
+    // Defensive: pre-v0.9.0 server builds don't return `approval` at all
+    // (undefined); treat that as "no info" so the SPA degrades cleanly.
+    const approvalBadge = !approval
+      ? ""
+      : approval.gate_ok
+        ? ` <span class="badge ok">verified</span>`
+        : ` <span class="badge error" title="${esc(approval.reason ?? "")}">re-approval needed</span>`;
+    const approvalBanner = (approval && !approval.gate_ok && metadata.status === "Approved")
+      ? `<div class="remediation" style="margin-top: 12px;"><strong>Approval token stale.</strong> ${esc(approval.reason ?? "")}. Re-transition to Approved to stamp a fresh token.</div>`
+      : "";
     return `
-      <h2>Skill: ${esc(metadata.name)} <span class="badge ${esc(metadata.status)}">${esc(metadata.status)}</span></h2>
+      <h2>Skill: ${esc(metadata.name)} <span class="badge ${esc(metadata.status)}">${esc(metadata.status)}</span>${approvalBadge}</h2>
 
       <section>
         <h2>Status</h2>
         <p>${esc(metadata.description ?? "(no description)")}</p>
+        ${approvalBanner}
         <div style="margin-top: 12px; display: flex; gap: 8px;">
-          ${["Draft", "Approved", "Disabled"].filter((s) => s !== metadata.status).map((s) => `
+          ${["Draft", "Approved", "Disabled"].filter((s) => s !== metadata.status || (s === "Approved" && approval && !approval.gate_ok)).map((s) => `
             <button class="${s === "Disabled" ? "danger" : ""}" onclick="updateStatus('${esc(name)}','${s}')">
-              Transition to ${s}
+              ${s === "Approved" && metadata.status === "Approved" ? "Re-approve (refresh token)" : `Transition to ${s}`}
             </button>
           `).join("")}
         </div>
@@ -264,17 +277,23 @@ function renderTriggers() {
       ${state.triggers.length === 0
         ? `<div class="empty">No triggers registered.</div>`
         : `<table>
-            <thead><tr><th>Skill</th><th>Source</th><th>Name</th><th>Registered</th><th></th></tr></thead>
+            <thead><tr><th>Skill</th><th>Source</th><th>Name</th><th>State</th><th>Registered</th><th></th></tr></thead>
             <tbody>
-              ${state.triggers.map((t) => `
+              ${state.triggers.map((t) => {
+                const enabled = t.enabled !== false; // legacy records (pre-v0.9.0) default to enabled
+                return `
                 <tr>
                   <td><strong>${esc(t.skillName)}</strong></td>
                   <td>${esc(t.source)}</td>
                   <td><code>${esc(t.name)}</code></td>
+                  <td><span class="badge ${enabled ? "ok" : "Draft"}">${enabled ? "enabled" : "disabled"}</span></td>
                   <td>${new Date(t.registeredAt * 1000).toLocaleString()}</td>
-                  <td><button class="danger" onclick="unregisterTrigger('${esc(t.id)}')">Unregister</button></td>
-                </tr>
-              `).join("")}
+                  <td style="display: flex; gap: 6px;">
+                    <button onclick="setTriggerEnabled('${esc(t.id)}', ${!enabled})">${enabled ? "Disable" : "Enable"}</button>
+                    <button class="danger" onclick="unregisterTrigger('${esc(t.id)}')">Unregister</button>
+                  </td>
+                </tr>`;
+              }).join("")}
             </tbody>
           </table>`}
     </section>
@@ -381,6 +400,15 @@ window.unregisterTrigger = async function (id) {
     await refresh();
   } catch (err) {
     alert(`Unregister failed: ${err.message}`);
+  }
+};
+
+window.setTriggerEnabled = async function (id, enabled) {
+  try {
+    await callTool("set_trigger_enabled", { trigger_id: id, enabled });
+    await refresh();
+  } catch (err) {
+    alert(`Trigger state update failed: ${err.message}`);
   }
 };
 

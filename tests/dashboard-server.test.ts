@@ -103,7 +103,7 @@ describe("DashboardServer /rpc endpoint", () => {
       body: JSON.stringify({ jsonrpc: "2.0", id: 2, method: "tools/list" }),
     });
     const json = await r.json();
-    expect(json.result.tools.length).toBe(13);
+    expect(json.result.tools.length).toBe(14);
   });
 
   it("POST /rpc routes tools/call (skill_list)", async () => {

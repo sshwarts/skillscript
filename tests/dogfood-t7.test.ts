@@ -24,8 +24,8 @@ const REPO_ROOT = join(__dirname, "..");
 const PACKAGE_JSON = JSON.parse(readFileSync(join(REPO_ROOT, "package.json"), "utf8")) as Record<string, unknown>;
 
 describe("T7 — package.json polish", () => {
-  it("1. version is 0.8.0 (delivery model: # Output: prompt-context → agent rename, notify() runtime-intrinsic op, $ memory_write + MemoryStore.write() contract, tier-2 Output: lint warns; auth model deferred for rethinking per project-auth-model-rethink memory)", () => {
-    expect(PACKAGE_JSON["version"]).toBe("0.8.0");
+  it("1. version is 0.9.0 (hash-token approval gate; trigger enable/disable; dashboard re-approval banner; per project-auth-model-rethink memory + thread 29b6208e)", () => {
+    expect(PACKAGE_JSON["version"]).toBe("0.9.0");
   });
 
   it("2. main + types + bin + engines.node ≥ 22.5 declared", () => {

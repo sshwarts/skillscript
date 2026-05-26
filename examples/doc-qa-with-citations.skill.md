@@ -1,5 +1,5 @@
 # Skill: doc-qa-with-citations
-# Status: Approved
+# Status: Approved v1:2187bf35
 # Description: When the user asks a question that requires retrieval over the doc set, answer with inline citations to memory IDs
 # Vars: QUESTION, K=6
 # Output: text

@@ -14,6 +14,7 @@ import {
 } from "./composition.js";
 import { helpResponse } from "./help-content.js";
 import { RUNTIME_VERSION } from "./version.js";
+import { evaluateApprovalGate } from "./approval.js";
 
 /**
  * MCP server contract surface (T6b Phase 1). Exposes the runtime's
@@ -240,11 +241,20 @@ export class McpServer {
           this.deps.skillStore.load(name).catch(() => null),
           this.deps.traceStore.query({ skill_name: name, limit: fireLimit }),
         ]);
+        // v0.9.0 — surface approval-gate state so the dashboard can flag
+        // stale-Approved skills (body edited since approval, token no
+        // longer verifies). `null` when the source isn't loadable.
+        let approval: { gate_ok: boolean; reason?: string } | null = null;
+        if (loaded?.source !== undefined) {
+          const g = evaluateApprovalGate(loaded.source);
+          approval = g.ok ? { gate_ok: true } : { gate_ok: false, reason: g.reason };
+        }
         return {
           metadata,
           versions,
           source: loaded?.source ?? null,
           recent_fires,
+          approval,
         };
       },
     });
@@ -299,7 +309,7 @@ export class McpServer {
         required: ["skill_name", "source", "name"],
       },
       handler: async (args) => {
-        const reg: Omit<TriggerRegistration, "id" | "registeredAt"> = {
+        const reg: Omit<TriggerRegistration, "id" | "registeredAt" | "enabled"> = {
           skillName: args["skill_name"] as string,
           source: args["source"] as ResolvableTriggerSource,
           name: args["name"] as string,
@@ -321,6 +331,25 @@ export class McpServer {
       handler: async (args) => {
         const id = args["trigger_id"] as string;
         return { removed: this.deps.scheduler.unregisterTrigger(id) };
+      },
+    });
+
+    this.registerTool({
+      name: "set_trigger_enabled",
+      description: "v0.9.0 — toggle a trigger's enabled state. Disabled triggers stay registered but the scheduler skips firing them (vacation / maintenance windows). State persists via the onTriggersChanged hook for imperative triggers. Returns the updated registration, or null if no trigger has that id. Write operation.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          trigger_id: { type: "string" },
+          enabled: { type: "boolean" },
+        },
+        required: ["trigger_id", "enabled"],
+      },
+      handler: async (args) => {
+        const id = args["trigger_id"] as string;
+        const enabled = args["enabled"] as boolean;
+        const updated = this.deps.scheduler.setTriggerEnabled(id, enabled);
+        return updated ?? null;
       },
     });
 

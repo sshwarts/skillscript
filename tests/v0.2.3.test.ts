@@ -62,13 +62,13 @@ describe("v0.2.3 — lint_skill MCP tool", () => {
     rmSync(home, { recursive: true, force: true });
   });
 
-  it("appears in tools/list (v0.2.8 ships 13 tools total; lint_skill is among them)", async () => {
+  it("appears in tools/list (v0.9.0 ships 14 tools total; lint_skill is among them)", async () => {
     const { mcpServer } = bootstrap({ skillsDir: join(home, "skills"), traceDir: join(home, "traces") });
     const resp = await mcpServer.handle(rpc("tools/list"));
     const r = (resp as { result: { tools: Array<{ name: string }> } }).result;
     const names = r.tools.map((t) => t.name).sort();
     expect(names).toContain("lint_skill");
-    expect(r.tools).toHaveLength(13);
+    expect(r.tools).toHaveLength(14);
   });
 
   it("lints a literal source body and returns passes_tier_1: true for a clean skill", async () => {

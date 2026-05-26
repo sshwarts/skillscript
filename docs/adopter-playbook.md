@@ -192,7 +192,20 @@ See `examples/custom-bootstrap.example.ts` for a worked walkthrough.
 - **`MemoryStore.write()` is deferred to v0.8.x** bundled with the auth model. `$ memory_write` documented in v0.7.x docs is paper; the corresponding contract method ships when the auth model lands.
 - **4-of-6 trigger sources parse but don't fire.** `cron` and `session: start` work; `event`, `agent-event`, `file-watch`, `sensor` are parser-only stubs. Lands in v0.11+ when the event-bus design completes.
 - **Output kinds shrunk in v0.7.3.** `# Output:` accepts `text` / `prompt-context: <agent>` / `template: <agent>` / `file: <path>` / `none`. The pre-v0.7.3 `slack:` and `card:` values were substrate-specific and were dropped — adopters wanting Slack / WhatsApp / Discord / etc. delivery use either `$ slack.post ...` MCP dispatch inside the skill body OR deliver via `prompt-context: <agent>` and let the agent decide.
-- **Authorization model is self-permit today.** `approved="..."` kwarg is a non-empty-string check; `# Status: Draft → Approved` is self-promotable by the authoring agent. v0.8.x replaces both with a passthrough-substrate-enforces + non-author-signer model.
+- **Authorization model is hash-token approval (v0.9.0).** Skills must carry `# Status: Approved vN:<token>` where the token re-computes from the body minus its `# Status:` line. Bundled `v1:` is CRC32 — discipline-barrier strength, suited to single-operator deployments. Adversarial threat models swap a stronger function:
+
+  ```ts
+  import { registerApprovalFn, setPreferredApprovalVersion } from "skillscript-runtime";
+  import { createHmac } from "node:crypto";
+
+  // v2: HMAC-SHA256 with operator-held key. Agent that knows the algorithm
+  // can no longer self-stamp without the key.
+  const key = process.env["APPROVAL_HMAC_KEY"]!;
+  registerApprovalFn("v2", (body) => createHmac("sha256", key).update(body).digest("hex"));
+  setPreferredApprovalVersion("v2"); // dashboard now stamps v2 on Approve clicks
+  ```
+
+  Wire this in your bootstrap BEFORE any skill is stamped — otherwise existing skills carry `v1:` tokens that still verify (CRC32 stays registered) but new approvals use the upgraded function. The runtime maintains a per-version registry, so mixed-version skill bodies coexist cleanly.
 
 ## Skill discovery + cross-agent composition
 

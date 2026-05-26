@@ -14,7 +14,8 @@ import {
   renderInlineProvenance,
 } from "./provenance.js";
 import { lint } from "./lint.js";
-import { LintFailureError } from "./errors.js";
+import { LintFailureError, ApprovalRejectedError } from "./errors.js";
+import { evaluateApprovalGate } from "./approval.js";
 
 /**
  * Semantic analysis + render. Four phases:
@@ -385,6 +386,13 @@ async function inlineOps(
       }
       const refParsed = parse(source.source);
       if (refParsed.type === "data") {
+        // v0.9.0 — referenced data skills inline as part of the host body
+        // but aren't covered by the host's hash token. Verify each data
+        // skill stands on its own approval before splatting its content.
+        const gate = evaluateApprovalGate(source.source);
+        if (!gate.ok) {
+          throw new ApprovalRejectedError(refName, gate.reason, "inlineDataSkills");
+        }
         inlinedRecord.push({
           name: refName,
           version: source.version,

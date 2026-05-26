@@ -52,7 +52,7 @@ describe("McpServer protocol", () => {
     }
   });
 
-  it("tools/list returns 13 built-in tools (v0.2.8 added execute_skill + help)", async () => {
+  it("tools/list returns 14 built-in tools (v0.9.0 added set_trigger_enabled)", async () => {
     const { server, cleanup } = withServer();
     try {
       const resp = await server.handle(rpc("tools/list"));
@@ -67,6 +67,7 @@ describe("McpServer protocol", () => {
         "list_triggers",
         "register_trigger",
         "runtime_capabilities",
+        "set_trigger_enabled",
         "skill_list",
         "skill_metadata",
         "skill_status",

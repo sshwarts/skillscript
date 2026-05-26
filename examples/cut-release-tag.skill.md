@@ -1,5 +1,5 @@
 # Skill: cut-release-tag
-# Status: Approved
+# Status: Approved v1:eb29a798
 # Description: Run when the user says "ship a release" or "cut a tag" on the current branch; collects commit-list since last tag, asks the user to confirm the version bump, applies the tag, and pushes it
 # Vars: BUMP_KIND=patch
 # Output: text

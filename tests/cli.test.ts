@@ -3,6 +3,7 @@ import { spawnSync } from "node:child_process";
 import { resolve } from "node:path";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
+import { stampApprovalToken } from "../src/approval.js";
 
 const ROOT = resolve(import.meta.dirname, "..");
 const CLI = resolve(ROOT, "dist", "cli.js");
@@ -85,21 +86,23 @@ describe("skillfile CLI", () => {
     // Write a data-skill and a caller that references it.
     const fs = require("node:fs") as typeof import("node:fs");
     const path = require("node:path") as typeof import("node:path");
-    fs.writeFileSync(path.join(home, "skills", "voice.skill.md"), `# Skill: voice
+    fs.writeFileSync(path.join(home, "skills", "voice.skill.md"), stampApprovalToken(`# Skill: voice
+# Status: Approved
 # Type: data
 
 t:
     ! be concise
 
 default: t
-`);
-    fs.writeFileSync(path.join(home, "skills", "caller.skill.md"), `# Skill: caller
+`));
+    fs.writeFileSync(path.join(home, "skills", "caller.skill.md"), stampApprovalToken(`# Skill: caller
+# Status: Approved
 t:
     & voice
     ! ok
 
 default: t
-`);
+`));
     const r = runCli(["execute", "caller"], { SKILLSCRIPT_HOME: home });
     expect(r.code).toBe(0);
     expect(r.stdout).toMatch(/be concise/);

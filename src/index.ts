@@ -192,3 +192,19 @@ export type {
 
 export { DashboardServer } from "./dashboard/server.js";
 export type { DashboardServerConfig } from "./dashboard/server.js";
+
+// v0.9.0 — approval-gate surface for adopters wanting stronger threat models.
+export {
+  computeApprovalToken,
+  verifyApprovalToken,
+  evaluateApprovalGate,
+  stampApprovalToken,
+  registerApprovalFn,
+  setPreferredApprovalVersion,
+  getPreferredApprovalVersion,
+  parseApprovalToken,
+  registeredApprovalVersions,
+  extractStatusFromBody,
+} from "./approval.js";
+export type { ApprovalToken, ApprovalVerification } from "./approval.js";
+export { ApprovalRejectedError } from "./errors.js";
