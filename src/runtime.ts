@@ -257,12 +257,8 @@ export async function execute(
   // (joined emissions are the natural delivery payload) we publish the
   // string in `outputs[key]`; otherwise we pass the last bound variable
   // through structurally. Membership here is about payload shape, not
-  // semantic destination — `slack` and `card` are listed because their
-  // delivery payloads are text, NOT because the runtime knows anything
-  // about Slack or card UIs. (v1.x: move this to connector-registered
-  // metadata via the EmissionConnector design so adopters can register
-  // new text-shaped destinations without a runtime code change.)
-  const TEXT_COERCED_OUTPUT_KINDS = new Set<OutputDecl["kind"]>(["prompt-context", "template", "slack", "card"]);
+  // semantic destination.
+  const TEXT_COERCED_OUTPUT_KINDS = new Set<OutputDecl["kind"]>(["prompt-context", "template"]);
   // Agent-bound dispatch uses literal kind checks below so TS can narrow
   // `decl.kind` to the discriminated `DeliveryPayload.kind` automatically;
   // a runtime Set forces a type predicate. Keep the literals colocated

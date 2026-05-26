@@ -3,7 +3,6 @@
 # Description: Each night, scan the previous 24h of customer feedback records, classify sentiment via local model, surface entries where sentiment is "frustrated" or "blocking" so the team sees them at start-of-day; skip entries already seen on prior nights
 # Triggers: cron: 0 3 * * *
 # Vars: SCAN_LIMIT=50
-# Output: slack: customer-pulse
 # Output: prompt-context: support-lead
 
 fetch_new:

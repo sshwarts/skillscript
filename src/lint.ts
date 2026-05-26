@@ -657,6 +657,14 @@ const DISALLOWED_TOOL: LintRule = {
 // masking real misconfiguration). Lint surfaces the same diagnostic at
 // compile time when the runtime registry is queryable.
 //
+// v0.7.3 — name-match-before-primary fix (matches the v0.7.2 runtime
+// dispatch resolver). Bare `$ <name>` where `<name>` matches a wired
+// connector name (e.g., the auto-wired `llm` + `memory` bridges) routes
+// to that connector directly; the lint must mirror the runtime's
+// resolution order or the bare-form canonical syntax fails at lint
+// before reaching dispatch. Same lesson as the v0.7.2 push-blocker:
+// multi-layer promises need every layer to match.
+//
 // False-positive guard: only fires when `mcpConnectorNames` is non-undefined
 // (lint context has real registry info) — embedder contexts that don't
 // expose the registry stay silent rather than risk noise on legitimate
@@ -664,11 +672,10 @@ const DISALLOWED_TOOL: LintRule = {
 const UNWIRED_PRIMARY_CONNECTOR: LintRule = {
   id: "unwired-primary-connector",
   severity: "error",
-  description: "A bare `$ TOOL` op (no connector prefix) requires a `primary` connector in `connectors.json` or an embedder-supplied toolDispatch. Neither is wired.",
-  remediation: "Either add a `primary` entry to connectors.json that handles the tool, or qualify the op as `$ named_connector.TOOL` against a wired connector. Bare ops silent-stubbed prior to v0.5.0; they now hard-error at dispatch time.",
+  description: "A bare `$ TOOL` op (no connector prefix) routes to either (a) a wired connector matching the op name, or (b) the `primary` connector's tool dispatch. Neither resolves.",
+  remediation: "Either wire a connector whose name matches the bare op (the v0.7.2 canonical pattern — e.g., `llm` / `memory` auto-wire by default), add a `primary` entry to connectors.json that handles the tool, or qualify the op as `$ named_connector.TOOL` against a wired connector.",
   check: (ctx) => {
     if (ctx.mcpConnectorNames === undefined) return [];
-    if (ctx.mcpConnectorNames.includes("primary")) return [];
     const findings: LintFinding[] = [];
     const reported = new Set<string>();
     for (const [targetName, target] of ctx.parsed.targets) {
@@ -679,13 +686,20 @@ const UNWIRED_PRIMARY_CONNECTOR: LintRule = {
         if (m === null) return;
         const toolName = m[1]!;
         if (toolName === "execute_skill" || toolName === "json_parse") return;
+        // v0.7.3 name-match: if the bare op name matches a wired
+        // connector, the runtime dispatch resolver routes there directly.
+        // (Mirrors `runtime.ts` `$` op dispatch — kept in sync with that
+        // fix to prevent the v0.7.2-shape regression of lint-fails-then-
+        // user-never-reaches-runtime.)
+        if (ctx.mcpConnectorNames!.includes(toolName)) return;
+        if (ctx.mcpConnectorNames!.includes("primary")) return;
         const key = `${targetName}:${toolName}`;
         if (reported.has(key)) return;
         reported.add(key);
         findings.push({
           rule: "unwired-primary-connector",
           severity: "error",
-          message: `\`$ ${toolName}\` in target '${targetName}' is a bare tool op with no \`primary\` connector wired. Wired connectors: ${ctx.mcpConnectorNames!.length === 0 ? "(none)" : ctx.mcpConnectorNames!.join(", ")}.`,
+          message: `\`$ ${toolName}\` in target '${targetName}' is a bare tool op — no connector named '${toolName}' wired and no \`primary\` fallback. Wired connectors: ${ctx.mcpConnectorNames!.length === 0 ? "(none)" : ctx.mcpConnectorNames!.join(", ")}.`,
           block: targetName,
           extras: { tool: toolName },
         });

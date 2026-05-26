@@ -24,8 +24,8 @@ const REPO_ROOT = join(__dirname, "..");
 const PACKAGE_JSON = JSON.parse(readFileSync(join(REPO_ROOT, "package.json"), "utf8")) as Record<string, unknown>;
 
 describe("T7 — package.json polish", () => {
-  it("1. version is 0.7.2 (R4 punchlist + bridge classes: string escapes, triple-quote literals, ${VAR} in #Output, object-iteration advisory, @-op unquoted-subst lint, LocalModelMcpConnector + MemoryStoreMcpConnector bundled bridges, deprecation lint context-aware)", () => {
-    expect(PACKAGE_JSON["version"]).toBe("0.7.2");
+  it("1. version is 0.7.3 (agent-as-author hardening: OutputKind substrate-neutrality cleanup [slack + card dropped], registerConnectorClass public API, skillscript.config.json canonical config externalization, onboarding scaffold + adopter playbook, bootstrap-as-example reframe; $ memory_write + unconfirmed-mutation lint drop deferred to v0.8.x with passthrough auth model)", () => {
+    expect(PACKAGE_JSON["version"]).toBe("0.7.3");
   });
 
   it("2. main + types + bin + engines.node ≥ 22.5 declared", () => {

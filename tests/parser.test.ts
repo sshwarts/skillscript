@@ -113,7 +113,7 @@ default: t
   it("parses # Triggers: and # Output: headers", () => {
     const src = `# Skill: notify
 # Triggers: cron: */5 * * * *
-# Output: slack: #alerts
+# Output: prompt-context: oncall
 
 t:
     ! hi
@@ -123,7 +123,33 @@ default: t
     const p = parse(src);
     expect(p.parseErrors).toEqual([]);
     expect(p.triggers).toEqual([{ source: "cron", name: "*/5 * * * *" }]);
-    expect(p.outputs).toEqual([{ kind: "slack", target: "#alerts" }]);
+    expect(p.outputs).toEqual([{ kind: "prompt-context", target: "oncall" }]);
+  });
+
+  it("rejects dropped substrate-specific output kinds (slack, card — removed in v0.7.3)", () => {
+    const srcSlack = `# Skill: notify
+# Output: slack: #alerts
+
+t:
+    ! hi
+
+default: t
+`;
+    const pSlack = parse(srcSlack);
+    expect(pSlack.parseErrors.length).toBeGreaterThan(0);
+    expect(pSlack.parseErrors[0]).toMatch(/Unsupported output kind 'slack'/);
+
+    const srcCard = `# Skill: notify
+# Output: card: id
+
+t:
+    ! hi
+
+default: t
+`;
+    const pCard = parse(srcCard);
+    expect(pCard.parseErrors.length).toBeGreaterThan(0);
+    expect(pCard.parseErrors[0]).toMatch(/Unsupported output kind 'card'/);
   });
 
   it("rejects unsupported condition shapes", () => {

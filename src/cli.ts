@@ -27,6 +27,7 @@ import { FilesystemTraceStore } from "./trace.js";
 import { healthMetrics } from "./metrics.js";
 import { DashboardServer } from "./dashboard/server.js";
 import { bootstrap, defaultRegistry, wireDeclarativeTriggers } from "./bootstrap.js";
+import { loadSkillscriptConfig } from "./runtime-config.js";
 import { createHash } from "node:crypto";
 
 const HOME_DIR = process.env["SKILLSCRIPT_HOME"] ?? join(homedir(), ".skillscript");
@@ -178,31 +179,33 @@ const COMMAND_HELP: Readonly<Record<string, CommandHelp>> = {
   },
   serve: {
     description: "Start the headless runtime host: scheduler + MCP server, no browser SPA",
-    usage: "skillfile serve [--port N] [--host ADDR] [--connectors PATH]",
+    usage: "skillfile serve [--port N] [--host ADDR] [--connectors PATH] [--config PATH]",
     options: [
-      { flag: "--port N", description: "TCP port (default: 7878)" },
+      { flag: "--port N", description: "TCP port (default: 7878; overrides skillscript.config.json)" },
       { flag: "--host ADDR", description: "Bind address (default: 127.0.0.1; container deploys override to 0.0.0.0)" },
       { flag: "--connectors PATH", description: "Path to connectors.json (default: $SKILLSCRIPT_HOME/connectors.json)" },
+      { flag: "--config PATH", description: "Path to skillscript.config.json (default: $SKILLSCRIPT_HOME/skillscript.config.json; loader is graceful on missing)" },
     ],
     examples: [
       "skillfile serve",
       "skillfile serve --host 0.0.0.0 --port 7878   # container deployment",
-      "skillfile serve --connectors ./my-connectors.json",
+      "skillfile serve --config ./adopter.config.json   # two-instance posture",
     ],
   },
   dashboard: {
     description: "Start the full runtime host: scheduler + MCP server + browser dashboard SPA",
-    usage: "skillfile dashboard [--port N] [--host ADDR] [--connectors PATH]",
+    usage: "skillfile dashboard [--port N] [--host ADDR] [--connectors PATH] [--config PATH]",
     options: [
-      { flag: "--port N", description: "TCP port (default: 7878)" },
+      { flag: "--port N", description: "TCP port (default: 7878; overrides skillscript.config.json)" },
       { flag: "--host ADDR", description: "Bind address (default: 127.0.0.1; container deploys override to 0.0.0.0)" },
       { flag: "--connectors PATH", description: "Path to connectors.json (default: $SKILLSCRIPT_HOME/connectors.json; loader is graceful on missing file)" },
+      { flag: "--config PATH", description: "Path to skillscript.config.json (default: $SKILLSCRIPT_HOME/skillscript.config.json; loader is graceful on missing)" },
     ],
     examples: [
       "skillfile dashboard",
       "skillfile dashboard --port 8080",
       "skillfile dashboard --host 0.0.0.0 --port 7878   # container only",
-      "skillfile dashboard --connectors ./my-connectors.json",
+      "skillfile dashboard --config ./adopter.config.json   # two-instance posture",
     ],
   },
 };
@@ -645,27 +648,35 @@ async function copyScaffoldFile(src: string, dest: string): Promise<void> {
 }
 
 async function cmdRuntimeHost(args: string[], opts: { mode: "serve" | "dashboard" }): Promise<number> {
+  // v0.7.3 — load skillscript.config.json if present. CLI flags override
+  // config-file values; config-file values override defaults.
+  const configPath = extractFlag(args, "--config") ?? join(HOME_DIR, "skillscript.config.json");
+  const { config: fileConfig, errors: configErrors } = loadSkillscriptConfig({ path: configPath });
+  for (const err of configErrors) process.stderr.write(`[cli] ${err}\n`);
   const portStr = extractFlag(args, "--port");
-  const port = portStr !== undefined ? parseInt(portStr, 10) : 7878;
+  const port = portStr !== undefined ? parseInt(portStr, 10) : fileConfig.dashboard?.port ?? 7878;
   // --host is the bind address inside the running process. 127.0.0.1 is
   // the safe default for local invocation; container deployments pass
   // --host 0.0.0.0 so the host-side port-forward can reach the listener
   // (host port mapping still enforces 127.0.0.1 externally).
-  const host = extractFlag(args, "--host") ?? "127.0.0.1";
-  const triggersFilePath = join(HOME_DIR, "triggers.json");
+  const host = extractFlag(args, "--host") ?? fileConfig.dashboard?.host ?? "127.0.0.1";
+  const triggersFilePath = fileConfig.triggersFilePath ?? join(HOME_DIR, "triggers.json");
   // v0.4.3 — auto-discover connectors.json from HOME_DIR. Closes the
   // last-mile gap of the v0.4.x arc: pre-v0.4.3 the loader + lint +
   // runtime + allowlist all worked, but the canonical CLI entry point
   // didn't read connectors.json. --connectors <path> overrides the
   // default for non-standard layouts. Loader is graceful on missing.
-  const connectorsConfigPath = extractFlag(args, "--connectors") ?? join(HOME_DIR, "connectors.json");
+  const connectorsConfigPath = extractFlag(args, "--connectors") ?? fileConfig.connectorsConfigPath ?? join(HOME_DIR, "connectors.json");
   const wired = bootstrap({
-    skillsDir: SKILLS_DIR,
-    traceDir: TRACE_DIR,
-    memoryDbPath: MEMORY_DB,
+    skillsDir: fileConfig.skillsDir ?? SKILLS_DIR,
+    traceDir: fileConfig.traceDir ?? TRACE_DIR,
+    memoryDbPath: fileConfig.memoryDbPath ?? MEMORY_DB,
     triggersFilePath,
     connectorsConfigPath,
     mode: opts.mode,
+    ...(fileConfig.ollamaBaseUrl !== undefined ? { ollamaBaseUrl: fileConfig.ollamaBaseUrl } : {}),
+    ...(fileConfig.pollIntervalSeconds !== undefined ? { pollIntervalSeconds: fileConfig.pollIntervalSeconds } : {}),
+    ...(fileConfig.enableUnsafeShell !== undefined ? { enableUnsafeShell: fileConfig.enableUnsafeShell } : {}),
     // Scheduler-fired skills record traces by default; `fires` / `health` /
     // `health_metrics` (MCP) all read from the trace store.
     trace: { mode: "on" },

@@ -1,8 +1,22 @@
-// Long-lived runtime bootstrap — wires the connector registry, scheduler,
-// and MCP server that `skillfile dashboard` (today) and `skillfile serve`
-// (v0.3) both depend on. Extracted so the v0.3 split between headless
-// scheduler+MCP host and SPA-mounting variant is a trivial new entry point
-// rather than a refactor.
+// Reference bootstrap — wires the bundled defaults (FilesystemSkillStore,
+// SqliteMemoryStore, OllamaLocalModel, LocalModelMcpConnector +
+// MemoryStoreMcpConnector bridges, FilesystemTraceStore, Scheduler,
+// McpServer) so the CLI's `dashboard` / `serve` commands have a working
+// out-of-the-box deployment.
+//
+// **Adopters: this file is a starting point, not a contract.** For custom
+// substrate wiring (your own MemoryStore, your own LocalModel impl, a
+// non-bundled AgentConnector, etc.), write your own bootstrap that imports
+// the public APIs (`Registry`, `registerConnectorClass`, `loadConnectorsConfig`,
+// `loadSkillscriptConfig`, the individual connector classes) and constructs
+// the registry to match your environment. See `examples/custom-bootstrap.example.ts`
+// for a worked walkthrough. Modifying this file in place is supported (the
+// codebase doesn't gate on it being unchanged) but creates merge friction
+// with every upstream release — prefer writing your own bootstrap that
+// imports from the public surface.
+//
+// The public `bootstrap()` function here will continue to work for default
+// deployments and is part of the v0.7.x+ stable public surface.
 
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { dirname } from "node:path";
@@ -140,7 +154,17 @@ export function defaultRegistry(opts: DefaultRegistryOpts): { registry: Registry
 }
 
 /**
- * Construct the long-lived runtime surface. Caller is expected to:
+ * Construct the runtime surface with bundled-default substrate wiring.
+ *
+ * **Reference deployment.** This function wires `FilesystemSkillStore`,
+ * `OllamaLocalModel` (`default` / `gemma2` / `qwen`), `SqliteMemoryStore`
+ * (if `memoryDbPath` is set + the file/dir exists), the v0.7.2 bridge
+ * connectors (`llm` + `memory`), and any `McpConnector` declared in
+ * `connectors.json`. Adopters wanting custom substrate wiring should write
+ * their own bootstrap that imports the public APIs (Registry, the
+ * individual connector classes, `loadConnectorsConfig`, etc.) directly.
+ *
+ * Caller is expected to:
  *   1. Optionally call `wireDeclarativeTriggers(result)` to register
  *      `# Triggers:` headers from already-Approved skills.
  *   2. Call `result.scheduler.start()` to arm the tick loop.

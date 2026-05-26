@@ -1,0 +1,21 @@
+{
+  "_comment": "skillscript.config.json — canonical runtime config (v0.7.3). Every field optional; copy this file to skillscript.config.json and tweak. ${VAR} resolves against process.env at load time. The two-instance posture (dev + adopter on same machine) works by copying this file with different paths/ports.",
+
+  "skillsDir": "${SKILLSCRIPT_HOME}/skills",
+  "traceDir": "${SKILLSCRIPT_HOME}/traces",
+  "memoryDbPath": "${SKILLSCRIPT_HOME}/memory.db",
+
+  "ollamaBaseUrl": "http://localhost:11434",
+
+  "pollIntervalSeconds": 30,
+  "enableUnsafeShell": false,
+  "mode": "dashboard",
+
+  "triggersFilePath": "${SKILLSCRIPT_HOME}/triggers.json",
+  "connectorsConfigPath": "${SKILLSCRIPT_HOME}/connectors.json",
+
+  "dashboard": {
+    "port": 7878,
+    "host": "127.0.0.1"
+  }
+}

@@ -394,19 +394,20 @@ Each example is annotated with the language pattern it demonstrates. The pre-v0.
 
 ## Status
 
-**v0.7.0** — pre-1.0, breaking changes still expected through the v0.7→v1.0 arc. The language is stable enough to author production skills; v0.7.0 locks the canonical surface (`${VAR}` substitution, function-call op grammar, substrate-portable connectors) ahead of external adoption.
+**v0.7.3** — pre-1.0, breaking changes still expected through the v0.7→v1.0 arc. The language *shape* locked at v0.7.2 (`${VAR}` substitution, function-call op grammar, substrate-portable connectors); v0.7.3 hardens the adopter surface (canonical config externalization, public `registerConnectorClass` API, onboarding scaffold + adopter playbook, OutputKind substrate-neutrality cleanup).
 
-Test coverage: 896/896 passing (10 skipped, 1 env-gated YouTrack). Narrow-core LOC under the 7150/20-file ceiling per ERD.
+Test coverage: 998/999 passing (10 skipped, 1 env-gated YouTrack). Narrow-core LOC under the budget per ERD.
 
-What's coming next (per the locked v0.7→v1.0 roadmap):
-- **v0.7.x** — tier-2 `deprecated-symbol-op` + `deprecated-substitution-shape` lints (visibility nudges during grace period); `unconfirmed-mutation` broadened to use the captured `approved="..."` kwarg + cover `file_write` / `$ memory_write`
-- **v0.8** — tool-schema introspection: `runtime_capabilities({schemas: true})` exposes per-tool JSON-Schema from MCP `tools/list`; compile-time `mcp-arg-out-of-range` + `mcp-unknown-kwarg` lints
-- **v0.9** — pagination / `while` loop primitive
-- **v0.10** — `foreach parallel` dispatch
-- **v0.11** — Phase 2 trigger sources (event + agent-event)
-- **v0.12** — output routers (slack + card)
-- **v0.13** — emit-as-binding + op-level `(fallback:)` uniformity
-- **v1.0** — API stability commitment, gates on real-user adoption (not just harness rounds)
+What's coming next (per the v0.7.3 → v1.0 roadmap settled in `076bdeac`):
+- **v0.8.0** — auth model + `$ memory_write` bundled. Mixed model: op-level mutations passthrough (substrate enforces; runtime threads credentials); skill-level `Draft → Approved` runtime-enforced (non-author signer required). Drops `unconfirmed-mutation` lint under passthrough. New-version-of-same-name returns to Draft on content change. `MemoryStore.write()` contract extension ships `$ memory_write` against the new auth model. See thread `43178c86` for the settled design.
+- **R7 cold-author harness** (post-v0.7.3 ship) — empirically tests NFR-6 agent-modifiability against the v0.7.3 file layout. Cold agent adds a filter, a lint rule, and a runtime-intrinsic op; failure modes target which extension point to refactor first. Evidence before refactor.
+- **v0.8.x** — tool-schema introspection: `describe_connector(name)` MCP tool exposes per-tool JSON-Schema from MCP `tools/list`; compile-time `mcp-arg-out-of-range` + `mcp-unknown-kwarg` lints
+- **v0.9** — pagination / `while` loop primitive; `search_skills` MCP tool for cross-agent discovery; skill-evaluation feedback loop
+- **v0.10** — reference `AgentConnector` impls (webhook, memory-handoff) shipped concretely; `# Output:` channel posture explicit
+- **v0.11** — Phase 2 trigger sources (event + agent-event + file-watch + sensor)
+- **v0.12** — emit-as-binding + op-level `(fallback:)` uniformity; `# Tests:` block
+- **v0.13+** — observability for scale-out (per-skill latency/error-rate/aggregate panels); portability stress-test scaffold (vector-DB memory + hosted-API LLM + webhook AgentConnector) as v1.0 gate prep
+- **v1.0** — API stability commitment, gates on first external adopter shipping against canonical contracts against a substrate that isn't AMP (not just harness rounds)
 
 ## Contributing
 

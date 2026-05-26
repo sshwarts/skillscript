@@ -1,12 +1,10 @@
 # Skill: morning-brief
 # Status: Approved
-# Description: Compose a daily morning brief from calendar, mailbox, and overnight memory writes when the cron trigger fires at 7am.
+# Description: Compose a daily morning brief from calendar, mailbox, and overnight memory writes when the cron trigger fires at 7am. Delivers via prompt-context to the receiving agent, who decides whether to surface to Slack / Discord / etc.
 # Vars: AGENT, BRIEF_HORIZON_HOURS=24
-# Requires: user-var:morning-brief-channel -> CHANNEL (fallback: dev-null)
 # Triggers: cron: 0 7 * * *
 # OnError: morning-brief-degraded
-# Output: slack: ${CHANNEL}
-# Output: prompt-context: perry
+# Output: prompt-context: ${AGENT}
 
 calendar:
     $ calendar.list_events horizon_hours=${BRIEF_HORIZON_HOURS} -> EVENTS

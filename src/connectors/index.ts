@@ -53,3 +53,28 @@ export type { SqliteMemoryStoreConfig } from "./memory-store.js";
 export { CallbackMcpConnector } from "./mcp.js";
 export type { DispatchFn } from "./mcp.js";
 export { NoOpAgentConnector } from "./agent-noop.js";
+
+// v0.7.2 — typed-contract → MCP bridge classes. Wrap LocalModel /
+// MemoryStore impls as McpConnector for canonical `$ llm` / `$ memory`
+// dispatch surfaces.
+export { LocalModelMcpConnector } from "./local-model-mcp.js";
+export { MemoryStoreMcpConnector } from "./memory-store-mcp.js";
+
+// v0.7.3 — adopter-extensible connector class registry. Adopters with a
+// custom `McpConnector` class that's JSON-instantiable via `connectors.json`
+// call `registerConnectorClass(name, entry)` from their bootstrap BEFORE
+// `loadConnectorsConfig` runs. Closes the merge-conflict bait of editing
+// the bundled `KNOWN_CONNECTOR_CLASSES` directly.
+export {
+  registerConnectorClass,
+  unregisterConnectorClass,
+  getConnectorClass,
+  listKnownConnectorClasses,
+  loadConnectorsConfig,
+} from "./config.js";
+export type {
+  ConnectorClassEntry,
+  ConfiguredConnector,
+  LoadConnectorsConfigOpts,
+  LoadConnectorsConfigResult,
+} from "./config.js";

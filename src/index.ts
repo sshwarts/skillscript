@@ -95,6 +95,30 @@ export type {
 } from "./connectors/types.js";
 export { CURATED_MEMORY_FIELDS } from "./connectors/types.js";
 
+// v0.7.3 — canonical runtime config + adopter-extensible connector class registration.
+export { loadSkillscriptConfig } from "./runtime-config.js";
+export type { SkillscriptConfig, LoadSkillscriptConfigOpts, LoadSkillscriptConfigResult } from "./runtime-config.js";
+
+// Bootstrap helpers (v0.7.3+ public): adopters wiring custom substrates import
+// `Registry` + the connector classes + `wireDeclarativeTriggers`. The bundled
+// `bootstrap()` is a reference implementation for default deployments — see
+// `examples/onboarding-scaffold/bootstrap.ts` for a custom-substrate walkthrough.
+export { bootstrap, defaultRegistry, wireDeclarativeTriggers } from "./bootstrap.js";
+export type { BootstrapOpts, BootstrapResult, DefaultRegistryOpts } from "./bootstrap.js";
+export {
+  registerConnectorClass,
+  unregisterConnectorClass,
+  getConnectorClass,
+  listKnownConnectorClasses,
+  loadConnectorsConfig,
+} from "./connectors/config.js";
+export type {
+  ConnectorClassEntry,
+  ConfiguredConnector,
+  LoadConnectorsConfigOpts,
+  LoadConnectorsConfigResult,
+} from "./connectors/config.js";
+
 export {
   ConnectorError,
   SkillNotFoundError,

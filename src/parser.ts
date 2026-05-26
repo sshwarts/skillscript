@@ -150,7 +150,7 @@ export interface TriggerDecl {
   name: string;
 }
 
-export type OutputKind = "text" | "slack" | "prompt-context" | "template" | "file" | "card" | "none";
+export type OutputKind = "text" | "prompt-context" | "template" | "file" | "none";
 
 export interface OutputDecl {
   kind: OutputKind;
@@ -1093,14 +1093,14 @@ export function parse(source: string): ParsedSkill {
         for (const raw of splitVarsLine(value)) {
           const decl = raw.trim();
           if (decl === "") continue;
-          const allowedKinds = ["text", "slack", "prompt-context", "template", "file", "card", "none"] as const;
+          const allowedKinds = ["text", "prompt-context", "template", "file", "none"] as const;
           const colon = decl.indexOf(":");
           if (colon === -1) {
             const bareKind = normalizeEnumValue(decl, allowedKinds);
             if (bareKind === "text" || bareKind === "none") {
               result.outputs.push({ kind: bareKind });
             } else {
-              result.parseErrors.push(`\`# Output:\` kind '${decl}' missing target — kinds 'slack', 'prompt-context', 'template', 'file', 'card' require '<kind>: <target>'. Only 'text' and 'none' are bare-only.`);
+              result.parseErrors.push(`\`# Output:\` kind '${decl}' missing target — kinds 'prompt-context', 'template', 'file' require '<kind>: <target>'. Only 'text' and 'none' are bare-only.`);
             }
             continue;
           }

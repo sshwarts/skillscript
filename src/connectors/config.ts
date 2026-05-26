@@ -74,9 +74,47 @@ export const KNOWN_CONNECTOR_CLASSES: ReadonlyMap<string, ConnectorClassEntry> =
   ["MemoryStoreMcpConnector", { ctor: MemoryStoreMcpConnector }],
 ]);
 
-/** Listable for error messages + runtime_capabilities discovery. */
+// v0.7.3 — adopter-registered connector classes. Mutable, separate from
+// the bundled closed set so adopters don't edit `KNOWN_CONNECTOR_CLASSES`
+// directly (which is merge-conflict bait every release that adds a bundled
+// class). Public surface: `registerConnectorClass` / `unregisterConnectorClass`.
+// Lookup in `loadConnectorsConfig` reads the union of both maps.
+const adopterConnectorClasses = new Map<string, ConnectorClassEntry>();
+
+/**
+ * Register a custom `McpConnector` class so `connectors.json` entries can
+ * reference it by name. Call from adopter bootstrap BEFORE `loadConnectorsConfig`
+ * runs. Names override the bundled set on collision (adopter wins) — useful
+ * for swapping a bundled class with a hardened variant.
+ *
+ * Throws if `name` is empty. Idempotent re-registration with the same entry
+ * is allowed (lets bootstrap be re-runnable in tests / hot-reload paths).
+ */
+export function registerConnectorClass(name: string, entry: ConnectorClassEntry): void {
+  if (name === "") throw new Error("registerConnectorClass: name must be non-empty");
+  adopterConnectorClasses.set(name, entry);
+}
+
+/**
+ * Remove an adopter-registered class. No-op if `name` isn't in the adopter
+ * map (the bundled closed set is never affected by this call).
+ */
+export function unregisterConnectorClass(name: string): void {
+  adopterConnectorClasses.delete(name);
+}
+
+/**
+ * Lookup that respects the union: adopter overrides take precedence over
+ * the bundled set. Returns `undefined` if neither map carries `name`.
+ */
+export function getConnectorClass(name: string): ConnectorClassEntry | undefined {
+  return adopterConnectorClasses.get(name) ?? KNOWN_CONNECTOR_CLASSES.get(name);
+}
+
+/** Listable for error messages + runtime_capabilities discovery. Returns the union. */
 export function listKnownConnectorClasses(): string[] {
-  return [...KNOWN_CONNECTOR_CLASSES.keys()];
+  const names = new Set<string>([...KNOWN_CONNECTOR_CLASSES.keys(), ...adopterConnectorClasses.keys()]);
+  return [...names];
 }
 
 /**
@@ -294,9 +332,9 @@ export function loadConnectorsConfig(opts: LoadConnectorsConfigOpts): LoadConnec
       continue;
     }
 
-    const classEntry = KNOWN_CONNECTOR_CLASSES.get(className);
+    const classEntry = getConnectorClass(className);
     if (classEntry === undefined) {
-      errors.push(`connectors.json: entry '${name}' references unknown connector class '${className}'. Known classes: ${listKnownConnectorClasses().join(", ")}.`);
+      errors.push(`connectors.json: entry '${name}' references unknown connector class '${className}'. Known classes: ${listKnownConnectorClasses().join(", ")}. To register a custom class, call \`registerConnectorClass(name, entry)\` from your bootstrap code before \`loadConnectorsConfig\` runs.`);
       continue;
     }
 

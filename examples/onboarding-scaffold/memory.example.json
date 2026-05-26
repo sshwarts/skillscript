@@ -1,0 +1,23 @@
+[
+  {
+    "id": "m1",
+    "summary": "Migration runbook for postgres v14 → v15",
+    "detail": "Steps: dump, upgrade binaries, restore. Watch for collation changes affecting indexes. Test against staging before prod.",
+    "created_at": 1748390400,
+    "domain_tags": ["runbook", "postgres", "migration"]
+  },
+  {
+    "id": "m2",
+    "summary": "Incident 2026-05-20: API latency spike traced to N+1 in dashboard query",
+    "detail": "Spike from p99=120ms to 8s. Cause: dashboard query iterating users[].profile without prefetch. Fix: eager-load via select_related. Lesson: lint-check N+1 patterns in dashboard PRs.",
+    "created_at": 1747728000,
+    "domain_tags": ["incident", "performance", "django"]
+  },
+  {
+    "id": "m3",
+    "summary": "Team retro notes 2026-04-15",
+    "detail": "Wins: ship-it-Friday rolled out. Pain: code review backlog grew. Plan: pair-review rotation, async-first sync window 10-11am.",
+    "created_at": 1744675200,
+    "domain_tags": ["retro", "team-process"]
+  }
+]

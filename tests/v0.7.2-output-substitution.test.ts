@@ -70,19 +70,20 @@ describe("v0.7.2 — ${VAR} substitution in # Output: target slot", () => {
     expect(result.outputs[0]!.kind).toBe("file");
   });
 
-  it("works for slack: + template: + card: kinds", async () => {
+  it("works for template: kind (v0.7.3: slack + card dropped from OutputKind)", async () => {
     const src = [
       "# Skill: t",
       "# Status: Approved",
-      "# Vars: CHANNEL=ops",
-      "# Output: slack: #${CHANNEL}",
+      "# Vars: AGENT=oncall-tmpl",
+      "# Output: template: ${AGENT}",
       "run:",
       "    emit(text=\"hi\")",
       "default: run",
       "",
     ].join("\n");
     const result = await compile(src);
-    expect(result.outputs[0]!.target).toBe("#ops");
+    expect(result.outputs[0]!.target).toBe("oncall-tmpl");
+    expect(result.outputs[0]!.kind).toBe("template");
   });
 
   it("legacy $(VAR) form also resolves (grace period)", async () => {

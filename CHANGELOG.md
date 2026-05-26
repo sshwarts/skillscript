@@ -1,5 +1,141 @@
 # Changelog
 
+## 0.7.3 — 2026-05-26
+
+**Agent-as-author hardening.** Closes structural gaps surfaced by the v0.7.3
+roadmap review (`076bdeac`, Perry/CC thread, May 26). The language *shape*
+locked at v0.7.2; v0.7.3 hardens the adopter surface so agents (and the
+humans wiring them up) have a substrate-neutral, merge-friendly, honestly-
+documented surface to build against. `$ memory_write` is deferred to v0.8.x
+bundled with the passthrough auth model — see the auth design thread
+`43178c86` for the settled framing.
+
+### Added — adopter-extensible connector class registry
+
+- **`registerConnectorClass(name, entry)` public API.** Adopters with custom
+  `McpConnector` classes call this from their bootstrap before
+  `loadConnectorsConfig` runs. Closes the merge-conflict bait of editing
+  the bundled `KNOWN_CONNECTOR_CLASSES` Map directly. Adopter overrides
+  take precedence over bundled set on name collision (lets adopters swap
+  bundled classes with hardened variants). Companion: `unregisterConnectorClass`,
+  `getConnectorClass`. See `examples/custom-bootstrap.example.ts`.
+
+### Added — canonical runtime config
+
+- **`skillscript.config.json`.** Externalizes runtime knobs (skillsDir,
+  traceDir, memoryDbPath, dashboard port + host, pollIntervalSeconds,
+  enableUnsafeShell, mode, ollamaBaseUrl, triggersFilePath,
+  connectorsConfigPath) into one declarative file. `${VAR}` substitution
+  matches `connectors.json`. Loader is graceful on missing file. CLI's
+  `dashboard` / `serve` commands accept `--config <path>`; CLI flags
+  override file values; file values override defaults.
+- **Driver:** two-instance posture. Running dev-skillscript + adopter-wiring
+  instance on the same machine requires independent ports/paths. The
+  config file makes this a copy-and-tweak operation rather than threading
+  CLI flags.
+- **`skillscript.config.json.example`** ships at repo root as the template.
+
+### Added — onboarding scaffold (`examples/onboarding-scaffold/`)
+
+- Complete adopter deployment with file-backed memory + OpenAI LLM +
+  tmux-shell agent delivery. ~200 LOC across three adapter files plus
+  bootstrap. Case-1 typed-contract wiring end-to-end — skills authored
+  against this scaffold use canonical `$ llm` / `$ memory` and run
+  unchanged against any other Case-1 substrate.
+- `file-memory-store.ts` — `MemoryStore` impl over a JSON file with
+  simple substring FTS
+- `openai-local-model.ts` — `LocalModel` impl over OpenAI Chat
+  Completions API
+- `tmux-shell-agent-connector.ts` — `AgentConnector` impl via `tmux
+  send-keys` (mirrors what nanoclaw-style harnesses do internally)
+- `bootstrap.ts` — wiring example tying all three together with the
+  v0.7.2 bridges
+- `README.md` walking through quick-start, two-instance posture, and
+  what to modify for production
+
+### Added — adopter playbook (`docs/adopter-playbook.md`)
+
+- Case-1 typed-contract vs Case-2 MCP-tools wiring tradeoff (the
+  load-bearing decision)
+- Joe-Programmer setup walkthrough
+- Conventions for upstream-merge-friendly modifications (dedicated
+  adopter files, `// ADOPTER:org —` sentinels, public registration APIs)
+- Substrate ship-status table with honest v0.7.x gap callouts
+- Skill discovery + cross-agent composition patterns under Case-1 memory
+
+### Changed — OutputKind cleanup (substrate-neutrality)
+
+- **Dropped `slack` and `card` from `OutputKind`.** Substrate-specific
+  delivery names in what's supposed to be a substrate-neutral language.
+  Same anti-pattern v0.7.0 removed for `LocalModel` and `MemoryStore`
+  dispatch shapes. `OutputKind` now: `text` / `prompt-context: <agent>` /
+  `template: <agent>` / `file: <path>` / `none`. Adopters wanting
+  Slack / WhatsApp / Discord / etc. use either `$ slack.post ...` MCP
+  dispatch inside the skill body OR `# Output: prompt-context: <agent>`
+  letting the receiving agent decide. The bundled `EmissionConnector`
+  v1.x backlog item is also dropped — MCP-dispatch handles the use case.
+- **Substrate-neutrality sweep** of the language surface (parser
+  enums, lint code names, ambient refs, frontmatter values, help
+  content). Clean post-cleanup; no other substrate-specific leaks
+  found in the language contract. Internal AST field `ampParams`
+  flagged for renaming in a future pass (not user-facing, no
+  contract impact).
+
+### Changed — reference bootstrap framing
+
+- `src/bootstrap.ts` reframed as **reference wiring, not canonical**.
+  File header + `bootstrap()` docstring explicitly direct adopters with
+  custom substrates to write their own bootstrap importing the public
+  APIs. `bootstrap()` remains part of the v0.7.x+ stable public surface
+  for default deployments. See `examples/custom-bootstrap.example.ts`
+  + `examples/onboarding-scaffold/bootstrap.ts`.
+
+### Changed — public exports
+
+- **New top-level exports** from `skillscript-runtime`:
+  `loadSkillscriptConfig`, `bootstrap`, `defaultRegistry`,
+  `wireDeclarativeTriggers`, `registerConnectorClass`,
+  `unregisterConnectorClass`, `getConnectorClass`,
+  `listKnownConnectorClasses`, `loadConnectorsConfig`.
+- **New `skillscript-runtime/connectors` exports**:
+  `LocalModelMcpConnector`, `MemoryStoreMcpConnector` (so adopter
+  bootstraps can wire bridges over their own typed-contract impls
+  without reaching into bundled `bootstrap()`).
+
+### Deferred to v0.8.x
+
+- **`$ memory_write`** with the `MemoryStore.write({content, tags?,
+  recipients?, expires_at?, metadata?})` contract extension. Ships
+  bundled with the passthrough auth model so the credibility-crack of
+  documented-but-unshipped delivery closes alongside the auth design.
+- **Authorization model.** Mixed: passthrough for op-level mutations
+  (substrate enforces; runtime threads credentials); runtime-enforced
+  for skill-promotion (`# Status: Draft → Approved` requires non-author
+  signer). `# Autonomous: true` becomes documentation; `unconfirmed-mutation`
+  lint drops (substrate enforcement makes it theater). New-version-of-
+  same-name returns to Draft on content change. See thread `43178c86`
+  for the settled design.
+
+### Deferred (post-v0.7.3 ship)
+
+- **R7 cold-author harness.** Tests NFR-6 agent-modifiability empirically:
+  cold agent adds a new filter, a new lint rule, and a new runtime-
+  intrinsic op against the v0.7.3 file layout. If they succeed, NFR-6 is
+  satisfied empirically; if they fail, the failure mode targets which
+  extension point to refactor first. Evidence-driven, no major-version
+  refactor slot.
+
+### Notes for cold authors
+
+- Run `help({topic: "frontmatter"})` for the updated 5-kind OutputKind set.
+- Adopters integrating new substrates: see `docs/adopter-playbook.md`
+  for the Case-1 vs Case-2 framing — this is the most important
+  decision in your wiring.
+- `${VAR}` interpolation, the canonical `$ llm` / `$ memory` surfaces,
+  bare-form bridge dispatch, the v0.7.2 typed contracts — all unchanged
+  in v0.7.3. Existing skills run as-is unless they used `# Output: slack:`
+  or `# Output: card:` (rewrite to `prompt-context:` or use MCP dispatch).
+
 ## 0.7.2 — 2026-05-25
 
 **R4-driven punchlist + bridge classes.** Closes the cold-author findings
