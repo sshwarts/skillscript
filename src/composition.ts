@@ -135,6 +135,59 @@ function resolveSkillStore(registry: Registry): SkillStore {
 }
 
 /**
+ * v0.9.0 — ad-hoc inline-source execution. Per thread `10746795`: ad-hoc
+ * scripting needs a path that doesn't pollute the SkillStore. Inline
+ * source NEVER crosses the SkillStore boundary, so the hash-token
+ * approval gate (which lives at that boundary) doesn't engage.
+ *
+ * Threat model: the gate protects against silent-swap of stored
+ * autonomous skills. Inline-source has no silent-swap attack — the
+ * caller wrote or saw the source they're handing in. Invocation IS
+ * the review. Same intuition as `bash -c "..."`.
+ *
+ * Child skills referenced via `& <name>` or `$ execute_skill skill_name=...`
+ * STILL go through the SkillStore + gate — only the top-level inline
+ * body is ungated.
+ */
+export async function executeSkillFromSource(
+  source: string,
+  inputs: Record<string, string>,
+  opts: ExecuteSkillOpts,
+): Promise<ExecuteSkillResult> {
+  const { ctx, chain = [] } = opts;
+  const depth = (ctx.recursionDepth ?? 0) + 1;
+  const limit = ctx.maxRecursionDepth ?? DEFAULT_MAX_RECURSION_DEPTH;
+  if (depth > limit) {
+    throw new RecursionDepthExceededError([...chain, "(inline)"], limit);
+  }
+
+  const skillStore = opts.skillStore ?? (ctx.registry.hasSkillStore("primary") ? ctx.registry.getSkillStore("primary") : undefined);
+  const compiled = await compile(source, { inputs, ...(skillStore !== undefined ? { skillStore } : {}) });
+
+  const childCtx: ExecuteContext = {
+    ...ctx,
+    recursionDepth: depth,
+    maxRecursionDepth: limit,
+  };
+
+  const result = await execute(
+    compiled.parsed,
+    compiled.resolvedVariables,
+    compiled.targetOrder,
+    childCtx,
+  );
+
+  return {
+    skill_name: compiled.skillName ?? "(inline)",
+    final_vars: result.finalVars,
+    transcript: result.emissions,
+    outputs: result.outputs,
+    errors: result.errors,
+    target_order: compiled.targetOrder,
+  };
+}
+
+/**
  * In-skill `$ execute_skill` op handler. Extracted from runtime.ts to
  * keep that module's LOC under the ERD §1 narrow-core ceiling.
  * Returns the child skill's result for binding to `$(VAR)`. Throws on

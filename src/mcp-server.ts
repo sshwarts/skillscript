@@ -9,6 +9,7 @@ import { listKnownConnectorClasses } from "./connectors/config.js";
 import { LintFailureError, MissingSkillReferenceError } from "./errors.js";
 import {
   executeSkillByName,
+  executeSkillFromSource,
   RecursionDepthExceededError,
   SkillNotFoundForCompositionError,
 } from "./composition.js";
@@ -446,11 +447,12 @@ export class McpServer {
 
     this.registerTool({
       name: "execute_skill",
-      description: "Execute a stored skill end-to-end against the runtime's wired connectors. Returns {skill_name, final_vars, transcript, outputs, errors, target_order}. `mechanical: true` previews dispatch without firing $/~/@/?? ops (TestFlight mode). Recursion-depth-guarded for composition chains (default 10). Write operation.",
+      description: "Execute a skill end-to-end against the runtime's wired connectors. Two modes: (1) `skill_name` — execute a stored skill; runtime fetches from SkillStore and the v0.9.0 hash-token gate fires (Draft / tampered bodies rejected). (2) `source` — ad-hoc inline execution; the supplied body runs in memory and is discarded; bypasses SkillStore + approval gate (per thread 10746795). Use `skill_name` for production / autonomous dispatch; use `source` for one-off scripting where pollution-the-store would be wrong. Returns {skill_name, final_vars, transcript, outputs, errors, target_order}. `mechanical: true` previews dispatch without firing $/~/@/?? ops. Recursion-depth-guarded (default 10). Write operation.",
       inputSchema: {
         type: "object",
         properties: {
-          skill_name: { type: "string", description: "Skill name as stored in the SkillStore." },
+          skill_name: { type: "string", description: "Name of a skill stored in the SkillStore. Exactly one of skill_name / source is required." },
+          source: { type: "string", description: "Ad-hoc inline skill body. Runs in memory; never persisted; bypasses SkillStore + approval gate. Exactly one of skill_name / source is required." },
           inputs: {
             type: "object",
             additionalProperties: { type: "string" },
@@ -462,7 +464,6 @@ export class McpServer {
             default: false,
           },
         },
-        required: ["skill_name"],
       },
       handler: async (args) => this.executeSkill(args),
     });
@@ -486,15 +487,18 @@ export class McpServer {
 
   private async executeSkill(args: Record<string, unknown>): Promise<Record<string, unknown>> {
     const skillName = args["skill_name"];
-    if (typeof skillName !== "string" || skillName === "") {
-      throw new Error("execute_skill: `skill_name` is required (non-empty string).");
+    const sourceArg = args["source"];
+    const hasName = typeof skillName === "string" && skillName !== "";
+    const hasSource = typeof sourceArg === "string" && sourceArg !== "";
+    if (hasName === hasSource) {
+      throw new Error("execute_skill: exactly one of `skill_name` or `source` is required.");
     }
     const inputs = (args["inputs"] as Record<string, string> | undefined) ?? {};
     const mechanical = args["mechanical"] === true;
 
     // Build an ExecuteContext for the call. The MCP tool entry is the
     // top-level — recursionDepth starts at 0 and increments inside
-    // executeSkillByName.
+    // executeSkillByName / executeSkillFromSource.
     if (this.deps.registry === undefined) {
       throw new Error("execute_skill: runtime registry not configured (McpServerDeps.registry missing).");
     }
@@ -505,10 +509,15 @@ export class McpServer {
     } satisfies import("./runtime.js").ExecuteContext;
 
     try {
-      const result = await executeSkillByName(skillName, inputs, {
-        skillStore: this.deps.skillStore,
-        ctx,
-      });
+      const result = hasSource
+        ? await executeSkillFromSource(sourceArg as string, inputs, {
+            skillStore: this.deps.skillStore,
+            ctx,
+          })
+        : await executeSkillByName(skillName as string, inputs, {
+            skillStore: this.deps.skillStore,
+            ctx,
+          });
       return {
         skill_name: result.skill_name,
         final_vars: result.final_vars,

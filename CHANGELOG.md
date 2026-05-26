@@ -7,6 +7,29 @@ auth-model design settled in thread `29b6208e` (Scott + Perry + CC,
 2026-05-26). Replaces the deferred `1866302d` lockdown's 6 moving parts
 with one substrate-neutral mechanism. 5-10× lighter implementation.
 
+### Added — ad-hoc inline-source execution (carve-out)
+
+Per thread `10746795` (Slack 4:31-4:46 PM). The strict "Approved required to
+execute" interpretation creates a corner for ad-hoc scripting: write a quick
+skill → can't run it → store it → human reviews → stamps → finally executes,
+with the script now persisting forever as detritus. Bad UX for one-off work.
+
+- **`execute_skill({source: "..."})`** runs the supplied source body in
+  memory and discards it. **Never crosses the SkillStore boundary** so the
+  hash-token gate (which lives at that boundary) doesn't engage.
+- **`execute_skill({skill_name: "..."})`** unchanged — stored execution,
+  gate fires, Draft/tampered bodies refused.
+- **Exactly one** of `skill_name` / `source` must be provided.
+- **Child references stay gated.** An inline parent that does
+  `$ execute_skill skill_name="child"` or `& data-ref` STILL routes those
+  children through the SkillStore + gate. Only the top-level inline body
+  is ungated.
+- **Threat model rationale**: the gate protects against silent-swap of
+  stored autonomous skills. Inline-source has no silent-swap attack — the
+  caller wrote/saw the source they're handing in. Invocation IS the
+  review. Same intuition as `bash -c "..."`.
+- **New export**: `executeSkillFromSource` from `src/composition.ts`.
+
 ### Added — hash-token approval gate
 
 - **Two states matter: Draft + Approved.** Draft skills can be authored,
