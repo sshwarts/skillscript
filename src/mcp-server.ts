@@ -525,6 +525,12 @@ export class McpServer {
         outputs: result.outputs,
         errors: result.errors,
         target_order: result.target_order,
+        // v0.9.2 — P1.1 + P1.4 wire-level surface. Cold authors / MCP
+        // consumers can inspect `fallbacks[]` and `agent_delivery_receipts[]`
+        // alongside errors to distinguish real success from no-op delivery
+        // or fallback substitution.
+        fallbacks: result.fallbacks,
+        agent_delivery_receipts: result.agent_delivery_receipts,
         mechanical,
       };
     } catch (err) {

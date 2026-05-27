@@ -60,6 +60,19 @@ export interface ExecuteSkillResult {
   outputs: Record<string, unknown>;
   errors: ExecuteResult["errors"];
   target_order: string[];
+  /**
+   * v0.9.2 — P1.4 fallback events. Populated when an op's `(fallback: ...)`
+   * trailer caught a dispatch failure. Empty array `[]` on clean runs.
+   * Surfaces over the MCP wire so consumers can distinguish real success
+   * from fallback-substituted success.
+   */
+  fallbacks: ExecuteResult["fallbacks"];
+  /**
+   * v0.9.2 — P1.1 AgentConnector dispatch receipts with `delivery_skipped`
+   * flag when the NoOp fallback "handled" the dispatch (no real connector
+   * wired). Surfaces over the MCP wire alongside errors / outputs.
+   */
+  agent_delivery_receipts: ExecuteResult["agentDeliveryReceipts"];
 }
 
 /**
@@ -123,6 +136,8 @@ export async function executeSkillByName(
     outputs: result.outputs,
     errors: result.errors,
     target_order: compiled.targetOrder,
+    fallbacks: result.fallbacks,
+    agent_delivery_receipts: result.agentDeliveryReceipts,
   };
 }
 
@@ -184,6 +199,8 @@ export async function executeSkillFromSource(
     outputs: result.outputs,
     errors: result.errors,
     target_order: compiled.targetOrder,
+    fallbacks: result.fallbacks,
+    agent_delivery_receipts: result.agentDeliveryReceipts,
   };
 }
 
