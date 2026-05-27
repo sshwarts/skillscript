@@ -12,7 +12,7 @@ import type {
   ManifestInfo,
 } from "./types.js";
 import { SkillNotFoundError, VersionNotFoundError, StorageConflictError } from "../errors.js";
-import { stampApprovalToken } from "../approval.js";
+import { stampApprovalToken, extractStatusFromBody } from "../approval.js";
 
 const CONTRACT_VERSION = "1.0.0";
 
@@ -169,12 +169,26 @@ export class FilesystemSkillStore implements SkillStore {
       throw new StorageConflictError(name, "name contains characters unsafe for filesystem path", "FilesystemSkillStore");
     }
     await mkdir(this.rootDir, { recursive: true });
-    const content_hash = hashSource(source);
+
+    // v0.9.1 — P0.4 auto-stamp. When the body declares `# Status: Approved`
+    // without a hash token (or with an invalid one), stamp `vN:<token>`
+    // automatically so headless MCP-only adopters don't need a dashboard
+    // round-trip to get a runnable Approved state. Bodies that ALREADY
+    // carry a valid `# Status: Approved vN:<token>` are re-stamped too
+    // (cheap; ensures the persisted body always matches the hash).
+    // Draft/Disabled bodies pass through verbatim.
+    let bodyToWrite = source;
+    const extracted = extractStatusFromBody(source);
+    if (extracted !== null && extracted.status === "Approved") {
+      bodyToWrite = stampApprovalToken(source);
+    }
+
+    const content_hash = hashSource(bodyToWrite);
     const version = shortHash(content_hash);
-    const status = metadata?.status ?? extractStatus(source) ?? "Draft";
+    const status = metadata?.status ?? extractStatus(bodyToWrite) ?? "Draft";
     const nowSec = Math.floor(Date.now() / 1000);
 
-    await writeFile(this.pathFor(name), source, "utf8");
+    await writeFile(this.pathFor(name), bodyToWrite, "utf8");
     const info: VersionInfo = {
       name,
       version,

@@ -1,19 +1,15 @@
 /**
  * Vitest setup — global hooks shared across all test files.
  *
- * v0.9.0 — auto-stamp approval tokens on FilesystemSkillStore.store() in
- * tests. The production v0.9.0 design requires `# Status: Approved` to
- * carry a valid `vN:<token>` stamped by the dashboard's human-approval
- * flow. Test fixtures (~46 files) write bare `# Status: Approved` directly
- * via `skillStore.store()`; rather than sweeping every site to compute a
- * token, we transparently stamp Approved-without-token bodies at the
- * substrate boundary. Tests that exercise the gate's refusal path
- * (Draft / tampered / Disabled) write those statuses explicitly — they
- * never reach this code path.
+ * v0.9.1 — minimal compatibility hook. Production code (v0.9.1
+ * `SkillStore.store()` auto-stamp, P0.4) now handles `# Status: Approved`
+ * bodies natively, so this hook only covers the legacy case where
+ * fixtures omit `# Status:` entirely. Such fixtures are treated as
+ * implicitly Approved for test convenience — a bare-words skill body
+ * without lifecycle ceremony lands runnable.
  *
- * Production paths are unaffected: `update_status(name, "Approved")` does
- * the real stamping; bare-Approved bodies persisted via production code
- * stay bare and are refused at runtime as the design intends.
+ * Tests exercising the gate's refusal path (Draft / tampered / Disabled)
+ * write those statuses explicitly — they never reach this code path.
  */
 import { FilesystemSkillStore } from "../src/connectors/skill-store.js";
 import { stampApprovalToken, extractStatusFromBody } from "../src/approval.js";
@@ -27,11 +23,10 @@ FilesystemSkillStore.prototype.store = async function patchedStore(
 ) {
   let body = source;
   const extracted = extractStatusFromBody(body);
-  // Fixtures may omit `# Status:` entirely or write `# Status: Approved`
-  // without a token. Either case auto-stamps to a valid v1 token so the
-  // gate accepts the fixture at runtime — tests that exercise gate
-  // refusal write Draft/Disabled/tampered bodies explicitly.
-  if (extracted === null || (extracted.status === "Approved" && extracted.approvalToken === null)) {
+  // Production code stamps Approved bodies natively. Only handle the
+  // no-Status-header case here: insert a stamped Approved line so the
+  // fixture runs without manual ceremony.
+  if (extracted === null) {
     body = stampApprovalToken(body);
   }
   return originalStore.call(this, name, body, metadata);
