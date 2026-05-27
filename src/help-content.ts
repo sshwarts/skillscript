@@ -37,7 +37,7 @@ The three delivery channels are all first-class:
 |---|---|---|
 | **Embedded prompt** | \`emit(text="...")\` | Skill output is delivered to the receiving agent via the \`# Output: agent: <name>\` lifecycle hook |
 | **File handoff** | \`file_write(path="...", content="...")\` | Skill writes a file at a known location for the agent to read |
-| **Memory handoff** *(v0.8.x)* | \`$ memory_write content="..." recipients=["agent"] -> R\` | Skill writes a memory the target agent picks up via mailbox. **Deferred to v0.8.x** bundled with the auth model; not available in v0.7.x. |
+| **Memory handoff** | \`$ memory_write content="..." recipients=["agent"] -> R\` | Skill writes a memory the target agent picks up via mailbox. Routes through the wired \`memory_write\` connector (default: \`MemoryStoreMcpConnector\` bundled in v0.8.0+). |
 
 ## 2. The three op classes
 
@@ -48,6 +48,8 @@ The three delivery channels are all first-class:
 | **External MCP dispatch** | \`$ <connector> kwarg=value, ... [-> BINDING]\` | \`$ youtrack_search query="..." -> R\`, \`$ llm prompt="..." -> R\`, \`$ memory mode=fts query="..." -> R\` |
 
 The \`$\` prefix marks **state-affecting ops** (mutation OR external dispatch). Function-call shape marks **language-intrinsic ops the runtime knows directly**.
+
+**Bare vs. dotted form.** \`$ <name> kwargs\` (bare) routes via name-match to the connector named \`<name>\` — the most common shape. \`$ <connector>.<tool> kwargs\` (dotted) routes explicitly when multiple connectors expose the same tool, or to pick a specific instance. Example: \`$ slack_eng.post channel="general" text="..."\` vs \`$ slack_marketing.post channel="general" text="..."\` — the dotted form is the disambiguator.
 
 ## 3. Shape of a skill file
 
@@ -189,7 +191,7 @@ The append mutates the outer-scope binding (unlike \`$set\`, which is loop-local
 
 ## Class 2: Runtime-intrinsic function-calls
 
-Closed set: \`emit\`, \`ask\`, \`inline\`, \`execute_skill\`, \`shell\`, \`file_read\`, \`file_write\`. Unknown function-call names fire \`unknown-runtime-op\` tier-1 with remediation "if this is an MCP tool, use \`$ tool args -> R\` shape instead."
+Closed set: \`emit\`, \`notify\`, \`ask\`, \`inline\`, \`execute_skill\`, \`shell\`, \`file_read\`, \`file_write\`. Unknown function-call names fire \`unknown-runtime-op\` tier-1 with remediation "if this is an MCP tool, use \`$ tool args -> R\` shape instead."
 
 ### \`emit(text="...")\` — output to skill consumer
 
@@ -198,6 +200,26 @@ One-line emission. \`\${VAR}\` substitutes. No result binding by default.
 \`\`\`
 emit(text="Hello, \${NAME}!")
 emit(text="\${ISSUES.totalCount} open showstoppers in \${PROJECT}")
+\`\`\`
+
+### \`notify(agent="...", message?, connectors?) -> ACK\` — mid-skill agent alert
+
+Synchronous alert to a named agent via wired AgentConnector(s). v0.8.0 op.
+**Contrast with \`emit\`:** \`emit\` accumulates into end-of-skill bulk delivery
+via the \`# Output: agent: <name>\` lifecycle hook; \`notify\` fires
+mid-execution to interrupt or page an agent before the skill completes.
+
+- \`agent\` — target agent id (required)
+- \`message\` — alert body (optional; defaults to accumulated emissions so far)
+- \`connectors\` — JSON array restricting which wired AgentConnector(s) receive
+  the dispatch (optional; defaults to all that claim the target agent)
+
+Returns ACK \`{agent, dispatched: [{connector, ok, error?}]}\` — fire-and-forget
+callers ignore the binding; check-delivery callers inspect ACK.
+
+\`\`\`
+notify(agent="oncall", message="threshold breached at \${COUNT}")
+notify(agent="reviewer", connectors=["slack"]) -> A
 \`\`\`
 
 ### \`ask(prompt="...") -> R\` — prompt the user
@@ -296,7 +318,7 @@ $ memory mode=fts query="recent incidents" limit=10 -> CONTEXT
 $ memory_write content="\${REPORT}" addressed_to="oncall" tags="morning-sweep" approved="cron deliverable" -> R
 \`\`\`
 
-**Today's reality (v0.7.3).** Default deployments auto-wire \`llm\` + \`memory\` MCP connectors via bundled bridges (\`LocalModelMcpConnector\` over \`LocalModel\`; \`MemoryStoreMcpConnector\` over \`MemoryStore\`), so \`$ llm\` and \`$ memory\` work zero-config against the bundled Ollama + SQLite contracts. Adopters override by re-registering the same connector names against their own substrate. The legacy \`~ prompt=...\` and \`> mode=... query=...\` ops continue to dispatch through the bundled typed contracts during the v0.7.x grace period with tier-2 \`deprecated-symbol-op\` warnings. **\`$ memory_write\` is deferred to v0.8.x** bundled with the auth model — \`MemoryStore.write()\` contract extension + passthrough credential threading ship together so the documented memory-handoff delivery channel matches reality.
+**Today's reality (v0.9.x).** Default deployments auto-wire \`llm\` + \`memory\` + \`memory_write\` MCP connectors via bundled bridges (\`LocalModelMcpConnector\` over \`LocalModel\`; \`MemoryStoreMcpConnector\` over \`MemoryStore\` — the same bridge instance registered under both \`memory\` and \`memory_write\` names so query + write share substrate). All three work zero-config against the bundled Ollama + SQLite contracts; adopters override by re-registering the same connector names against their own substrate. The legacy \`~ prompt=...\` and \`> mode=... query=...\` ops continue to dispatch through the bundled typed contracts with tier-2 \`deprecated-symbol-op\` warnings; \`$ memory_write content="..." recipients=[...] -> R\` is the canonical durable-handoff path shipped in v0.8.0.
 
 **One canonical call surface per concern.** \`$ memory\` is **the** memory-retrieval call surface — one contract (\`mode=... query=... limit=N -> R\` returning \`{items: [...]}\` envelope), one connector name. Both bare-form (\`$ memory ...\`) and dotted-form (\`$ memory.query ...\`) dispatch through the same registered connector. Same shape for \`$ llm\` (one \`prompt=... [maxTokens=N] [model="..."] -> R\` contract returning the response string). Author against the canonical \`$ llm\` / \`$ memory\` surfaces today; legacy \`~\` / \`>\` removal lands in v0.8/v0.9.
 

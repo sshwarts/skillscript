@@ -789,7 +789,7 @@ const UNWIRED_PRIMARY_CONNECTOR: LintRule = {
   id: "unwired-primary-connector",
   severity: "error",
   description: "A bare `$ TOOL` op (no connector prefix) routes to either (a) a wired connector matching the op name, or (b) the `primary` connector's tool dispatch. Neither resolves.",
-  remediation: "Either wire a connector whose name matches the bare op (the v0.7.2 canonical pattern — e.g., `llm` / `memory` auto-wire by default), add a `primary` entry to connectors.json that handles the tool, or qualify the op as `$ named_connector.TOOL` against a wired connector.",
+  remediation: "For skill authors (in-skill fix): qualify the op as `$ <connector>.<tool>` against a wired connector, OR pick a `tool` name that matches a wired connector name (e.g., `$ llm prompt=...` if `llm` is wired). For runtime operators (config fix): wire a connector whose name matches the bare op (the v0.7.2 canonical pattern — e.g., `llm` / `memory` auto-wire by default in bundled deployments), or add a `primary` entry to connectors.json that handles the tool.",
   check: (ctx) => {
     if (ctx.mcpConnectorNames === undefined) return [];
     const findings: LintFinding[] = [];

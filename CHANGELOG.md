@@ -1,5 +1,85 @@
 # Changelog
 
+## 0.9.1 — 2026-05-27
+
+**Surface completion + structural dispatch validation.** Closes the v0.9.0
+cold-author findings from Perry's R8 + qwen test batteries (thread
+`dec3ca8a`, sequencing locked in `c9c667d2`). Three coherent commits.
+
+### Added — `validateQualifiedDispatch` structural fix (P0.1 + P1.5)
+
+Closes the multi-layer-promise pattern's third recurrence
+(v0.7.2 → v0.7.3 → v0.9.0). Lint and runtime now call the SAME validator
+for qualified `$ <connector>.<tool>` dispatch shapes — they can't drift
+apart again.
+
+- **New module `src/dispatch-validate.ts`** exports
+  `validateQualifiedDispatch({toolName, qualifiedConnector, registry})`
+  returning diagnostics. Lint rules consume them; runtime calls the same
+  validator at the `$` op dispatcher as defense-in-depth.
+- **New static surface on `McpConnectorClass`**: optional
+  `staticTools(): string[] | null`. Bundled bridges declare their
+  canonical surface — `LocalModelMcpConnector → ["prompt"]`,
+  `MemoryStoreMcpConnector → ["query", "memory_write"]`. Connectors
+  without a static surface (RemoteMcpConnector, adopter classes) return
+  null and get tier-3 advisory treatment.
+- **New tier-1 lint rule `unknown-tool-on-connector`** fires when a
+  qualified op references a tool not declared on the connector's
+  static surface. Catches `$ llm.tweet_post` etc. at compile time.
+- **New tier-3 lint rule `unverified-qualified-tool`** fires when the
+  connector class doesn't declare a static surface — advisory only;
+  runtime will fail with a connector-specific error if the tool is
+  missing.
+- **`Registry.getMcpConnectorCtor(name)`** exposes the wired connector's
+  class constructor so external validators can read `staticTools()`.
+- **PR-template discipline addition** in `docs/adopter-playbook.md` —
+  every new dispatch shape lands with lint + runtime + e2e tests as the
+  forcing function. Prevents recurrence #4.
+
+### Added — `skill_write` auto-stamp (P0.4)
+
+Headless adopter unblock per thread `dec3ca8a` R8 minion #6. MCP-only
+adopters (no dashboard) no longer need a `skill_status` Draft→Approved
+round-trip to get a runnable Approved state.
+
+- **`SkillStore.store()` auto-stamps** when the body declares
+  `# Status: Approved` (with or without an existing token). Stamping is
+  idempotent — pre-stamped bodies get a fresh recomputed token; Draft
+  and Disabled bodies pass through verbatim.
+- **`tests/setup.ts` simplified** — production code now handles the
+  Approved-body case; the test hook only covers the legacy
+  no-`# Status:`-header case for fixture convenience.
+
+### Changed — docs sweep (P0.2 + P0.3 + P2.1 + P2.8)
+
+- **`notify()` added to `help({topic:"ops"})`** (P0.2). The op was
+  shipped in v0.8.0 but the closed-set list in the ops topic still said
+  "emit, ask, inline, execute_skill, shell, file_read, file_write" —
+  cold authors by-the-book couldn't find notify. Now documented with a
+  full section + contrast against emit ("end-of-skill bulk via
+  `# Output: agent:` lifecycle hook" vs "mid-skill synchronous alert").
+- **Quickstart's "$ memory_write deferred" lie removed** (P0.3). Both
+  the three-channels table and the dispatch surface paragraph now
+  correctly state memory_write is live and routes through the bundled
+  `memory_write` connector.
+- **Dotted-form added to quickstart** (P2.1). One-paragraph addition
+  explaining bare (`$ <name>`) vs dotted (`$ <connector>.<tool>`)
+  routing, with a multi-connector slack disambiguation example.
+- **`unwired-primary-connector` remediation triaged by audience** (P2.8).
+  Author-side fix (qualify the op or pick a tool-matching name) is now
+  separated from operator-side fix (wire a connector or add `primary` to
+  connectors.json). Cold authors no longer have to triage which
+  remediation applies to them.
+
+### Notes
+
+- 16 new tests (`v0.9.1-validate-dispatch.test.ts`,
+  `v0.9.1-skill-write-autostamp.test.ts`). Suite at 1077/1088 passing,
+  10 skipped, 1 baseline YouTrack env-gated.
+- v0.9.2 queued: compiler permissiveness lint additions (P0.5–P0.9) +
+  qwen re-validation harness as release-gate criteria. Per locked
+  sequencing in thread `c9c667d2`.
+
 ## 0.9.0 — 2026-05-26
 
 **Hash-token approval gate + trigger enable/disable.** Closes the v0.9.x
