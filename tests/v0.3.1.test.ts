@@ -62,24 +62,21 @@ describe("v0.3.1 — unknown-template-reference demoted to tier-2", () => {
   });
 });
 
-describe("v0.3.1 — deferred-skill-reference tier-3 advisory", () => {
-  it("fires alongside the demoted tier-2 for missing $ execute_skill ref", async () => {
+describe("v0.3.1 — deferred-skill-reference advisory (REMOVED in v0.9.4.1)", () => {
+  // The tier-3 advisory was paired with unknown-skill-reference/
+  // unknown-template-reference to "confirm the deferred-resolution path is
+  // engaged." Per Perry's `77ed6c65` next-ring finding ("4 diagnostics for
+  // 2 missing skills") it was just noise — the warning's remediation
+  // already explains the forward-ref path. Removed in v0.9.4.1.
+
+  it("rule no longer fires (replaced by tier-2 warning's remediation)", async () => {
     const src = "# Skill: parent\n# Status: Approved\norch:\n    $ execute_skill skill_name=child-missing -> OUT\ndefault: orch\n";
     const r = await lint(src, { skillStore: wired.skillStore });
-    const advisory = r.findings.find((x) => x.rule === "deferred-skill-reference");
-    expect(advisory).toBeDefined();
-    expect(advisory!.severity).toBe("info");
-    expect(advisory!.message).toMatch(/Lint demoted in v0\.3\.1/);
-    expect(advisory!.message).toMatch(/If this is a typo, fix it now/);
-    expect(advisory!.message).toMatch(/this advisory will clear/);
-  });
-
-  it("fires for missing # Templates: ref", async () => {
-    const src = "# Skill: t\n# Status: Approved\n# Templates: missing-template\n# Output: agent: agent\nm:\n    ! hi\ndefault: m\n";
-    const r = await lint(src, { skillStore: wired.skillStore });
-    const advisory = r.findings.find((x) => x.rule === "deferred-skill-reference");
-    expect(advisory).toBeDefined();
-    expect(advisory!.extras?.["via"]).toBe("# Templates");
+    expect(r.findings.find((x) => x.rule === "deferred-skill-reference")).toBeUndefined();
+    // The tier-2 warning still fires (carries the forward-ref guidance via remediation field).
+    const warning = r.findings.find((x) => x.rule === "unknown-skill-reference");
+    expect(warning).toBeDefined();
+    expect(warning!.severity).toBe("warning");
   });
 
   it("does NOT fire when the ref resolves cleanly", async () => {

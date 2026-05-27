@@ -529,33 +529,43 @@ const INDENTATION: LintRule = {
 
 // v0.3.1: demoted tier-1 → tier-2. Forward-references are allowed; the
 // runtime throws `SkillNotFoundError` if the ref still can't resolve at
-// execute time. The tier-3 `deferred-skill-reference` advisory below
-// confirms the deferred-resolution path is engaged.
+// execute time. v0.9.4.1: paired `deferred-skill-reference` advisory
+// removed — the warning's remediation already explains the forward-ref
+// path; the second finding was just noise (per Perry's `77ed6c65`
+// "4 diagnostics for 2 missing skills" cold-author finding).
 const UNKNOWN_SKILL_REFERENCE: LintRule = {
   id: "unknown-skill-reference",
   severity: "warning",
-  description: "An `&` or `$ execute_skill` op references a skill that's not present in the configured SkillStore. Lint warning (not error) since v0.3.1 — runtime throws `SkillNotFoundError` if still missing at execute time.",
+  description: "An `&` or `$ execute_skill` op references a skill that's not present in the configured SkillStore. Lint warning (not error) since v0.3.1 — runtime throws `SkillNotFoundError` if still missing at execute time. Dedup is per-missing-skill, not per-call-site (v0.9.4.1).",
   remediation: "If this is a typo, fix the spelling against your declarations. If it's a forward reference to a skill you'll author next, this warning clears once the skill is stored. The runtime will throw `SkillNotFoundError` at execute time if the skill is still missing.",
   check: async (ctx) => {
     if (ctx.skillStore === undefined) return [];
     const findings: LintFinding[] = [];
-    const seen = new Set<string>();
+    // v0.9.4.1 — dedup by skill name (not via:name) so one missing skill
+    // referenced via both `&` and `$ execute_skill` (or from multiple
+    // targets) produces one diagnostic, not N. Per Perry's `77ed6c65`
+    // next-ring finding: "4 diagnostics for 2 missing skills" — the via
+    // and target list now folds into a single message.
+    const byName = new Map<string, { vias: Set<string>; firstTarget: string }>();
     for (const [targetName, target] of ctx.parsed.targets) {
       for (const ref of collectAmpRefsFromOps(target.ops)) {
-        const key = `${ref.via}:${ref.name}`;
-        if (seen.has(key)) continue;
-        seen.add(key);
-        try {
-          await ctx.skillStore.metadata(ref.name);
-        } catch {
-          findings.push({
-            rule: "unknown-skill-reference",
-            severity: "warning",
-            message: `Skill '${targetName}' references skill '${ref.name}' via \`${ref.via}\`, but the SkillStore has no skill by that name.`,
-            block: targetName,
-            extras: { referenced_skill: ref.name, via: ref.via },
-          });
-        }
+        const entry = byName.get(ref.name);
+        if (entry === undefined) byName.set(ref.name, { vias: new Set([ref.via]), firstTarget: targetName });
+        else entry.vias.add(ref.via);
+      }
+    }
+    for (const [name, { vias, firstTarget }] of byName) {
+      try {
+        await ctx.skillStore.metadata(name);
+      } catch {
+        const viaList = Array.from(vias).map((v) => `\`${v}\``).join(" / ");
+        findings.push({
+          rule: "unknown-skill-reference",
+          severity: "warning",
+          message: `Skill '${name}' is referenced via ${viaList} (first seen in target '${firstTarget}'), but the SkillStore has no skill by that name.`,
+          block: firstTarget,
+          extras: { referenced_skill: name, vias: Array.from(vias) },
+        });
       }
     }
     return findings;
@@ -790,15 +800,25 @@ const UNVERIFIED_QUALIFIED_TOOL: LintRule = {
 // (lint context has real registry info) — embedder contexts that don't
 // expose the registry stay silent rather than risk noise on legitimate
 // toolDispatch-only setups.
+// v0.9.4.1 — fallback-aware demotion. When every call site for a (target, tool)
+// pair carries an op-level `(fallback: ...)` trailer, demote the tier-1 error
+// to advisory (info). Lint runs at authoring-time; `(fallback:)` is honored at
+// dispatch-time, so the runtime is guarded even though the connector isn't
+// wired here. Per Perry's `77ed6c65` next-ring finding: cold authors expect
+// `(fallback:)` to suppress the tier-1 error (it didn't pre-v0.9.4.1), and
+// the lint message didn't explain the layering. Now: if all sites have
+// fallback → info with layering explanation; if any site lacks it → error
+// (unchanged).
 const UNWIRED_PRIMARY_CONNECTOR: LintRule = {
   id: "unwired-primary-connector",
   severity: "error",
-  description: "A bare `$ TOOL` op (no connector prefix) routes to either (a) a wired connector matching the op name, or (b) the `primary` connector's tool dispatch. Neither resolves.",
-  remediation: "For skill authors (in-skill fix): qualify the op as `$ <connector>.<tool>` against a wired connector, OR pick a `tool` name that matches a wired connector name (e.g., `$ llm prompt=...` if `llm` is wired). For runtime operators (config fix): wire a connector whose name matches the bare op (the v0.7.2 canonical pattern — e.g., `llm` / `memory` auto-wire by default in bundled deployments), or add a `primary` entry to connectors.json that handles the tool.",
+  description: "A bare `$ TOOL` op (no connector prefix) routes to either (a) a wired connector matching the op name, or (b) the `primary` connector's tool dispatch. Neither resolves. Demoted to advisory when every call site declares `(fallback: ...)` (v0.9.4.1).",
+  remediation: "For skill authors (in-skill fix): qualify the op as `$ <connector>.<tool>` against a wired connector, OR pick a `tool` name that matches a wired connector name (e.g., `$ llm prompt=...` if `llm` is wired), OR add `(fallback: \"...\")` to every call site to acknowledge dispatch-time guarding. For runtime operators (config fix): wire a connector whose name matches the bare op (the v0.7.2 canonical pattern — e.g., `llm` / `memory` auto-wire by default in bundled deployments), or add a `primary` entry to connectors.json that handles the tool.",
   check: (ctx) => {
     if (ctx.mcpConnectorNames === undefined) return [];
     const findings: LintFinding[] = [];
-    const reported = new Set<string>();
+    // Collect per (target, tool); track whether ALL call sites carry an op-level fallback.
+    const groups = new Map<string, { targetName: string; toolName: string; allFallback: boolean }>();
     for (const [targetName, target] of ctx.parsed.targets) {
       walkOps(target.ops, (op) => {
         if (op.kind !== "$" || op.mcpConnector !== undefined) return;
@@ -815,16 +835,34 @@ const UNWIRED_PRIMARY_CONNECTOR: LintRule = {
         if (ctx.mcpConnectorNames!.includes(toolName)) return;
         if (ctx.mcpConnectorNames!.includes("primary")) return;
         const key = `${targetName}:${toolName}`;
-        if (reported.has(key)) return;
-        reported.add(key);
+        const hasFallback = op.fallback !== undefined;
+        const existing = groups.get(key);
+        if (existing === undefined) {
+          groups.set(key, { targetName, toolName, allFallback: hasFallback });
+        } else if (!hasFallback) {
+          existing.allFallback = false;
+        }
+      });
+    }
+    for (const { targetName, toolName, allFallback } of groups.values()) {
+      const wired = ctx.mcpConnectorNames!.length === 0 ? "(none)" : ctx.mcpConnectorNames!.join(", ");
+      if (allFallback) {
+        findings.push({
+          rule: "unwired-primary-connector",
+          severity: "info",
+          message: `\`$ ${toolName}\` in target '${targetName}' is a bare tool op against no wired connector (wired: ${wired}) — every call site declares \`(fallback: ...)\`. Lint runs at authoring-time and the fallback resolves at dispatch-time, so tier-1 lint passes; the runtime branch is reached only if dispatch fails in production.`,
+          block: targetName,
+          extras: { tool: toolName, hasFallback: true },
+        });
+      } else {
         findings.push({
           rule: "unwired-primary-connector",
           severity: "error",
-          message: `\`$ ${toolName}\` in target '${targetName}' is a bare tool op — no connector named '${toolName}' wired and no \`primary\` fallback. Wired connectors: ${ctx.mcpConnectorNames!.length === 0 ? "(none)" : ctx.mcpConnectorNames!.join(", ")}.`,
+          message: `\`$ ${toolName}\` in target '${targetName}' is a bare tool op — no connector named '${toolName}' wired and no \`primary\` fallback. Wired connectors: ${wired}.`,
           block: targetName,
           extras: { tool: toolName },
         });
-      });
+      }
     }
     return findings;
   },
@@ -849,52 +887,12 @@ const UNKNOWN_CONNECTOR_CLASS: LintRule = {
     })),
 };
 
-// v0.3.1: tier-3 advisory that fires alongside the demoted tier-2
-// unknown-skill-reference / unknown-template-reference. Confirms the
-// deferred-resolution path is engaged so cold authors can distinguish
-// "intentional forward-ref" from "typo I should fix now."
-const DEFERRED_SKILL_REFERENCE: LintRule = {
-  id: "deferred-skill-reference",
-  severity: "info",
-  description: "An `&` / `$ execute_skill` / `# Templates:` reference targets a skill not currently in the SkillStore; resolution is deferred to execute time (v0.3.1+).",
-  remediation: "If this is a forward reference, this advisory will clear once the referenced skill is stored. If it's a typo, fix the spelling — the runtime will throw `SkillNotFoundError` at execute time if still missing.",
-  check: async (ctx) => {
-    if (ctx.skillStore === undefined) return [];
-    const findings: LintFinding[] = [];
-    const seenComposition = new Set<string>();
-    for (const [targetName, target] of ctx.parsed.targets) {
-      for (const ref of collectAmpRefsFromOps(target.ops)) {
-        const key = `${ref.via}:${ref.name}`;
-        if (seenComposition.has(key)) continue;
-        seenComposition.add(key);
-        try {
-          await ctx.skillStore.metadata(ref.name);
-        } catch {
-          findings.push({
-            rule: "deferred-skill-reference",
-            severity: "info",
-            message: `Skill '${ref.name}' referenced via \`${ref.via}\` is not currently in the SkillStore. Lint demoted in v0.3.1 — will resolve at execute time if the skill exists by then, or throw SkillNotFoundError if not. If this is a typo, fix it now; if it's a forward reference, this advisory will clear once you store '${ref.name}'.`,
-            block: targetName,
-            extras: { referenced_skill: ref.name, via: ref.via },
-          });
-        }
-      }
-    }
-    for (const name of ctx.parsed.templates) {
-      try {
-        await ctx.skillStore.metadata(name);
-      } catch {
-        findings.push({
-          rule: "deferred-skill-reference",
-          severity: "info",
-          message: `Skill '${name}' referenced via \`# Templates:\` is not currently in the SkillStore. Lint demoted in v0.3.1 — will resolve at execute time if the skill exists by then, or throw SkillNotFoundError if not. If this is a typo, fix it now; if it's a forward reference, this advisory will clear once you store '${name}'.`,
-          extras: { referenced_skill: name, via: "# Templates" },
-        });
-      }
-    }
-    return findings;
-  },
-};
+// v0.3.1 → v0.9.4.1: `deferred-skill-reference` advisory removed. The
+// paired unknown-skill-reference warning's remediation already covers the
+// "this advisory clears once you store the skill" guidance; the second
+// finding was just noise (Perry's `77ed6c65` — "4 diagnostics for 2
+// missing skills"). Cold authors now see one warning per missing skill,
+// not two.
 
 // v0.3.3 — `|json_parse` filter removed; the shape `$(VAR|json_parse).field`
 // is statically detectable. Fire a tier-3 advisory pointing at the new
@@ -2417,7 +2415,6 @@ const RULES: LintRule[] = [
   RESERVED_KEYWORD,
   UNKNOWN_SKILL_REFERENCE,
   UNKNOWN_TEMPLATE_REFERENCE,
-  DEFERRED_SKILL_REFERENCE,
   UNKNOWN_RETRIEVAL_ARG,
   UNKNOWN_CONNECTOR,
   UNKNOWN_CONNECTOR_CLASS,

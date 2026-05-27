@@ -1,5 +1,51 @@
 # Changelog
 
+## 0.9.5 — 2026-05-27 — lint polish (v0.9.4.1 thematic patch)
+
+**Two mechanical lint fixes from Perry's R-series next-ring (`77ed6c65`).**
+Standalone patch ahead of the AgentConnector audit work — keeps
+contract-design surface separate from cold-author polish per the
+thematic-discipline pattern that worked through v0.9.x. No contract
+surface touched; v1.0 cold-author signoff (mean UX 4.0/5 against
+v0.9.4) still stands as the gate-1 baseline.
+
+### Fixed — fallback-trailer lint-layering
+
+Cold authors expected `(fallback: ...)` on a bare `$ TOOL` op to
+suppress the tier-1 `unwired-primary-connector` error (the intuition:
+"if I provide a fallback, the runtime is guarded"). It didn't — lint
+runs at authoring-time and fallback resolves at dispatch-time, so the
+error fired regardless of fallback presence. The layering wasn't
+obvious from the diagnostic.
+
+Fix: when every call site for a `(target, tool)` pair carries an
+op-level `(fallback: ...)` trailer, demote the finding from `error`
+to `info`. The advisory message explains the layering ("Lint runs at
+authoring-time and the fallback resolves at dispatch-time; the
+runtime branch is reached only if dispatch fails in production"). If
+any call site lacks a fallback, the error stays. Per R8 cold-author
+finding in `77ed6c65`.
+
+### Fixed — forward-reference noise dedup
+
+Pre-v0.9.5 lint emitted up to 4 diagnostics for 2 missing skills:
+`unknown-skill-reference` keyed by `via:name` (so the same missing
+skill referenced via both `&` and `$ execute_skill` produced 2
+findings) AND the paired `deferred-skill-reference` advisory doubled
+the count. Per Perry's "4 diagnostics for 2 missing skills" cold-author
+finding — noisy without adding signal.
+
+Fix:
+- `unknown-skill-reference` now dedups by skill name (not `via:name`);
+  the message lists all vias encountered.
+- `deferred-skill-reference` advisory removed entirely — the warning's
+  remediation field already explains the forward-ref path. One warning
+  per missing skill carries the same signal.
+
+Net: 2 missing skills × dual-ref produces 2 findings (down from 8).
+Cold author noise floor reduced; pre-adoption rule applies (no
+external migration needed).
+
 ## 0.9.4 — 2026-05-27
 
 **Cold-author cleanup cluster — N1–N8.** Closes the next ring of findings
