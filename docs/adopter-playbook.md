@@ -185,7 +185,7 @@ See `examples/custom-bootstrap.example.ts` for a worked walkthrough.
 | MemoryStore | ✓ `query` (read-only) | `SqliteMemoryStore` | ✓ `MemoryStoreMcpConnector` |
 | LocalModel | ✓ `run` | `OllamaLocalModel` | ✓ `LocalModelMcpConnector` |
 | McpConnector | ✓ `call` | `RemoteMcpConnector`, `CallbackMcpConnector` | n/a |
-| AgentConnector | ✓ `list_agents`/`deliver`/`wake`/`manifest` | `NoOpAgentConnector` (default) | n/a |
+| AgentConnector | ✓ `list_agents`/`deliver`/`wake`/`health_check`/`request_response`; optional `agent_status` | `NoOpAgentConnector` (default) | n/a |
 
 **Notable v0.7.x gaps the playbook should be honest about:**
 

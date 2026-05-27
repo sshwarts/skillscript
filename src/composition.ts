@@ -116,10 +116,20 @@ export async function executeSkillByName(
 
   // Propagate the parent context with the depth incremented and the
   // child chain extended. Mechanical mode carries through unchanged.
+  //
+  // v0.9.6 audit Q8 — entry_skill_name plumbing per Perry's plumbing-risk
+  // callout (`1bc9d7a2` multi-layer-promise lesson). When parent A composes
+  // child B, B's DeliveryMeta.origin.entry_skill_name must show A. Rule:
+  // - If parent already has entrySkillName set (parent is itself a composed
+  //   helper), preserve it — deeper-than-2-level chains intentionally lose
+  //   the middle per the audit footnote
+  // - Otherwise, parent IS the entry; child inherits parent's
+  //   `_currentSkillName` as its entrySkillName
   const childCtx: ExecuteContext = {
     ...ctx,
     recursionDepth: depth,
     maxRecursionDepth: limit,
+    entrySkillName: ctx.entrySkillName ?? ctx._currentSkillName,
   };
 
   const result = await execute(

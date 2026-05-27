@@ -1,5 +1,6 @@
 import type { ParsedSkill, SkillOp, OutputDecl } from "./parser.js";
-import type { DeliveryReceipt, TriggerProvenance } from "./connectors/agent.js";
+import type { DeliveryMeta, DeliveryReceipt } from "./connectors/agent.js";
+import { randomUUID } from "node:crypto";
 import { tokenizeKeywordArgs, processSetValue } from "./parser.js";
 import { applyFilter, parseFilterChain } from "./filters.js";
 import { dispatchExecuteSkillIntercept } from "./composition.js";
@@ -85,10 +86,30 @@ export interface ExecuteContext {
   /** Persistence backend for trace records. Wires alongside `trace`. */
   traceStore?: TraceStore;
   /**
-   * Trigger context for trace identity + sampling. Scheduler passes the
-   * fired trigger's metadata; direct callers can synthesize.
+   * Trigger context for trace identity + sampling + DeliveryMeta.origin.
+   * Scheduler passes the fired trigger's metadata; direct callers can
+   * synthesize. v0.9.6 — `source` values are constrained to the Q8 enum
+   * (cron / session / webhook / agent / cli / dashboard / inline) when
+   * the value flows into DeliveryMeta.origin.trigger_kind.
    */
   triggerCtx?: { source: string; name: string; fired_at_ms: number; trigger_id?: string };
+  /**
+   * v0.9.6 — root entry-point skill name for composition chains. When
+   * skill A inlines B via `&`, A's execution sets this; B's nested
+   * execute() inherits it; B's deliver()-time meta gets
+   * `entry_skill_name = A`. Undefined for top-level execution (the
+   * emitter IS the entry skill).
+   */
+  entrySkillName?: string;
+  /**
+   * v0.9.6 — current skill's name + frontmatter eventType, stashed by
+   * `execute()` at the top of the per-skill run so deep-stack op
+   * handlers (notify(), etc.) can build DeliveryMeta without threading
+   * `parsed` through every call hop. Internal-use; do not set from
+   * outside execute().
+   */
+  _currentSkillName?: string;
+  _currentSkillEventType?: string | null;
   /** Skill identity for trace records. Optional — falls back to parsed.name + version inference. */
   skillVersion?: string;
   /**
@@ -180,6 +201,51 @@ interface ExecOpsResult {
 }
 
 /**
+ * v0.9.6 audit Q8 — build the `DeliveryMeta` envelope for an `AgentConnector.deliver()`
+ * call. Runtime is the sole producer of meta; adopters consume but never construct.
+ *
+ * - `dispatch_id` is one UUID per call to this helper. Lifecycle hook callers and
+ *   notify() callers each call it once per emit; multi-connector broadcast (one
+ *   notify(), N wired connectors) shares the same id across all N deliver() calls
+ *   because we hold the same `meta` reference across the loop.
+ * - `sent_at` is the runtime emit-clock (NOT the substrate's delivered_at).
+ * - `origin.trigger_kind` maps from `ctx.triggerCtx.source` per Q8 enum.
+ *   `inline` is the fallback when no triggerCtx is set.
+ * - `origin.entry_skill_name` propagates from `ctx.entrySkillName` (set when
+ *   composition runs an inner skill).
+ * - `origin.caller_agent_id` propagates from `ctx.agentId` when the chain was
+ *   started by an agent (cron/cli/dashboard/inline triggers leave it undefined).
+ * - `event_type` precedence: opOverrides.event_type ?? parsed.eventType ?? undefined.
+ *   `notify(event_type=...)` kwarg wins; `# Event-type:` frontmatter is the fallback.
+ * - `correlation_id` only set when explicitly passed via opOverrides (notify()
+ *   kwarg). Lifecycle hooks always emit with correlation_id undefined per Q8.
+ */
+function buildLifecycleMeta(
+  skillName: string | null,
+  frontmatterEventType: string | null,
+  ctx: ExecuteContext,
+  opOverrides?: { event_type?: string; correlation_id?: string },
+): DeliveryMeta {
+  const triggerKind = (ctx.triggerCtx?.source ?? "inline") as DeliveryMeta["origin"]["trigger_kind"];
+  const eventType = opOverrides?.event_type ?? frontmatterEventType ?? undefined;
+  const name = skillName ?? "(unnamed)";
+  return {
+    dispatch_id: randomUUID(),
+    sent_at: Date.now(),
+    origin: {
+      skill_name: name,
+      ...(ctx.entrySkillName !== undefined && ctx.entrySkillName !== name
+        ? { entry_skill_name: ctx.entrySkillName }
+        : {}),
+      trigger_kind: triggerKind,
+      ...(ctx.agentId !== undefined ? { caller_agent_id: ctx.agentId } : {}),
+    },
+    ...(eventType !== undefined ? { event_type: eventType } : {}),
+    ...(opOverrides?.correlation_id !== undefined ? { correlation_id: opOverrides.correlation_id } : {}),
+  };
+}
+
+/**
  * Execute a parsed skill against the live variable state. Walks targets in
  * the provided order. Each target's ops run sequentially; on failure the
  * chain falls back to `else:` → `# OnError:` → bubble.
@@ -206,7 +272,9 @@ export async function execute(
   vars.set("NOW", new Date(nowMs).toISOString());
   vars.set("USER", ctx.agentId ?? "unknown");
   vars.set("SESSION_CONTEXT", "");
-  vars.set("TRIGGER_TYPE", "manual");
+  // v0.9.6 — "manual" enum value dropped per audit Q12; "inline" is the
+  // fallback for runtime-direct callers without explicit trigger context.
+  vars.set("TRIGGER_TYPE", "inline");
   vars.set("TRIGGER_PAYLOAD", "");
   vars.set("EVENT.fired_at", nowMs);
   vars.set("EVENT.fired_at_unix", nowSec);
@@ -229,9 +297,15 @@ export async function execute(
   // Trace recording (per ERD §8). Build when shouldTraceFire returns true;
   // skip entirely when off (the NFR-11 floor — errors still surface via
   // `result.errors[]`).
-  const triggerCtx = ctx.triggerCtx ?? { source: "manual", name: "", fired_at_ms: nowMs };
+  // v0.9.6 — "manual" enum value dropped per audit Q12; "inline" is the
+  // fallback for callers without explicit trigger context.
+  const triggerCtx = ctx.triggerCtx ?? { source: "inline", name: "", fired_at_ms: nowMs };
   const triggerId = triggerCtx.trigger_id ?? `${triggerCtx.source}:${triggerCtx.name}`;
   const skillName = parsed.name ?? "(anonymous)";
+  // v0.9.6 — stash skill identity onto ctx so deep-stack op handlers
+  // (notify()) can read for DeliveryMeta without threading `parsed`
+  // through every call hop. Internal convention; do not set from outside.
+  ctx = { ...ctx, _currentSkillName: skillName, _currentSkillEventType: parsed.eventType };
   const traceBuilder = shouldTraceFire(ctx.trace, triggerId, skillName)
     ? new TraceBuilder(skillName, ctx.skillVersion ?? "unknown", triggerCtx, { agent_id: ctx.agentId })
     : null;
@@ -329,35 +403,28 @@ export async function execute(
       const key = `${decl.kind}:${decl.target}`;
       const body = String(outputs[key] ?? emissions.join("\n"));
       const agent = ctx.registry.getAgentConnector();
-      // Common provenance + augmenting-context fields populated alongside
-      // every delivery (v0.2.6). source_skill identifies the authoring
-      // skill; triggered_by lets the receiver disambiguate cron vs manual
-      // vs session-boundary fires; delivery_context + templates surface the
-      // optional `# Delivery-context:` and `# Templates:` frontmatter.
-      const common = {
-        ...(parsed.name !== null ? { source_skill: parsed.name } : {}),
-        ...(ctx.triggerCtx !== undefined ? {
-          triggered_by: {
-            source: ctx.triggerCtx.source as TriggerProvenance["source"],
-            name: ctx.triggerCtx.name,
-            fired_at_ms: ctx.triggerCtx.fired_at_ms,
-          },
-        } : {}),
-        ...(parsed.deliveryContext !== null ? { delivery_context: parsed.deliveryContext } : {}),
-        ...(parsed.templates.length > 0 ? { templates: parsed.templates } : {}),
-      };
+      // v0.9.6 audit Q8 — build DeliveryMeta per the locked v1.0 shape.
+      // Runtime auto-fills dispatch_id, sent_at, origin; threads optional
+      // event_type from frontmatter (`# Event-type:` fallback per Q9).
+      // Lifecycle hook deliveries carry no correlation_id (Q8 design
+      // boundary — that's notify()-kwarg territory).
+      const meta = buildLifecycleMeta(parsed.name, parsed.eventType, ctx);
       // v0.9.2 — P1.1 flag the no-op dispatch case. When no real
       // AgentConnector is wired, the NoOp fallback accepts the deliver
       // call without doing anything; cold authors get a clear signal.
       const hasRealConnector = ctx.registry.hasAgentConnector();
       try {
         const receipt = decl.kind === "agent"
-          ? await agent.deliver(decl.target, { kind: "augment", content: body, ...common })
-          : await agent.deliver(decl.target, { kind: "template", prompt: body, ...common });
+          ? await agent.deliver(decl.target, { kind: "augment", content: body, meta })
+          : await agent.deliver(decl.target, { kind: "template", prompt: body, meta });
         const record: AgentDeliveryReceiptRecord = { agent_id: decl.target, output_kind: decl.kind, receipt };
         if (!hasRealConnector) {
           record.delivery_skipped = true;
           record.reason = `No AgentConnector wired for runtime; NoOpAgentConnector accepted but didn't deliver. Wire an AgentConnector via registry.registerAgentConnector('primary', <YourImpl>) to enable real delivery.`;
+        } else if (receipt.delivery_skipped === true) {
+          // v0.9.6 Q7 — connector signaled accept-but-not-pushed (offline,
+          // rate-limit drop, etc.). Honor the contract-level signal.
+          record.delivery_skipped = true;
         }
         agentDeliveryReceipts.push(record);
       } catch (err) {
@@ -722,6 +789,20 @@ async function execOpInner(
       // connector failures are recorded in the ACK but don't propagate.
       const allConnectors = ctx.registry.listAgentConnectors();
       const dispatched: Array<{ connector: string; ok: boolean; error?: string }> = [];
+      // v0.9.6 audit Q8 — ONE notify() op invocation = ONE dispatch_id across
+      // every wired connector that gets the deliver() call. Same payload + meta
+      // for the whole fanout; receivers dedupe substrate retries by dispatch_id.
+      // event_type / correlation_id come from the notify() kwargs (per-emit
+      // override of any frontmatter fallback).
+      const notifyMeta = buildLifecycleMeta(
+        ctx._currentSkillName ?? null,
+        ctx._currentSkillEventType ?? null,
+        ctx,
+        {
+          event_type: op.notifyParams?.event_type,
+          correlation_id: op.notifyParams?.correlation_id,
+        },
+      );
       for (const entry of allConnectors) {
         if (restrictConnectors !== undefined && !restrictConnectors.includes(entry.name)) continue;
         let agents: Array<{ agent_id: string }>;
@@ -737,6 +818,7 @@ async function execOpInner(
           await entry.instance.deliver(agent, {
             kind: "augment",
             content: message,
+            meta: notifyMeta,
           });
           dispatched.push({ connector: entry.name, ok: true });
         } catch (err) {

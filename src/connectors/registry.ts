@@ -105,7 +105,22 @@ export class Registry {
     return this.mcpConnectors.get(name)?.ctor;
   }
 
-  registerAgentConnector(name: string, instance: AgentConnector): void {
+  /**
+   * Register an AgentConnector instance. Invokes `instance.health_check()`
+   * and throws on `false` — wiring failures surface at boot, not at first
+   * skill-fire (v0.9.6 audit Q6). Adopters wanting soft dev-mode behavior
+   * wrap their AgentConnector with a retry / always-healthy shim; the
+   * contract stays clean.
+   */
+  async registerAgentConnector(name: string, instance: AgentConnector): Promise<void> {
+    const healthy = await instance.health_check();
+    if (!healthy) {
+      throw new Error(
+        `AgentConnector '${name}' (${(ctorOf(instance) as { name?: string }).name ?? "<unknown class>"}) health_check() returned false at registration. ` +
+        `Substrate is unreachable or misconfigured; runtime refuses to start with an unhealthy AgentConnector. ` +
+        `Fix the substrate or wrap your connector with a retry/always-healthy shim for dev mode.`,
+      );
+    }
     this.agentConnectors.set(name, { instance, ctor: ctorOf(instance) as AgentConnectorClass });
   }
 

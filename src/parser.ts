@@ -109,7 +109,15 @@ export interface SkillOp {
    * optional restriction list — when present, only AgentConnectors whose
    * registered name is in this list are dispatched to.
    */
-  notifyParams?: { agent: string; message?: string; connectors?: string[] };
+  notifyParams?: {
+    agent: string;
+    message?: string;
+    connectors?: string[];
+    /** v0.9.6 — adopter-defined routing vocab; flows to `meta.event_type`. */
+    event_type?: string;
+    /** v0.9.6 — reply-correlation primitive; flows to `meta.correlation_id`. */
+    correlation_id?: string;
+  };
   /**
    * v0.7.0 — inline `approved="reason"` kwarg captured on mutation-class
    * function-call ops. Author intent marker; lint's `unconfirmed-mutation`
@@ -233,13 +241,16 @@ export interface ParsedSkill {
    */
   entryTargetExplicit: boolean;
   /**
-   * `# Delivery-context:` value — human-readable explanation routed to
-   * the receiving agent alongside an augment/template delivery so the
-   * agent knows *why* it was notified. Augmenting/Template skills only;
-   * a `unused-augmenting-header` lint warning fires when set on a skill
-   * without an agent-bound output declaration. v0.2.6 addition.
+   * `# Event-type:` value — author-defined routing vocabulary; flows to
+   * `meta.event_type` on lifecycle-hook deliveries as the frontmatter
+   * fallback. `notify(event_type=...)` kwarg takes precedence per-emit.
+   * Augmenting/Template skills only; a `unused-augmenting-header` lint
+   * warning fires when set on a skill without an agent-bound output
+   * declaration. v0.2.6 introduced as `# Delivery-context:`; renamed in
+   * v0.9.6 for vocab consistency between skill-author and receiver-agent
+   * surfaces.
    */
-  deliveryContext: string | null;
+  eventType: string | null;
   /**
    * `# Templates:` value — comma-separated names of Template skills the
    * receiving agent may fetch as follow-on actions. Surfaced alongside
@@ -1006,7 +1017,7 @@ export function parse(source: string): ParsedSkill {
     onError: null,
     triggers: [],
     outputs: [],
-    deliveryContext: null,
+    eventType: null,
     templates: [],
     autonomous: null,
     parseErrors: [],
@@ -1182,12 +1193,14 @@ export function parse(source: string): ParsedSkill {
           }
           result.outputs.push({ kind, target });
         }
-      } else if (key === "delivery-context") {
-        // Augmenting/Template-only — routed to the receiving agent alongside
-        // the augment payload so they know *why* the delivery fired. Empty
-        // value clears the field; the lint rule `unused-augmenting-header`
-        // catches use on Headless skills. v0.2.6 addition.
-        result.deliveryContext = value === "" ? null : value;
+      } else if (key === "event-type") {
+        // Augmenting/Template-only — author-defined routing vocabulary
+        // routed to the receiving agent as `meta.event_type` (frontmatter
+        // fallback; notify(event_type=...) kwarg takes precedence per-emit).
+        // Empty value clears the field; the lint rule
+        // `unused-augmenting-header` catches use on Headless skills.
+        // Renamed from `delivery-context` in v0.9.6 per audit Q9.
+        result.eventType = value === "" ? null : value;
       } else if (key === "templates") {
         // Comma-separated Template-skill names the receiving agent may fetch
         // as follow-on actions. v0.2.6 addition.
@@ -1714,6 +1727,12 @@ export function parse(source: string): ParsedSkill {
           const agent = kwArgs["agent"] ?? "";
           const message = kwArgs["message"];
           const connectorsRaw = kwArgs["connectors"];
+          // v0.9.6 — adopter-defined routing vocab + reply correlation per
+          // audit Q8. Both are simple-string kwargs that flow verbatim into
+          // DeliveryMeta. event_type takes precedence over the `# Event-type:`
+          // frontmatter fallback at the runtime.
+          const eventType = kwArgs["event_type"];
+          const correlationId = kwArgs["correlation_id"];
           // `connectors` arrives as a JSON array literal string (per the v0.7.0
           // kwarg value grammar). Parse here; runtime sees a real string[].
           let connectors: string[] | undefined;
@@ -1740,6 +1759,8 @@ export function parse(source: string): ParsedSkill {
               agent,
               ...(message !== undefined ? { message } : {}),
               ...(connectors !== undefined ? { connectors } : {}),
+              ...(eventType !== undefined ? { event_type: eventType } : {}),
+              ...(correlationId !== undefined ? { correlation_id: correlationId } : {}),
             },
             ...(outputVar !== undefined ? { outputVar } : {}),
             ...(fallback !== undefined ? { fallback } : {}),

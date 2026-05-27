@@ -1553,28 +1553,24 @@ const PLUGIN_COLLISION: LintRule = {
 const UNUSED_AUGMENTING_HEADER: LintRule = {
   id: "unused-augmenting-header",
   severity: "warning",
-  description: "`# Delivery-context:` or `# Templates:` set on a skill that has no `agent:` or `template:` output declaration. The fields route through `DeliveryPayload`; without an agent-bound output they don't reach a substrate.",
-  remediation: "Either add an agent-bound output (`# Output: agent: <name>` or `# Output: template: <name>`) so the augmenting fields fire, or remove `# Delivery-context:` / `# Templates:` from the frontmatter if the skill is genuinely Headless.",
+  description: "`# Event-type:` set on a skill that has no `agent:` or `template:` output declaration. The field flows to `DeliveryMeta.event_type`; without an agent-bound output it doesn't reach a substrate.",
+  remediation: "Either add an agent-bound output (`# Output: agent: <name>` or `# Output: template: <name>`) so the event_type fires, or remove `# Event-type:` from the frontmatter if the skill is genuinely Headless.",
   check: (ctx) => {
     const hasAgentBoundOutput = ctx.parsed.outputs.some(
       (o) => o.kind === "agent" || o.kind === "template",
     );
     if (hasAgentBoundOutput) return [];
     const findings: LintFinding[] = [];
-    if (ctx.parsed.deliveryContext !== null) {
+    if (ctx.parsed.eventType !== null) {
       findings.push({
         rule: "unused-augmenting-header",
         severity: "warning",
-        message: "`# Delivery-context:` is set but this skill has no `agent:` or `template:` output — the value won't reach any agent.",
+        message: "`# Event-type:` is set but this skill has no `agent:` or `template:` output — the value won't reach any agent.",
       });
     }
-    if (ctx.parsed.templates.length > 0) {
-      findings.push({
-        rule: "unused-augmenting-header",
-        severity: "warning",
-        message: `\`# Templates:\` lists ${ctx.parsed.templates.length} skill(s) but this skill has no \`agent:\` or \`template:\` output — the field won't reach any agent.`,
-      });
-    }
+    // v0.9.6 — `# Templates:` no longer flows through DeliveryPayload (Q10);
+    // the list is consulted by `unknown-template-reference` lint for skill-
+    // existence validation, but it's not delivery-bound metadata anymore.
     return findings;
   },
 };
@@ -1822,6 +1818,36 @@ const DEPRECATED_ADDRESSED_TO: LintRule = {
           block: targetName,
         });
       });
+    }
+    return findings;
+  },
+};
+
+// v0.9.6 — legacy frontmatter header advisory per Perry's `ce41bd4d` signoff
+// probe #4. `# Delivery-context:` was renamed to `# Event-type:` in v0.9.6
+// (audit Q9). The parser silently ignores unknown headers; without this lint
+// cold authors migrating from stale docs hit silent semantic drift — write
+// `# Delivery-context:`, runtime drops it, then debug-loop on why
+// `meta.event_type` is empty. Same silent-permissiveness anti-pattern that
+// v0.9.5's fallback-demotion advisory landed against.
+const LEGACY_FRONTMATTER_HEADER: LintRule = {
+  id: "legacy-frontmatter-header",
+  severity: "warning",
+  description: "A frontmatter header was renamed in a previous version; the legacy name is silently ignored at runtime. Migrate to the current name.",
+  remediation: "Rename the header per the message. The parser silently drops unknown headers, so this advisory is the only signal that the field isn't reaching its destination.",
+  check: (ctx) => {
+    const findings: LintFinding[] = [];
+    const lines = ctx.source.split("\n");
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i]!;
+      if (/^#\s*Delivery-context:/i.test(line)) {
+        findings.push({
+          rule: "legacy-frontmatter-header",
+          severity: "warning",
+          message: "Header `# Delivery-context:` was renamed to `# Event-type:` in v0.9.6. The legacy header is silently ignored at runtime — migrate to `# Event-type:` so the value flows to `meta.event_type` on delivery.",
+          extras: { legacy_header: "# Delivery-context:", new_header: "# Event-type:", line: i + 1 },
+        });
+      }
     }
     return findings;
   },
@@ -2448,6 +2474,7 @@ const RULES: LintRule[] = [
   OUTPUT_AGENT_TARGET_NO_CONNECTOR,
   NUMERIC_SUBSCRIPT,
   DEPRECATED_ADDRESSED_TO,
+  LEGACY_FRONTMATTER_HEADER,
   TRANSCRIPT_FOOTGUN,
   SET_JSON_LITERAL_ADVISORY,
   SKILL_NAME_COLLISION,

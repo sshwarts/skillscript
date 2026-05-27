@@ -50,11 +50,12 @@ default: m
       const registry = new Registry();
       registry.registerSkillStore("primary", new FilesystemSkillStore(join(dir, "skills")));
       // Wire a stub AgentConnector
-      registry.registerAgentConnector("primary", {
-        async list_agents() { return ["oncall"]; },
-        async deliver() { return { delivered_at_ms: Date.now(), receipt_id: "stub" }; },
-        async wake() { return { acknowledged: true }; },
-        async manifest() { return { capabilities_version: "1", manifest: {} }; },
+      await registry.registerAgentConnector("primary", {
+        async list_agents() { return [{ agent_id: "oncall" }]; },
+        async deliver() { return { delivered_at: Date.now(), delivery_id: "stub" }; },
+        async wake() { return { woken_at: Date.now() }; },
+        async health_check() { return true; },
+        async request_response() { throw new Error("not implemented"); },
       });
       const compiled = await compile(`# Skill: t
 # Status: Approved

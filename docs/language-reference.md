@@ -1169,16 +1169,16 @@ Single source of truth in the executor's `perKindOutput()` function; routers sta
 
 Skills with `prompt-context:` or `template:` output kinds (Augmenting and Template kinds per the Section 1 taxonomy) can declare two companion headers that ride along with the delivery payload. Both are optional, both have no effect on Headless skills.
 
-### `# Delivery-context: <prose>`
+### `# Event-type: <string>`
 
-Free-form prose explaining *why the receiving agent is being notified and what to do with the content*. Threads through to the `DeliveryPayload.delivery_context` field at dispatch time. The receiving agent reads it as framing for the augment content.
+Adopter-defined routing vocabulary — opaque to skillscript, meaningful to the receiving agent's handler-routing logic. Threads through to `DeliveryMeta.event_type` at dispatch time as the **frontmatter fallback** (per-emit `notify(event_type=...)` kwarg takes precedence). Renamed from `# Delivery-context:` in v0.9.6 for vocab consistency between skill-author and receiver-agent surfaces.
 
 ```
-# Output: prompt-context: perry
-# Delivery-context: A stock in the user's watchlist dropped past threshold during NYSE trading hours. Surface to user with the delta, open, and current price. For action decisions, fetch the execute-trade-decision template.
+# Output: agent: perry
+# Event-type: stock-price-threshold-breached
 ```
 
-Single-line value preferred for compatibility with the parser's multi-line prompt fold; if multi-line prose is needed, keep it on one logical line.
+The receiving agent can route on this field without parsing content — e.g., `if event_type === "stock-price-threshold-breached": ... fetch the execute-trade-decision template`. Adopter chooses the vocabulary.
 
 ### `# Templates: <skill_name>, <skill_name>, ...`
 
@@ -1456,20 +1456,32 @@ interface AgentConnector {
   list_agents(): Promise<AgentDescriptor[]>;
   deliver(agent_id: string, payload: DeliveryPayload): Promise<DeliveryReceipt>;
   wake(agent_id: string, opts?: WakeOpts): Promise<WakeReceipt>;
+  health_check(): Promise<boolean>;
+  request_response(agent_id: string, payload: DeliveryPayload, opts: RequestResponseOpts): Promise<Response>;
   agent_status?(agent_id: string): Promise<AgentStatus>;
 }
 
+// v0.9.6 audit Q8 — DeliveryMeta envelope locked at v1.0
 type DeliveryPayload =
-  | { kind: "augment"; content: string; format?: "text" | "markdown"; source_skill?: string; triggered_by?: TriggerProvenance; delivery_context?: string; templates?: string[] }
-  | { kind: "template"; prompt: string; source_skill?: string; triggered_by?: TriggerProvenance; delivery_context?: string; templates?: string[] };
+  | { kind: "augment"; content: string; meta: DeliveryMeta }
+  | { kind: "template"; prompt: string; meta: DeliveryMeta };
 
-type TriggerProvenance = {
-  source: "cron" | "session" | "event" | "agent-event" | "file-watch" | "sensor" | "manual";
-  name: string;
-  fired_at_ms: number;
-};
+interface DeliveryMeta {
+  dispatch_id: string;       // UUID per emit; same across broadcast branches
+  sent_at: number;           // unix ms — runtime emit-clock
+  origin: {
+    skill_name: string;
+    entry_skill_name?: string;
+    trigger_kind: "cron" | "session" | "webhook" | "agent" | "cli" | "dashboard" | "inline";
+    caller_agent_id?: string;
+  };
+  event_type?: string;       // adopter-defined routing label
+  correlation_id?: string;   // reply-correlation for exchange()
+}
 
-type DeliveryReceipt = { delivered_at: number; delivery_id?: string };
+type DeliveryReceipt = { delivered_at: number; delivery_id?: string; delivery_skipped?: boolean };
+type Response = { correlation_id: string; content: string; sent_at: number; agent_id: string };
+type RequestResponseOpts = { timeout_ms: number };
 type WakeOpts = { context?: string; when?: "immediate" | number };
 type WakeReceipt = { woken_at: number; session_id?: string };
 type AgentDescriptor = { agent_id: string; agent_name?: string; capabilities?: ("deliver" | "wake" | "augment" | "template")[]; };
@@ -1490,7 +1502,7 @@ The contract is substrate-neutral; adopters wire any delivery mechanism behind i
 
 Default impl `NoOpAgentConnector` logs warnings and resolves; lets the runtime ship without an agent-delivery substrate wired.
 
-**DeliveryPayload provenance fields:** every `deliver` carries optional `source_skill`, `triggered_by`, `delivery_context`, `templates` — see v0.5.0 docs for the full semantics; carried unchanged.
+**DeliveryMeta envelope (v0.9.6):** every `deliver()` call carries a `meta: DeliveryMeta` field. Runtime auto-fills `dispatch_id`, `sent_at`, `origin.skill_name`, `origin.trigger_kind`. Optional fields (`event_type`, `correlation_id`, `entry_skill_name`, `caller_agent_id`) populate when context provides them. Adopters consume meta substrate-side (webhook: JSON field; tmux: header line; whatever); they never construct meta themselves.
 
 **`agent_id` resolution chain** (4-level, first match wins):
 
@@ -1714,7 +1726,7 @@ Three distinct cases that look similar but have different intents:
 
 2. **Delegate work to an agent as a task.** Use `output: template:` to route a compiled artifact through AgentConnector. The receiving agent acts on the prompt. *This is the Template-skill story* — uses compile-as-delivery, not execute-and-bind.
 
-3. **Augment an agent's context with a result.** Use `output: prompt-context:` (with optional `# Delivery-context:` + `# Templates:` headers) to route the executed skill's output into the receiving agent's prompt context. *This is the Augmenting-skill story* shipped in v0.2.6.
+3. **Augment an agent's context with a result.** Use `output: agent:` (with optional `# Event-type:` header) to route the executed skill's output into the receiving agent's prompt context. *This is the Augmenting-skill story* shipped in v0.2.6; v0.9.6 renamed `# Delivery-context:` → `# Event-type:` per the contract audit.
 
 The composition primitive (case 1) is for *intra-skill value passing*. Cases 2 and 3 are for *cross-agent delivery*. The runtime handles all three; the right primitive matches the intent.
 

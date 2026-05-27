@@ -213,6 +213,8 @@ mid-execution to interrupt or page an agent before the skill completes.
 - \`message\` — alert body (optional; defaults to accumulated emissions so far)
 - \`connectors\` — JSON array restricting which wired AgentConnector(s) receive
   the dispatch (optional; defaults to all that claim the target agent)
+- \`event_type\` — adopter-defined routing label (optional; flows to \`DeliveryMeta.event_type\`; overrides \`# Event-type:\` frontmatter)
+- \`correlation_id\` — reply-correlation id (optional; flows to \`DeliveryMeta.correlation_id\`; required for future \`exchange()\` / \`request_response()\` paths)
 
 Returns ACK \`{agent, dispatched: [{connector, ok, error?}]}\` — fire-and-forget
 callers ignore the binding; check-delivery callers inspect ACK.
@@ -220,6 +222,7 @@ callers ignore the binding; check-delivery callers inspect ACK.
 \`\`\`
 notify(agent="oncall", message="threshold breached at \${COUNT}")
 notify(agent="reviewer", connectors=["slack"]) -> A
+notify(agent="ops", message="911", event_type="ticket-911", correlation_id="\${INCIDENT_ID}")
 \`\`\`
 
 ### \`ask(prompt="...") -> R\` — prompt the user
@@ -407,10 +410,10 @@ Skill files open with \`# Key: value\` headers. Order isn't significant.
 
 ## Augmenting / Template only
 
-- \`# Delivery-context: <prose>\` — routed to the receiving agent alongside the augment payload. v0.2.6.
-- \`# Templates: <skill_name>, <skill_name>\` — comma-separated Template-skill names the receiving agent may fetch as follow-on actions. v0.2.6.
+- \`# Event-type: <string>\` — adopter-defined routing vocabulary; flows to \`DeliveryMeta.event_type\` on lifecycle-hook deliveries as the frontmatter fallback. \`notify(event_type=...)\` kwarg takes precedence per-emit. Renamed from \`# Delivery-context:\` in v0.9.6 for vocab consistency.
+- \`# Templates: <skill_name>, <skill_name>\` — comma-separated Template-skill names referenced by this skill; validated for existence by \`unknown-template-reference\` lint. As of v0.9.6 no longer flows through DeliveryPayload (per audit Q10).
 
-(Both fire \`unused-augmenting-header\` lint warning if set on a Headless skill — one with no \`agent:\` or \`template:\` output declaration.)
+(\`# Event-type:\` fires \`unused-augmenting-header\` lint warning if set on a Headless skill — one with no \`agent:\` or \`template:\` output declaration.)
 
 ## Capabilities + retrieval
 
@@ -440,7 +443,7 @@ The runtime injects these refs — don't declare them in \`# Vars:\` / \`# Requi
 | \`$(NOW)\` | runtime clock | ISO-8601 timestamp at op-dispatch time |
 | \`$(USER)\` | invocation context | Identity passed via \`agentId\` / CLI user |
 | \`$(SESSION_CONTEXT)\` | runtime session | Free-form session snapshot for cross-skill carry |
-| \`$(TRIGGER_TYPE)\` | scheduler | \`cron\` / \`session\` / \`manual\` / \`agent-event\` |
+| \`$(TRIGGER_TYPE)\` | scheduler | \`cron\` / \`session\` / \`webhook\` / \`agent\` / \`cli\` / \`dashboard\` / \`inline\` (v0.9.6 enum lock) |
 | \`$(TRIGGER_PAYLOAD)\` | scheduler | JSON-serializable payload attached to the firing trigger |
 | \`$(ERROR_CONTEXT)\` | runtime error handler | Inside \`else:\` and \`# OnError:\` only; \`.kind\` / \`.message\` / \`.target\` accessible |
 
@@ -522,7 +525,7 @@ Demonstrates: \`# Triggers:\` cron, \`# Autonomous: true\` for unattended skills
 # Description: Classify an incoming ticket by urgency and route to oncall when severe
 # Status: Approved
 # Vars: TICKET_BODY
-# Delivery-context: Urgent ticket triage — please assess + assign owner.
+# Event-type: ticket-triage-urgent
 # Templates: ticket-assignment-procedure
 # Output: agent: oncall
 
@@ -541,7 +544,7 @@ route: classify
 default: route
 \`\`\`
 
-Demonstrates: \`$ llm\` MCP dispatch (substrate-portable — adopter wires their LLM substrate under the \`llm\` connector name), \`|trim\` filter on LLM output, ref-vs-literal comparison, agent delivery via \`agent:\` lifecycle hook, augmenting headers (\`# Delivery-context:\` + \`# Templates:\`).
+Demonstrates: \`$ llm\` MCP dispatch (substrate-portable — adopter wires their LLM substrate under the \`llm\` connector name), \`|trim\` filter on LLM output, ref-vs-literal comparison, agent delivery via \`agent:\` lifecycle hook, augmenting headers (\`# Event-type:\` + \`# Templates:\`).
 
 ## 4. Composition — orchestrator invoking child skills
 
@@ -804,7 +807,7 @@ Three tiers per ERD §3:
 - \`model-contention\` — async + sync ops on the same model serialize on a single runtime worker
 - \`draft-with-trigger\` — \`# Status: Draft\` skill has \`# Triggers:\` declared; triggers won't fire until Approved
 - \`reference-to-disabled-skill\` — \`&\` op references a Disabled skill (also tier-1 in some contexts)
-- \`unused-augmenting-header\` — \`# Delivery-context:\` or \`# Templates:\` set on a skill with no agent-bound output (v0.2.6)
+- \`unused-augmenting-header\` — \`# Event-type:\` set on a skill with no agent-bound output (v0.2.6, renamed v0.9.6)
 
 ## Tier-3 (info)
 

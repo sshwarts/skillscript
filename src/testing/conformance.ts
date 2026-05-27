@@ -303,7 +303,9 @@ export const AgentConnectorConformance = {
       methodExistence("AgentConnector.list_agents present", fixture, "list_agents"),
       methodExistence("AgentConnector.deliver present", fixture, "deliver"),
       methodExistence("AgentConnector.wake present", fixture, "wake"),
-      methodExistence("AgentConnector.manifest present", fixture, "manifest"),
+      // v0.9.6 — manifest() dropped from AgentConnector per audit Q2.
+      methodExistence("AgentConnector.health_check present", fixture, "health_check"),
+      methodExistence("AgentConnector.request_response present", fixture, "request_response"),
       {
         category: "return-type",
         name: "list_agents returns an array",
@@ -314,20 +316,28 @@ export const AgentConnectorConformance = {
       },
       {
         category: "return-type",
-        name: "manifest returns capabilities_version + manifest fields",
+        name: "health_check returns boolean",
         run: withInstance(fixture, async (connector) => {
-          const m = await connector.manifest();
-          assert(typeof m.capabilities_version === "string", "manifest.capabilities_version must be string");
+          const r = await connector.health_check();
+          assert(typeof r === "boolean", `health_check must return boolean (got ${typeof r})`);
         }),
       },
     ];
     const testAgentId = fixture.testAgentId;
+    // v0.9.6 — DeliveryMeta envelope per audit Q8. Conformance fixtures supply
+    // a synthetic meta for deliver() probes; adopter substrate is expected to
+    // serialize-and-ignore fields it doesn't understand.
+    const buildConformanceMeta = (): import("../connectors/agent.js").DeliveryMeta => ({
+      dispatch_id: "conformance-test",
+      sent_at: Date.now(),
+      origin: { skill_name: "conformance-fixture", trigger_kind: "inline" },
+    });
     if (testAgentId !== undefined) {
       tests.push({
         category: "feature-behavior",
         name: "deliver(kind=augment) returns DeliveryReceipt with delivered_at",
         run: withInstance(fixture, async (connector) => {
-          const receipt = await connector.deliver(testAgentId, { kind: "augment", content: "conformance" });
+          const receipt = await connector.deliver(testAgentId, { kind: "augment", content: "conformance", meta: buildConformanceMeta() });
           assert(typeof receipt.delivered_at === "number", "DeliveryReceipt.delivered_at must be number");
         }),
       });
@@ -335,7 +345,7 @@ export const AgentConnectorConformance = {
         category: "feature-behavior",
         name: "deliver(kind=template) returns DeliveryReceipt with delivered_at",
         run: withInstance(fixture, async (connector) => {
-          const receipt = await connector.deliver(testAgentId, { kind: "template", prompt: "conformance" });
+          const receipt = await connector.deliver(testAgentId, { kind: "template", prompt: "conformance", meta: buildConformanceMeta() });
           assert(typeof receipt.delivered_at === "number", "DeliveryReceipt.delivered_at must be number");
         }),
       });

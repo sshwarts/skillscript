@@ -320,7 +320,11 @@ export class Scheduler {
       ...(this.absoluteTimeoutMs !== undefined ? { absoluteTimeoutMs: this.absoluteTimeoutMs } : {}),
       ...(this.trace !== undefined ? { trace: this.trace } : {}),
       ...(this.traceStore !== undefined ? { traceStore: this.traceStore } : {}),
-      triggerCtx: triggerCtx ?? { source: "manual", name: "", fired_at_ms: nowMs },
+      // v0.9.6 — "manual" enum value dropped per audit Q12. Default fallback
+      // is "inline" — "programmatic call without explicit trigger context"
+      // per Perry's mapping. Specific callers (CLI, dashboard, agent-driven)
+      // pass their own triggerCtx with the right source value.
+      triggerCtx: triggerCtx ?? { source: "inline", name: "", fired_at_ms: nowMs },
       skillVersion: loaded.metadata.version,
     };
     const defaults = this.buildEventDefaults();
@@ -337,7 +341,7 @@ export class Scheduler {
     const nowMs = this.now();
     const nowSec = Math.floor(nowMs / 1000);
     return {
-      TRIGGER_TYPE: "manual",
+      TRIGGER_TYPE: "inline",
       "EVENT.fired_at": nowMs,
       "EVENT.fired_at_unix": nowSec,
       "EVENT.fired_at_plus_1h_unix": nowSec + 3600,

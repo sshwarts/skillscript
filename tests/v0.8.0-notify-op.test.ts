@@ -46,9 +46,8 @@ class FakeAgentConnector implements AgentConnector {
   async wake(agent_id: string, _opts?: WakeOpts): Promise<WakeReceipt> {
     return { woken_at: Date.now(), session_id: `wake:${agent_id}` };
   }
-  async manifest(): Promise<ManifestInfo> {
-    return { capabilities_version: "1", manifest: { kind: "fake-agent-connector" } };
-  }
+  async health_check(): Promise<boolean> { return true; }
+  async request_response(): Promise<never> { throw new Error("not implemented in FakeAgentConnector"); }
 }
 
 describe("v0.8.0 — notify() runtime-intrinsic op", () => {
@@ -87,7 +86,7 @@ describe("v0.8.0 — notify() runtime-intrinsic op", () => {
   it("dispatches to AgentConnector that claims the agent in list_agents()", async () => {
     const wired = bootstrap({ skillsDir: join(home, "skills"), traceDir: join(home, "traces") });
     const fake = new FakeAgentConnector(["oncall"]);
-    wired.registry.registerAgentConnector("primary", fake);
+    await wired.registry.registerAgentConnector("primary", fake);
 
     const src = `# Skill: t\n# Status: Approved\nrun:\n    notify(agent="oncall", message="urgent alert") -> ACK\n    emit(text="dispatched")\ndefault: run\n`;
     const compiled = await compile(src);
@@ -103,7 +102,7 @@ describe("v0.8.0 — notify() runtime-intrinsic op", () => {
   it("defaults message to joined accumulated emissions when message kwarg absent", async () => {
     const wired = bootstrap({ skillsDir: join(home, "skills"), traceDir: join(home, "traces") });
     const fake = new FakeAgentConnector(["X"]);
-    wired.registry.registerAgentConnector("primary", fake);
+    await wired.registry.registerAgentConnector("primary", fake);
 
     const src = `# Skill: t\n# Status: Approved\nrun:\n    emit(text="line one")\n    emit(text="line two")\n    notify(agent="X")\ndefault: run\n`;
     const compiled = await compile(src);
@@ -118,8 +117,8 @@ describe("v0.8.0 — notify() runtime-intrinsic op", () => {
     const wired = bootstrap({ skillsDir: join(home, "skills"), traceDir: join(home, "traces") });
     const claimsX = new FakeAgentConnector(["X"]);
     const claimsY = new FakeAgentConnector(["Y"]);
-    wired.registry.registerAgentConnector("primary", claimsX);
-    wired.registry.registerAgentConnector("secondary", claimsY);
+    await wired.registry.registerAgentConnector("primary", claimsX);
+    await wired.registry.registerAgentConnector("secondary", claimsY);
 
     const src = `# Skill: t\n# Status: Approved\nrun:\n    notify(agent="X", message="hi")\ndefault: run\n`;
     const compiled = await compile(src);
@@ -133,8 +132,8 @@ describe("v0.8.0 — notify() runtime-intrinsic op", () => {
     const wired = bootstrap({ skillsDir: join(home, "skills"), traceDir: join(home, "traces") });
     const c1 = new FakeAgentConnector(["X"]);
     const c2 = new FakeAgentConnector(["X"]);
-    wired.registry.registerAgentConnector("webhook", c1);
-    wired.registry.registerAgentConnector("tmux", c2);
+    await wired.registry.registerAgentConnector("webhook", c1);
+    await wired.registry.registerAgentConnector("tmux", c2);
 
     const src = `# Skill: t\n# Status: Approved\nrun:\n    notify(agent="X", message="hi", connectors=["webhook"])\ndefault: run\n`;
     const compiled = await compile(src);
@@ -148,8 +147,8 @@ describe("v0.8.0 — notify() runtime-intrinsic op", () => {
     const wired = bootstrap({ skillsDir: join(home, "skills"), traceDir: join(home, "traces") });
     const c1 = new FakeAgentConnector(["X"]);
     const c2 = new FakeAgentConnector(["X"]);
-    wired.registry.registerAgentConnector("webhook", c1);
-    wired.registry.registerAgentConnector("tmux", c2);
+    await wired.registry.registerAgentConnector("webhook", c1);
+    await wired.registry.registerAgentConnector("tmux", c2);
 
     const src = `# Skill: t\n# Status: Approved\nrun:\n    notify(agent="X", message="hi") -> ACK\n    emit(text="connectors: \${ACK.dispatched|length}")\ndefault: run\n`;
     const compiled = await compile(src);
@@ -163,8 +162,8 @@ describe("v0.8.0 — notify() runtime-intrinsic op", () => {
     const c1 = new FakeAgentConnector(["X"]);
     const c2 = new FakeAgentConnector(["X"]);
     c2.failOnAgent = "X";
-    wired.registry.registerAgentConnector("webhook", c1);
-    wired.registry.registerAgentConnector("tmux", c2);
+    await wired.registry.registerAgentConnector("webhook", c1);
+    await wired.registry.registerAgentConnector("tmux", c2);
 
     const src = `# Skill: t\n# Status: Approved\nrun:\n    notify(agent="X", message="hi") -> ACK\ndefault: run\n`;
     const compiled = await compile(src);
@@ -180,7 +179,7 @@ describe("v0.8.0 — notify() runtime-intrinsic op", () => {
   it("agent kwarg resolves \${VAR} substitution at runtime", async () => {
     const wired = bootstrap({ skillsDir: join(home, "skills"), traceDir: join(home, "traces") });
     const fake = new FakeAgentConnector(["dynamic-target"]);
-    wired.registry.registerAgentConnector("primary", fake);
+    await wired.registry.registerAgentConnector("primary", fake);
 
     const src = `# Skill: t\n# Status: Approved\n# Vars: TARGET_AGENT=dynamic-target\nrun:\n    notify(agent="\${TARGET_AGENT}", message="hi")\ndefault: run\n`;
     const compiled = await compile(src);
@@ -193,7 +192,7 @@ describe("v0.8.0 — notify() runtime-intrinsic op", () => {
   it("notify() between emits: captures emissions-so-far when message absent", async () => {
     const wired = bootstrap({ skillsDir: join(home, "skills"), traceDir: join(home, "traces") });
     const fake = new FakeAgentConnector(["X"]);
-    wired.registry.registerAgentConnector("primary", fake);
+    await wired.registry.registerAgentConnector("primary", fake);
 
     const src = `# Skill: t\n# Status: Approved\nrun:\n    emit(text="before notify")\n    notify(agent="X")\n    emit(text="after notify")\ndefault: run\n`;
     const compiled = await compile(src);

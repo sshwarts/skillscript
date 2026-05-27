@@ -9,7 +9,8 @@ import type {
   DeliveryPayload,
   DeliveryReceipt,
 } from "../src/connectors/agent.js";
-import type { StaticCapabilities, ManifestInfo } from "../src/connectors/types.js";
+import type { StaticCapabilities } from "../src/connectors/types.js";
+import type { RequestResponseOpts, Response } from "../src/connectors/agent.js";
 import { AgentConnectorConformance } from "../src/testing/conformance.js";
 
 /**
@@ -52,8 +53,9 @@ class RecordingAgentConnector implements AgentConnector {
     return { woken_at: Date.now() };
   }
 
-  async manifest(): Promise<ManifestInfo> {
-    return { capabilities_version: "1.0.0", manifest: { recordings: this.deliveries.length } };
+  async health_check(): Promise<boolean> { return true; }
+  async request_response(_agent_id: string, _payload: DeliveryPayload, _opts: RequestResponseOpts): Promise<Response> {
+    throw new Error("not implemented in RecordingAgentConnector");
   }
 }
 
@@ -69,7 +71,8 @@ class FailingAgentConnector implements AgentConnector {
   async list_agents(): Promise<AgentDescriptor[]> { return []; }
   async deliver(): Promise<DeliveryReceipt> { throw new Error("substrate down"); }
   async wake(): Promise<{ woken_at: number }> { throw new Error("substrate down"); }
-  async manifest(): Promise<ManifestInfo> { return { capabilities_version: "1.0.0", manifest: {} }; }
+  async health_check(): Promise<boolean> { return true; }
+  async request_response(): Promise<Response> { throw new Error("not implemented"); }
 }
 
 async function executeSkill(source: string, registry: Registry, mechanical = false) {
@@ -91,7 +94,7 @@ describe("AgentConnector — dispatch wiring", () => {
   it("2. # Output: agent: <agent> routes through deliver(kind=augment)", async () => {
     const reg = new Registry();
     const recorder = new RecordingAgentConnector();
-    reg.registerAgentConnector("primary", recorder);
+    await reg.registerAgentConnector("primary", recorder);
     const result = await executeSkill(`# Skill: ctx-out
 # Status: Approved
 # Output: agent: perry
@@ -114,7 +117,7 @@ default: greet
   it("3. # Output: template: <agent> routes through deliver(kind=template) with source_skill", async () => {
     const reg = new Registry();
     const recorder = new RecordingAgentConnector();
-    reg.registerAgentConnector("primary", recorder);
+    await reg.registerAgentConnector("primary", recorder);
     const result = await executeSkill(`# Skill: tmpl-out
 # Status: Approved
 # Output: template: perry
@@ -125,17 +128,20 @@ build:
 default: build
 `, reg);
     expect(recorder.deliveries.length).toBe(1);
-    const payload = recorder.deliveries[0]!.payload as { kind: "template"; prompt: string; source_skill?: string };
+    const payload = recorder.deliveries[0]!.payload;
     expect(payload.kind).toBe("template");
-    expect(payload.prompt).toContain("draft template body");
-    expect(payload.source_skill).toBe("tmpl-out");
+    if (payload.kind === "template") {
+      expect(payload.prompt).toContain("draft template body");
+      // v0.9.6 — source_skill folded into meta.origin.skill_name per Q8
+      expect(payload.meta.origin.skill_name).toBe("tmpl-out");
+    }
     expect(result.agentDeliveryReceipts[0]!.output_kind).toBe("template");
   });
 
   it("4. mechanical mode skips agent dispatch", async () => {
     const reg = new Registry();
     const recorder = new RecordingAgentConnector();
-    reg.registerAgentConnector("primary", recorder);
+    await reg.registerAgentConnector("primary", recorder);
     const result = await executeSkill(`# Skill: mech-skip
 # Status: Approved
 # Output: agent: perry
@@ -152,7 +158,7 @@ default: greet
   it("5. multiple agent-targeted outputs dispatch independently", async () => {
     const reg = new Registry();
     const recorder = new RecordingAgentConnector();
-    reg.registerAgentConnector("primary", recorder);
+    await reg.registerAgentConnector("primary", recorder);
     await executeSkill(`# Skill: multi-out
 # Status: Approved
 # Output: agent: perry
@@ -170,7 +176,7 @@ default: emit
 
   it("6. delivery failure logs to stderr but doesn't fail the skill", async () => {
     const reg = new Registry();
-    reg.registerAgentConnector("primary", new FailingAgentConnector());
+    await reg.registerAgentConnector("primary", new FailingAgentConnector());
     const result = await executeSkill(`# Skill: fail-out
 # Status: Approved
 # Output: agent: perry

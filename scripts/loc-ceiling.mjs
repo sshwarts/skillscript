@@ -153,7 +153,17 @@ const CORE_PATHS = [
   "connectors/",
 ];
 
-const NARROW_MAX_LOC = 8300;
+// v0.9.6: nudged narrow ceiling 8300 → 8550 for AgentConnector contract
+// audit. Most of the ~200 net LOC growth is doc-comments on `agent.ts` —
+// per memory `9fbeb1a1` (adopter-agent-as-author), reference impls are the
+// dominant signal source for adopter agents, so docstring richness is
+// load-bearing. Includes Perry's `ce41bd4d` signoff probe #4 ask: the
+// `legacy-frontmatter-header` tier-2 advisory (~25 LOC). Third bump in the
+// v0.9.x series; per §18 LOC subsection ("two-per-series is the 'look at it'
+// mark; three-per-series is the 'consolidate first' mark"), the connector-
+// house-in-order arc post-v0.9.6 should consolidate before another v0.9.x
+// bump.
+const NARROW_MAX_LOC = 8550;
 const NARROW_MAX_FILES = 20;
 const BROAD_INFO_LOC = 9500;
 const BROAD_INFO_FILES = 28;

@@ -1,5 +1,92 @@
 # Changelog
 
+## 0.9.6 — 2026-05-27 — AgentConnector audit + contract lock for v1.0
+
+**First connector contract audit + lock for v1.0** per Perry's thread `b722bbf4`.
+Closes Q1-Q12 across three pressure-test rounds (sender/substrate lens →
+agent-as-receiver lens → full code-audit reconciliation). Opens the
+"connector house in order" gate-3 sequence; remaining contracts (McpConnector,
+SkillStore, MemoryStore, LocalModel) audit + lock in subsequent v0.9.x slots.
+
+### Contract changes (`src/connectors/agent.ts`)
+
+- **Added `DeliveryMeta` envelope** on both `DeliveryPayload` variants (Q8).
+  Runtime auto-fills `dispatch_id` (UUID per emit), `sent_at` (emit-clock),
+  `origin.skill_name` / `origin.trigger_kind` (required); optional
+  `origin.entry_skill_name`, `origin.caller_agent_id`, `event_type`,
+  `correlation_id` populate when context provides them.
+- **Added `health_check()` required method** (Q6). Bootstrap-throws on `false`
+  via `registerAgentConnector()` — wiring failures surface at boot, not at
+  first skill-fire.
+- **Added `request_response()` required method** (Q1) with locked `Response`
+  shape `{ correlation_id, content, sent_at, agent_id }`. Impl deferred to
+  v0.10 when `exchange()` op ships; adopters throw `NotImplementedError`
+  until then.
+- **Added `delivery_skipped?: boolean`** to `DeliveryReceipt` (Q7). Contract-
+  level signal for "accepted but not pushed" (offline agent, rate-limit drop,
+  etc.); runtime honors connector-set value, preserves NoOp fallback inference.
+- **Dropped `manifest()`** (Q2). No production callers; folded into
+  conformance test surface.
+- **Dropped `TriggerProvenance`** interface (Q12) and its envelope fields
+  (`source_skill`, `triggered_by`, `delivery_context`, `templates`, `format`).
+  Each folded into `meta` per Q8-Q11 or dropped to trace-only surface.
+
+### Syntax changes
+
+- **`# Delivery-context:` → `# Event-type:` frontmatter rename** (Q9). Vocab
+  consistency between skill-author and receiver-agent surfaces; the field
+  flows to `meta.event_type` as the frontmatter fallback (`notify(event_type=...)`
+  kwarg takes precedence per-emit).
+- **`notify()` op gains `event_type=` and `correlation_id=` kwargs**. Per-emit
+  override of frontmatter; `correlation_id` is the reply-correlation primitive
+  for the v0.10 `exchange()` shape.
+
+### Behavior changes
+
+- `Registry.registerAgentConnector()` is now `async` — invokes `health_check()`.
+- `triggerCtx.source` enum migrated from `{cron, session, event, agent-event, file-watch, sensor, manual}` to Q8's `{cron, session, webhook, agent, cli, dashboard, inline}`. The pre-v0.9.6 "extra" values were parse-only (no production firing path emitted them). `manual` → `inline` is the only meaningful migration.
+- `# Templates:` frontmatter still parsed for `unknown-template-reference` lint
+  but no longer flows through `DeliveryPayload` (Q10 — vestigial removal).
+
+### Deliverables
+
+- New `docs/connector-contract-reference.md` — canonical reference for adopters
+  (audience: adopter agents). Includes the four footnotes Perry pinned during
+  the audit (broadcast dispatch_id semantics, deeper-than-2-level chain elision,
+  caller_agent_id general rule, sent_at vs delivered_at distinction).
+- Updated `docs/adopter-playbook.md` AgentConnector method list.
+- Updated `docs/language-reference.md` AgentConnector + DeliveryPayload sections.
+- New `tests/v0.9.6-agent-connector-audit.test.ts` (15 tests covering Q1-Q12);
+  includes Perry's plumbing-risk SHAPE test for `entry_skill_name` propagation
+  (cites lesson `1bc9d7a2`).
+
+### Pre-adoption migration
+
+Pre-adoption rule applies (no external users); breaking changes are cheap.
+Adopters who experimented against pre-v0.9.6 code:
+
+- Drop `manifest()` from AgentConnector impls.
+- Add `health_check()` + `request_response()` (throw NotImplementedError until v0.10).
+- Replace `source_skill` / `triggered_by` / `delivery_context` / `templates` /
+  `format` payload field reads with `meta.origin.*` / `meta.event_type` reads.
+- Rename `# Delivery-context:` → `# Event-type:` in skill source.
+
+### Methodology lesson (per Perry, worth banking)
+
+*"Contract audits compound. Each pressure-test pass before lock has near-zero
+cost; each pass after adoption has near-infinite cost. Spend pre-lock budget
+liberally."* Three pressure-test rounds (Q1-Q7 → Q8 → Q9-Q12 audit-reconciliation)
+each caught real gaps the previous round missed. The pre-adoption rule made
+the discipline cheap; the audit-as-methodology made the pass-count load-bearing.
+
+### LOC ceiling
+
+Bumped narrow-core from 8300 → 8500. Third bump in the v0.9.x series — per §18
+note, the "consolidate first" threshold. Most of the ~150 net LOC growth is
+doc-comments on `agent.ts`; per the `adopter-agent-as-author` memory,
+reference impls are the dominant signal source for adopter agents, so
+docstring richness is load-bearing.
+
 ## 0.9.5 — 2026-05-27 — lint polish (v0.9.4.1 thematic patch)
 
 **Two mechanical lint fixes from Perry's R-series next-ring (`77ed6c65`).**

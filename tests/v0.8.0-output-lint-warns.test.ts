@@ -30,7 +30,8 @@ class DummyAgent implements AgentConnector {
   async list_agents(): Promise<AgentDescriptor[]> { return [{ agent_id: "anyone" }]; }
   async deliver(_id: string, _payload: DeliveryPayload): Promise<DeliveryReceipt> { return { delivered_at: 0 }; }
   async wake(_id: string, _opts?: WakeOpts): Promise<WakeReceipt> { return { woken_at: 0 }; }
-  async manifest(): Promise<ManifestInfo> { return { capabilities_version: "1", manifest: {} }; }
+  async health_check(): Promise<boolean> { return true; }
+  async request_response(): Promise<never> { throw new Error("not implemented"); }
 }
 
 describe("v0.8.0 — tier-2 # Output: lint warns", () => {
@@ -40,7 +41,7 @@ describe("v0.8.0 — tier-2 # Output: lint warns", () => {
 
   it("warns when `# Output: agent: X` declared but skill has no emit() ops", async () => {
     const wired = bootstrap({ skillsDir: join(home, "skills"), traceDir: join(home, "traces") });
-    wired.registry.registerAgentConnector("primary", new DummyAgent());
+    await wired.registry.registerAgentConnector("primary", new DummyAgent());
 
     const src = `# Skill: t\n# Status: Approved\n# Output: agent: oncall\nrun:\n    $set X = "no emit"\ndefault: run\n`;
     const result = await lint(src, { registry: wired.registry });
@@ -53,7 +54,7 @@ describe("v0.8.0 — tier-2 # Output: lint warns", () => {
 
   it("warns when `# Output: template: X` declared but skill has no emit() ops", async () => {
     const wired = bootstrap({ skillsDir: join(home, "skills"), traceDir: join(home, "traces") });
-    wired.registry.registerAgentConnector("primary", new DummyAgent());
+    await wired.registry.registerAgentConnector("primary", new DummyAgent());
 
     const src = `# Skill: t\n# Status: Approved\n# Output: template: assistant\nrun:\n    $set X = "no emit"\ndefault: run\n`;
     const result = await lint(src, { registry: wired.registry });
@@ -64,7 +65,7 @@ describe("v0.8.0 — tier-2 # Output: lint warns", () => {
 
   it("does NOT warn when skill has emit() ops", async () => {
     const wired = bootstrap({ skillsDir: join(home, "skills"), traceDir: join(home, "traces") });
-    wired.registry.registerAgentConnector("primary", new DummyAgent());
+    await wired.registry.registerAgentConnector("primary", new DummyAgent());
 
     const src = `# Skill: t\n# Status: Approved\n# Output: agent: oncall\nrun:\n    emit(text="hello")\ndefault: run\n`;
     const result = await lint(src, { registry: wired.registry });
@@ -86,7 +87,7 @@ describe("v0.8.0 — tier-2 # Output: lint warns", () => {
 
   it("does NOT warn (no-connector) when an AgentConnector IS wired", async () => {
     const wired = bootstrap({ skillsDir: join(home, "skills"), traceDir: join(home, "traces") });
-    wired.registry.registerAgentConnector("primary", new DummyAgent());
+    await wired.registry.registerAgentConnector("primary", new DummyAgent());
 
     const src = `# Skill: t\n# Status: Approved\n# Output: agent: oncall\nrun:\n    emit(text="hi")\ndefault: run\n`;
     const result = await lint(src, { registry: wired.registry });
