@@ -1,5 +1,90 @@
 # Changelog
 
+## 0.9.4 — 2026-05-27
+
+**Cold-author cleanup cluster — N1–N8.** Closes the next ring of findings
+surfaced by Perry's R8 + qwen re-validation against v0.9.3
+(memory `9086b3f8`). Mean UX delta from 3.86/5 → projected 4+/5,
+clearing the v1.0 cold-author signoff threshold.
+
+### Fixed — N1 `approved=` kwarg suppresses unconfirmed-mutation lint
+
+Docs explicitly list `approved="reason"` as one of three valid
+authorization paths for the `unconfirmed-mutation` lint, but the
+parser only populated `op.approved` for function-call ops — `$` op
+kwargs were captured in `op.body` as a string and the lint rule
+checked `op.approved` (which was undefined). So `$ memory_write ...
+approved="..."` failed the docs-promised suppression silently.
+
+Fix: parser extracts `approved="..."` (and `approved='...'`) from `$`
+op bodies via `extractApprovedKwarg()` and populates `op.approved`
+explicitly. Per R8 minion #4 finding.
+
+### Fixed — N2 `$append STRING_VAR <"line">` strips operator chars
+
+The angle-bracket-arrow `<value>` is the canonical APPEND operator,
+but the parser captured the brackets as part of `setValue` for the
+string-target concat case. Authors writing
+`$set REPORT = ""` then `$append REPORT <"line 1">` got
+`<"line 1">` embedded literally in the report — silent wrong output.
+
+Fix: parser strips outer `<...>` from `$append` value capture before
+calling `processSetValue`. List-append back-compat preserved. Per R8
+minion #3 finding.
+
+### Added — N3 `transcript-footgun` tier-2 lint
+
+`${R.transcript}` against a composition-result var reads as
+"human-readable text" but is actually the child skill's emissions
+array — interpolation produces JSON-ish array stringification.
+
+Tier-2 warning when `${VAR.transcript}` appears in any substitution
+position. Remediation: bind explicitly via `final_vars.NAMED_VAR`,
+use `outputs.text` (joined string), or iterate `foreach LINE in
+${R.transcript}:` to consume per-line. Per R8 minion #6 finding.
+
+### Added — N5 `set-json-literal-advisory` tier-3 lint
+
+`$set VAR = [{...}]` binds the literal string form, not a parsed
+JSON structure. Skillscript's `$set` is literal-only — JS-class
+object/array literals don't auto-parse. Cold authors hit this when
+mocking structured data inline.
+
+Tier-3 advisory. Suggests `$ json_parse '[{...}]' -> VAR` for
+structured-array intent.
+
+### Added — N8 `skill-name-collision` tier-3 lint
+
+When `lint_skill` is called with a `skillStore` and the parsed
+skill's name already exists in the store, surface a tier-3 advisory
+so cold authors don't round-trip to discover the conflict at
+`skill_write` time.
+
+### Changed — N4 docs: shell() argv quoting + N6 FS isolation
+
+`help({topic:"ops"})` shell() section now documents the structural-
+spawn quote-stripping behavior (workaround: `unsafe=true` for
+quoted-arg-aware bash, or write-then-read via file_write). Plus
+explicit container FS isolation note matching file_read/file_write.
+
+### Changed — N7 docs: `${ARRAY|length}` not `${ARRAY.length}`
+
+`help({topic:"examples"})` per-substrate return-shape note now
+explicitly says: use the `|length` filter for collection counts; JS
+convention `.length` doesn't work (dotted-ref resolver does string-
+keyed property descent). Closes the qwen Test B substitute-
+hallucination (`.totalCount` → `.length`).
+
+### Notes
+
+- 11 new tests (`v0.9.4-cleanup.test.ts`).
+- Suite at 1116/1127 passing, 10 skipped, 1 baseline YouTrack env-gated.
+- Narrow-core LOC ceiling bumped 8200 → 8300 to accommodate the parser
+  + lint additions. Per `feedback-loc-vs-clarity`: ceiling is a
+  signal, not a budget.
+- v1.0 cold-author signoff is the next milestone — R8 + qwen re-run
+  against v0.9.4 validates the empirical bar.
+
 ## 0.9.3 — 2026-05-27
 
 **Deferred design calls — P1.2 + P1.3.** Closes the last two items in

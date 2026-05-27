@@ -289,6 +289,23 @@ const ELIF_OP_REGEX = /^elif\s+(.+?):\s*$/;
 // matched. Word-shape leading token plus optional args, ending in `:`.
 // Excludes target headers (those are matched at depth-0 elsewhere).
 const UNKNOWN_BLOCK_INTRODUCER_RE = /^[A-Za-z_][\w-]*(?:\s+.*)?:\s*$/;
+
+/**
+ * v0.9.4 — N1 extract `approved="..."` kwarg from a `$` op body.
+ * Function-call op grammar extracts kwargs into the op AST; the `$`
+ * op grammar leaves kwargs in the body string by design. But the
+ * `approved=` kwarg has cross-cutting lint semantics
+ * (unconfirmed-mutation honors it per docs) so it needs explicit AST
+ * surface for `$` ops too. Returns the captured reason string, or
+ * undefined when no `approved=` kwarg is present.
+ */
+function extractApprovedKwarg(body: string): string | undefined {
+  // Match `approved="..."` (double-quoted) or `approved='...'` (single).
+  // Word-boundary on the left so we don't match `pre_approved=`.
+  const m = /\bapproved\s*=\s*(?:"([^"]*)"|'([^']*)')/.exec(body);
+  if (m === null) return undefined;
+  return m[1] ?? m[2] ?? "";
+}
 // v0.9.2 — P0.5 detect missing-space dispatch: `$<word> args` where `<word>`
 // isn't `set`/`append` (the only legitimate no-space `$`-prefix verbs).
 const NO_SPACE_DISPATCH_RE = /^\$(?!set\b|append\b)\w+\s/;
@@ -1787,11 +1804,21 @@ export function parse(source: string): ParsedSkill {
           );
           continue;
         }
+        // v0.9.4 — N2 strip the canonical `<...>` operator wrapper. Per
+        // language reference, `$append VAR <value>` is the canonical
+        // shape and the angle brackets are the OPERATOR, not part of
+        // the value. Pre-v0.9.4 the brackets were captured verbatim and
+        // string-concat targets received `<"line">` literally, producing
+        // silent wrong output (per R8 minion #3, finding N2 in 9086b3f8).
+        let unwrappedValue = rawValue!;
+        if (unwrappedValue.startsWith("<") && unwrappedValue.endsWith(">") && unwrappedValue.length >= 2) {
+          unwrappedValue = unwrappedValue.slice(1, -1).trim();
+        }
         opBucket.push({
           kind: "$append",
           body: stripped,
           setName: setName!,
-          setValue: processSetValue(rawValue!),
+          setValue: processSetValue(unwrappedValue),
         });
       } else {
         result.parseErrors.push(`Malformed \`$append\` op in target '${currentTarget.name}' — expected \`$append VAR <value>\` (value can be a literal, \`$(REF)\`, or filtered ref).`);
@@ -1805,12 +1832,20 @@ export function parse(source: string): ParsedSkill {
         const bodyPart = dollarOutMatch[1]!.trim();
         const { connector, rest } = splitMcpConnectorPrefix(bodyPart);
         const dollarFallback = dollarOutMatch[3];
+        // v0.9.4 — N1 extract `approved="..."` kwarg from `$` op body so
+        // lint rules (unconfirmed-mutation) can honor it per docs. The
+        // function-call op grammar extracts kwargs into op fields; the
+        // `$` op grammar leaves the whole body as a string by design,
+        // but `approved=` is the one kwarg with cross-cutting lint
+        // semantics that needs explicit AST surface.
+        const approvedKwarg = extractApprovedKwarg(rest);
         opBucket.push({
           kind: "$",
           body: rest,
           outputVar: dollarOutMatch[2]!,
           ...(connector !== undefined ? { mcpConnector: connector } : {}),
           ...(dollarFallback !== undefined ? { fallback: processSetValue(dollarFallback) } : {}),
+          ...(approvedKwarg !== undefined ? { approved: approvedKwarg } : {}),
         });
         continue;
       }
@@ -1849,6 +1884,8 @@ export function parse(source: string): ParsedSkill {
       body = stripped.slice(2).trim();
     }
     if (kind !== null) {
+      // v0.9.4 — N1 also extract `approved=` for the no-binding `$` op path
+      const approvedKwarg = kind === "$" ? extractApprovedKwarg(body) : undefined;
       opBucket.push({
         kind,
         body,
@@ -1856,6 +1893,7 @@ export function parse(source: string): ParsedSkill {
         ...(atPolicy !== undefined ? { policy: atPolicy } : {}),
         ...(atOutputVar !== undefined ? { outputVar: atOutputVar } : {}),
         ...(atFallback !== undefined ? { fallback: atFallback } : {}),
+        ...(approvedKwarg !== undefined ? { approved: approvedKwarg } : {}),
       });
       continue;
     }

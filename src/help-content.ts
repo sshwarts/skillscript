@@ -239,6 +239,10 @@ shell(command="git status --porcelain") -> STATUS
 shell(command="echo hi && date +%Y", unsafe=true) -> OUT
 \`\`\`
 
+**Argv quoting (v0.9.4):** structural-spawn tokenizes the command on whitespace then strips quotes around each token. To pass quoted args (e.g., JSON payloads, strings with spaces), either set \`unsafe=true\` and let bash quote-handle, OR write the payload to a file via \`file_write\` and read it back inside the structurally-spawned command (e.g., \`shell(command="cat /tmp/payload.json | jq .field") -> R\` under \`unsafe=true\`). The structural mode is deliberately conservative — quoted-arg-aware tokenization is on the v1.0 wishlist.
+
+**Container FS isolation (v0.9.4):** shell() runs inside the runtime's container/sandbox. Writes to \`/tmp/x\` from \`shell(command="touch /tmp/x")\` land in the RUNTIME's \`/tmp/x\`, not on the author's host. Same isolation as \`file_read\` / \`file_write\` — cross-namespace work needs a known shared volume.
+
 ### \`file_read(path="...") -> R\` — read file contents
 
 Reads via Node \`fs.readFile\`. Substitutes \`\${VAR}\` in the path. Optional \`(fallback: "...")\` trailer binds when read fails. **Container note:** when the runtime is sandboxed (Docker, container deployment), the runtime's filesystem is namespace-isolated from the author's host — \`/tmp/x\` in the skill maps to the runtime's \`/tmp/x\`, not the host's. Use absolute paths under a known shared volume for cross-namespace work.
@@ -661,6 +665,8 @@ Different connectors return different envelope shapes. Cold authors authoring ag
 - **File read** (\`file_read(path=...) -> R\`): binds the file content string to R.
 
 Don't assume \`.totalCount\` exists on every envelope — it's a ticketing convention, not a universal one. Use the runtime's \`runtime_capabilities()\` + introspection to confirm shapes when in doubt.
+
+**Array length (v0.9.4):** to get the count of an array bound from a substrate query (e.g., \`\${ITEMS.items}\` is the array), use the **\`|length\` filter**: \`\${ITEMS.items|length}\`. The JS convention \`\${ITEMS.items.length}\` does NOT work — skillscript's dotted-ref resolver does string-keyed property descent and \`.length\` on an array returns undefined at substitution time. Filter syntax is canonical for collection-shape operations across all substrates.
 `;
 
 const COMPOSITION = `# Composition — composing skills from other skills

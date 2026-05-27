@@ -153,7 +153,7 @@ const CORE_PATHS = [
   "connectors/",
 ];
 
-const NARROW_MAX_LOC = 8200;
+const NARROW_MAX_LOC = 8300;
 const NARROW_MAX_FILES = 20;
 const BROAD_INFO_LOC = 9500;
 const BROAD_INFO_FILES = 28;

@@ -113,6 +113,9 @@ export interface LintOptions {
 
 interface LintContext {
   parsed: ParsedSkill;
+  /** v0.9.4 — raw source as fed to lint(). Some rules (skill-name-collision)
+   *  need to compare against stored bodies to avoid false positives on re-lints. */
+  source: string;
   capabilityClasses: Array<{ staticCapabilities(): StaticCapabilities }> | null;
   skillStore: SkillStore | undefined;
   hasSkillStore: boolean;
@@ -146,6 +149,7 @@ export async function lint(source: string, options?: LintOptions): Promise<LintR
   const parsed = parse(source);
   const ctx: LintContext = {
     parsed,
+    source,
     capabilityClasses: options?.classes ?? collectClassesFromRegistry(options?.registry),
     skillStore: options?.skillStore,
     hasSkillStore: options?.skillStore !== undefined,
@@ -187,6 +191,7 @@ export function lintSync(source: string, options?: LintOptions): LintResult {
   const parsed = parse(source);
   const ctx: LintContext = {
     parsed,
+    source,
     capabilityClasses: options?.classes ?? collectClassesFromRegistry(options?.registry),
     skillStore: options?.skillStore,
     hasSkillStore: options?.skillStore !== undefined,
@@ -1617,6 +1622,125 @@ const OUTPUT_AGENT_TARGET_NO_EMIT: LintRule = {
 //
 // Tier-2 warning: cold authors get a clear nudge toward `foreach`
 // instead of guessing at numeric subscripts.
+// v0.9.4 — N8 tier-3 advisory: skill with this name already exists in
+// the SkillStore. `skill_write` will reject with "already exists. Pass
+// overwrite=true to replace." Cold authors iterating on a new skill
+// otherwise discover the collision only at write time — round-trip cost
+// per R8 minion #6 finding. The lint surfaces it earlier so authors
+// can either rename or pass overwrite=true intentionally.
+const SKILL_NAME_COLLISION: LintRule = {
+  id: "skill-name-collision",
+  severity: "info",
+  description: "A skill with this name already exists in the SkillStore. `skill_write` will reject unless `overwrite=true` is passed.",
+  remediation: "If you intended to replace the existing skill, pass `overwrite=true` to `skill_write`. If not, rename the skill (change the `# Skill:` header value).",
+  check: async (ctx) => {
+    if (ctx.skillStore === undefined) return [];
+    if (ctx.parsed.name === null) return [];
+    // CLI lint is the "I'm just checking a file" surface; it shouldn't
+    // surface write-preflight warnings. Cold-author write-preflight goes
+    // through MCP lint_skill (callSite "api") or compile-preflight.
+    if (ctx.callSite === "cli") return [];
+    try {
+      // Compare the stored body to the source being linted. If identical,
+      // the user is re-linting their already-stored skill — no collision
+      // worth surfacing. Only fire when the stored body materially differs.
+      const stored = await ctx.skillStore.load(ctx.parsed.name);
+      if (stored.source === ctx.source) return [];
+      return [{
+        rule: "skill-name-collision",
+        severity: "info" as const,
+        message: `Skill '${ctx.parsed.name}' already exists in the SkillStore with a different body. \`skill_write\` will reject without \`overwrite=true\`. Rename, or pass \`overwrite=true\` intentionally.`,
+      }];
+    } catch {
+      // Not found → no collision
+      return [];
+    }
+  },
+};
+
+// v0.9.4 — N5 tier-3 advisory on `$set VAR = [{...}]` JSON-object-array
+// literals. The parser's processSetValue doesn't JSON-parse the value —
+// it strips outer quotes and otherwise treats it as a literal. So
+// `$set ISSUES = [{"id":"X","status":"open"}]` binds the STRING
+// `[{"id":"X","status":"open"}]` rather than a structured array.
+// Cold authors expect JS-class literal parsing; the gap is silent.
+// Per haiku/qwen finding N5 in 9086b3f8.
+const SET_JSON_LITERAL_ADVISORY: LintRule = {
+  id: "set-json-literal-advisory",
+  severity: "info",
+  description: "`$set VAR = [{...}]` binds the literal string form, not a parsed JSON structure. Skillscript's `$set` is literal-only — JS-class object/array literals don't auto-parse.",
+  remediation: "If you need a parsed structure, use `$ json_parse '[{...}]' -> VAR` (parses the JSON and binds the structured value). If literal string accumulation is the intent, the current `$set` behavior is fine — this advisory just clarifies the semantic.",
+  check: (ctx) => {
+    const findings: LintFinding[] = [];
+    const reported = new Set<string>();
+    for (const [targetName, target] of ctx.parsed.targets) {
+      walkOps(target.ops, (op) => {
+        if (op.kind !== "$set") return;
+        const value = op.setValue ?? "";
+        // Match the START of the value being an array-of-objects literal.
+        if (!/^\s*\[\s*\{/.test(value)) return;
+        const key = `${targetName}:${op.setName}`;
+        if (reported.has(key)) return;
+        reported.add(key);
+        findings.push({
+          rule: "set-json-literal-advisory",
+          severity: "info",
+          message: `\`$set ${op.setName} = [{...}]\` in target '${targetName}' binds the literal string form, not parsed JSON. If you need a structured array of objects, use \`$ json_parse '[{...}]' -> ${op.setName}\` instead.`,
+          block: targetName,
+        });
+      });
+    }
+    return findings;
+  },
+};
+
+// v0.9.4 — N3 tier-2 advisory on `${R.transcript}` in composition. The
+// composition result shape exposes `transcript` as the emissions array
+// (per docs); cold authors interpolate it as "the human-readable text"
+// and get JSON-ish array stringification. The semantic mismatch is
+// silent — lint and runtime accept the ref, but the rendered output is
+// wrong-shape. Per R8 minion #6 finding in 9086b3f8.
+//
+// Detect: `${VAR.transcript}` references where VAR was bound by a
+// `$ execute_skill ... -> VAR` op (i.e., the child-skill result envelope).
+// The conservative-but-actionable form: match any `${VAR.transcript}`
+// substitution and advise. False positives possible (if a user binds a
+// non-composition var named with `.transcript`), but the suggestion
+// reads as a helpful nudge either way.
+const TRANSCRIPT_FOOTGUN: LintRule = {
+  id: "transcript-footgun",
+  severity: "warning",
+  description: "Substitution ref `${VAR.transcript}` against a composition-result var renders as a JSON-ish array string, not the human-readable text the field name suggests. The child skill's emissions are an array.",
+  remediation: "Bind the value you need explicitly in the child skill (e.g., `$set RESULT_TEXT = ...` followed by access via `${R.final_vars.RESULT_TEXT}`). For joined text, use `${R.outputs.text}` (single-string output) or iterate `foreach LINE in ${R.transcript}:` to consume per-line.",
+  check: (ctx) => {
+    const findings: LintFinding[] = [];
+    const reported = new Set<string>();
+    // Pattern: ${ANY.transcript} or $(ANY.transcript) — both legacy and canonical
+    const re = /\$[({][A-Za-z_]\w*\.transcript[)}]/g;
+    const scanString = (s: string, targetName: string): void => {
+      let m: RegExpExecArray | null;
+      while ((m = re.exec(s)) !== null) {
+        const key = `${targetName}:${m[0]}`;
+        if (reported.has(key)) continue;
+        reported.add(key);
+        findings.push({
+          rule: "transcript-footgun",
+          severity: "warning",
+          message: `Substitution ref \`${m[0]}\` in target '${targetName}' renders as a JSON-ish array, not human-readable text. \`transcript\` is the child skill's emissions array. Use \`final_vars.NAMED_VAR\` (bind explicitly in child), \`outputs.text\` (joined string), or iterate via \`foreach\`.`,
+          block: targetName,
+        });
+      }
+    };
+    for (const [targetName, target] of ctx.parsed.targets) {
+      walkOps(target.ops, (op) => {
+        if (op.body !== undefined) scanString(op.body, targetName);
+        if (op.setValue !== undefined) scanString(op.setValue, targetName);
+      });
+    }
+    return findings;
+  },
+};
+
 const NUMERIC_SUBSCRIPT: LintRule = {
   id: "numeric-subscript",
   severity: "warning",
@@ -2327,6 +2451,9 @@ const RULES: LintRule[] = [
   OUTPUT_AGENT_TARGET_NO_CONNECTOR,
   NUMERIC_SUBSCRIPT,
   DEPRECATED_ADDRESSED_TO,
+  TRANSCRIPT_FOOTGUN,
+  SET_JSON_LITERAL_ADVISORY,
+  SKILL_NAME_COLLISION,
   // v0.9.2 — promoted from tier-3 info to tier-1 error (P0.9 in c9c667d2)
   NO_DEFAULT_TARGET,
   COLON_KWARG_SYNTAX,
