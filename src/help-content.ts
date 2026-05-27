@@ -612,6 +612,55 @@ default: run
 \`\`\`
 
 Demonstrates: end-to-end trigger → process → deliver pattern. Trigger fires cron; process pulls data + sub-classifies each issue with \`$ llm\`; delivers via the \`agent:\` lifecycle hook (each \`emit(text=...)\` becomes a line in the joined-emissions delivery to the named agent).
+
+## 6. Memory durable-handoff (substrate-portable write)
+
+\`\`\`
+# Skill: research-and-handoff
+# Description: Run a query through the LLM, persist the result as a memory for the receiver to pick up
+# Status: Approved
+# Vars: QUERY=incident triage best practices
+
+go:
+    $ llm prompt="\${QUERY}" -> ANSWER
+    $ memory_write content="\${ANSWER}" recipients=[researcher] domain_tags=[incident, handoff] -> ACK
+    emit(text="memory written; receipt \${ACK.id}")
+
+default: go
+\`\`\`
+
+Demonstrates: \`$ memory_write\` substrate-portable durable handoff (returns \`{id, created_at}\` envelope). \`recipients=[...]\` is the bracket-array literal form — the receiving agent's mailbox surfaces this on their next session check.
+
+## 7. File output with confirmed write (v0.9.2+)
+
+\`\`\`
+# Skill: triage-report
+# Description: Build a markdown report and write to disk
+
+build:
+    $ ticketing_search query="severity:critical" limit=10 -> ISSUES
+    $set REPORT = "# Critical issues\\n\\n"
+    foreach I in \${ISSUES.items}:
+        $append REPORT <"- \${I.id}: \${I.summary}\\n">
+    file_write(path="/tmp/triage-\${EVENT.fired_at_unix}.md", content="\${REPORT}")
+    emit(text="report built")
+
+default: build
+\`\`\`
+
+Demonstrates: \`$append\` accumulator over a string + \`file_write\` side effect. The v0.9.2 runtime emits a \`[file_write] wrote N bytes to <path>\` transcript line on success so the caller can confirm the write landed.
+
+## Per-substrate return-shape note
+
+Different connectors return different envelope shapes. Cold authors authoring against multiple substrates should expect:
+
+- **Ticketing-style** (\`$ ticketing_search\`): returns \`{items: [...], totalCount, hasNextPage, ...}\` — \`.items\` is the array; \`.totalCount\` is the count.
+- **Memory query** (\`$ memory\`): returns \`{items: [...]}\` envelope — \`.items\` is the array of memories.
+- **Memory write** (\`$ memory_write\`): returns \`{id, created_at}\` — \`.id\` is the new memory's UUID.
+- **LLM** (\`$ llm\`): returns the response string directly (no envelope).
+- **File read** (\`file_read(path=...) -> R\`): binds the file content string to R.
+
+Don't assume \`.totalCount\` exists on every envelope — it's a ticketing convention, not a universal one. Use the runtime's \`runtime_capabilities()\` + introspection to confirm shapes when in doubt.
 `;
 
 const COMPOSITION = `# Composition — composing skills from other skills

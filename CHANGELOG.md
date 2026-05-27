@@ -1,5 +1,77 @@
 # Changelog
 
+## 0.9.2 — 2026-05-27
+
+**Compiler permissiveness + runtime observability.** Closes P0.5–P0.9
+(silent-drop lint additions) + P1.1 (delivery_skipped) + P1.4
+(fallback_fired) + P1.6 (worked examples) + P2.5 (file_write transcript)
+from Perry's R8 + qwen findings in `dec3ca8a`. Three commits per the
+locked sequencing in `c9c667d2`.
+
+### Added — compiler permissiveness lint cluster (P0.5–P0.9)
+
+Smaller LLM authors (qwen-class) confabulate where the prose is abstract;
+the pre-v0.9.2 compiler silently dropped malformed syntax. Five lint
+additions surface those silent-drops as vocal errors:
+
+- **P0.5 `no-space dispatch`** (parser tier-1) — `$<word>` without a
+  space (e.g. `$ticketing_search query="x"`) was silently dropped from
+  the topo-sort. Parser now emits a clear `missing the space between
+  $ and the tool/connector name` error with the canonical fix.
+- **P0.6 `colon-kwarg-syntax`** (lint tier-1) — `key:value` colon-style
+  kwargs (e.g. `limit:20`) parsed as part of an adjacent token; lint
+  now catches and recommends `key=value`. Skips quoted strings, array
+  literals, brace literals, and `(fallback:...)` trailers.
+- **P0.7 emit binding refused** (parser tier-1) — `emit(text="hi") -> R`
+  was silently accepted; the binding was ignored at runtime. Parser
+  now refuses with the canonical fix.
+- **P0.8 `$append VAR = ...` refused** (parser tier-1) — the regex
+  silently accepted the `=` shape with the `=` becoming part of the
+  literal value. Parser now detects and suggests `$set` (replace)
+  vs `$append VAR <value>` (append).
+- **P0.9 `missing-default-target`** (lint tier-1, promoted from tier-3
+  info) — skills without an explicit `default:` line now error. New
+  `ParsedSkill.entryTargetExplicit: boolean` distinguishes
+  explicit-vs-fallback resolution.
+
+### Added — runtime observability signals (P1.1 + P1.4 + P2.5)
+
+Cold authors couldn't tell whether their skill actually delivered or
+just silently no-op'd, and `(fallback:)` substitutions were
+indistinguishable from real success in the caller's view.
+
+- **P1.1 `delivery_skipped` flag** — `agentDeliveryReceipts[].delivery_skipped: true`
+  set when `# Output: agent:` declared but no real AgentConnector is wired
+  (only the NoOp fallback). Includes a `reason` string with the canonical
+  fix (`registerAgentConnector('primary', ...)`).
+- **P1.4 `fallbacks[]` on ExecuteResult** — new `FallbackRecord[]`
+  field. Populated when an op's `(fallback: ...)` trailer caught a
+  dispatch failure. Inspect `length > 0` to detect partial-success
+  runs. Two firing sites covered today: `file_read` and `$` op.
+  Empty array `[]` when no fallbacks fired (clean run).
+- **P2.5 `[file_write] wrote N bytes to <path>` transcript line** —
+  emitted on successful file_write so cold authors can confirm side
+  effects landed without reading the file back.
+
+### Changed — worked examples expanded per substrate (P1.6)
+
+`help({topic:"examples"})` adds two new worked examples — memory
+durable-handoff (`$ memory_write`) and file-output (file_write +
+`$append` accumulator) — plus a "per-substrate return-shape note"
+documenting the canonical envelope shapes (ticketing → `{items, totalCount}`,
+memory → `{items}`, LLM → string, etc.). Closes the qwen pattern-matching
+issue where Test B inherited `.totalCount` from a ticketing example
+onto a memory query result that didn't have it.
+
+### Notes
+
+- 21 new tests (`v0.9.2-permissiveness.test.ts` + `v0.9.2-runtime-signals.test.ts`).
+- Suite at 1098/1109 passing, 10 skipped, 1 baseline YouTrack env-gated.
+- Qwen re-validation queued — re-run the single-shot harness against
+  v0.9.2 to confirm P0.5–P0.9 silent-drops now surface as vocal errors.
+- v0.9.3 queued: P1.2 numeric subscript decision, P1.3 kwarg-name
+  canonicalization. Bandwidth-driven.
+
 ## 0.9.1 — 2026-05-27
 
 **Surface completion + structural dispatch validation.** Closes the v0.9.0
