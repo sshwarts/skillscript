@@ -24,8 +24,8 @@ const REPO_ROOT = join(__dirname, "..");
 const PACKAGE_JSON = JSON.parse(readFileSync(join(REPO_ROOT, "package.json"), "utf8")) as Record<string, unknown>;
 
 describe("T7 — package.json polish", () => {
-  it("1. version is 0.10.0 (SqliteSkillStore example connector per audit thread `2a674169`)", () => {
-    expect(PACKAGE_JSON["version"]).toBe("0.10.0");
+  it("1. version is 0.11.0 (MemoryStoreTemplate + MemoryStore contract audit per thread `6b442259`)", () => {
+    expect(PACKAGE_JSON["version"]).toBe("0.11.0");
   });
 
   it("2. main + types + bin + engines.node ≥ 22.5 declared", () => {

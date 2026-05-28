@@ -1,5 +1,67 @@
 # Changelog
 
+## 0.11.0 — 2026-05-28 — MemoryStoreTemplate fork skeleton + MemoryStore contract audit
+
+**Per Perry's audit thread `6b442259`.** Symmetric to v0.10's SkillStore work:
+contract audit (clean — no plumbing changes) + fork-template skeleton in
+`examples/connectors/`. SqliteMemoryStore stays in `src/` as the bundled
+default (already there since v0.8; no restructure needed).
+
+### Added
+
+`examples/connectors/MemoryStoreTemplate/` — fork-me skeleton for adopters
+writing their own MemoryStore impl (Pinecone-, Weaviate-, AMP-,
+Postgres-backed, etc.):
+
+- `MemoryStoreTemplate.ts` — three stubbed methods (`query`, `write`,
+  `manifest`) + `staticCapabilities()`. Constructor throws so forks force
+  customization. TypeScript-clean via `async fn(): Promise<X> { throw }`.
+- `README.md` — forking workflow, contract-surface explanation (3-method
+  contract vs SkillStore's 8), curated-subset PortableMemory field model,
+  query mode dispatch axis, filter conventions, MemoryStore vs SkillStore
+  differences, conformance-suite integration.
+
+### Audit findings (MemoryStore-as-connector)
+
+Same shape as v0.10's FilesystemSkillStore-as-connector audit (`fa8091cc`).
+Walk findings:
+
+| Layer | Pluggable? | Evidence |
+|---|---|---|
+| `MemoryStore` interface | ✓ substrate-agnostic | types.ts — 3 methods, no `sqlite`/`fts5`/path leakage; curated-subset field model in `PortableMemory` |
+| Registry | ✓ | `Registry.registerMemoryStore(name, instance)` — registry.ts:66 |
+| Runtime consumers | ✓ interface-typed | mcp-server.ts:748, skill-manager.ts:259, runtime.ts:1048 |
+| Bootstrap | ✓ opts-configurable | `opts.memoryStore?: MemoryStore` (v0.10); falls back to `new SqliteMemoryStore` only when no override |
+| MCP bridge | ✓ interface-typed | `MemoryStoreMcpConnector` constructor takes `MemoryStore` interface |
+| CLI / `defaultRegistry()` | hardcoded to SqliteMemoryStore | by design — reference-deployment convenience; adopter-custom paths skip |
+
+Verdict: contract layer is genuinely connector-pluggable. Same architecture
+promise that v0.10 established for SkillStore now confirmed for MemoryStore.
+No plumbing work needed.
+
+### Updated
+
+`examples/connectors/README.md` — index table: MemoryStore "(coming)" cell
+→ link to MemoryStoreTemplate. Three connector contracts now have a fork
+template (SkillStore, MemoryStore) or worked example (AgentConnector); two
+still pending (LocalModel, McpConnector).
+
+### Notes
+
+- No `docs/sqlite-memory-store.md` shipped. SqliteMemoryStore's surface
+  (single table + FTS5 virtual + triggers) is documented in source comments;
+  the MemoryStoreTemplate README covers adopter-relevant context. Will write
+  if adopter signal demands more depth.
+- No new dependencies. No substrate-config parser changes (v0.10 already
+  shipped `substrate.memory_store` short/object/custom forms). No CLI
+  changes.
+
+### Up next
+
+- **v0.12** — McpConnector audit (per the connector-house-in-order arc)
+- Potential follow-ups: LocalModel template + McpConnector template per
+  adopter signal
+
 ## 0.10.0 — 2026-05-28 — SqliteSkillStore bundled default + connectors.json substrate section
 
 **Per Perry's audit thread `2a674169` + Scott's re-scope direction 2026-05-28

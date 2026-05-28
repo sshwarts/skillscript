@@ -7,7 +7,7 @@ Worked examples + fork-me templates for adopter-written connectors. The bundled 
 | Contract | Bundled defaults | Worked example | Fork template |
 |---|---|---|---|
 | `SkillStore` | `FilesystemSkillStore`, `SqliteSkillStore` (in `src/connectors/`) | — | **[SkillStoreTemplate/](./SkillStoreTemplate/)** |
-| `MemoryStore` | `SqliteMemoryStore` (in `src/connectors/`) | — | *(coming)* |
+| `MemoryStore` | `SqliteMemoryStore` (in `src/connectors/`) | — | **[MemoryStoreTemplate/](./MemoryStoreTemplate/)** |
 | `LocalModel` | `OllamaLocalModel` (in `src/connectors/`; opt-in via substrate config) | — | *(coming)* |
 | `McpConnector` | `RemoteMcpConnector`, `CallbackMcpConnector` (in `src/connectors/`) | — | *(coming)* |
 | `AgentConnector` | `NoOpAgentConnector` (in `src/connectors/`) | **[HttpWebhookAgentConnector/](./HttpWebhookAgentConnector/)** | — |
