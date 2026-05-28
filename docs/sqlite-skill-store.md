@@ -109,7 +109,7 @@ WAL is enabled at bootstrap so concurrent readers don't block writers.
 
 **`delete()` removes both the `skills` row AND its `skill_versions` rows.** If you need recovery, back up adopter-side BEFORE calling delete. Skill names can be reused after delete (no orphan history left behind).
 
-This is the locked v0.10 semantic. If your adopter substrate has compliance requirements (audit-grade retention) or you hit a "wait, I deleted that" moment, the upgrade path is soft-delete (tombstone `status='Deleted'` + filter from query results) — but that's an adopter-side choice; the bundled SqliteSkillStore stays hard-cascade.
+This is the locked semantic. If your adopter substrate has compliance requirements (audit-grade retention) or you hit a "wait, I deleted that" moment, the upgrade path is soft-delete (tombstone `status='Deleted'` + filter from query results) — but that's an adopter-side choice; the bundled SqliteSkillStore stays hard-cascade.
 
 ---
 
