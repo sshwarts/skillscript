@@ -1,5 +1,80 @@
 # Changelog
 
+## 0.12.0 — 2026-05-28 — McpConnectorTemplate fork skeleton + McpConnector contract audit
+
+Closes the v0.10–v0.12 connector-house-in-order arc. Same pattern as v0.10
+(SkillStore) and v0.11 (MemoryStore): contract audit (clean — no plumbing
+changes) + fork skeleton in `examples/connectors/`. McpConnector already
+had four bundled impls; this fills the adopter-fork discoverability slot.
+
+### Added
+
+`examples/connectors/McpConnectorTemplate/` — fork-me skeleton for adopters
+writing transports the four bundled impls don't cover (direct HTTP MCP,
+WebSocket MCP, in-process, custom protocol):
+
+- `McpConnectorTemplate.ts` — two stubbed methods (`call`, `manifest`) +
+  `staticCapabilities`. Optional `staticTools()` + `fromConfig()` commented
+  out with usage guidance. Constructor throws so forks force customization.
+- `README.md` — when to fork (vs. using `RemoteMcpConnector` for stdio
+  bridging), forking workflow including `registerConnectorClass()` pattern
+  for `connectors.json` JSON-instantiability, `call()` semantics, staticTools
+  lint integration, McpConnector vs. SkillStore/MemoryStore differences.
+
+### Updated
+
+`examples/connectors/README.md` index — McpConnector "(coming)" replaced
+with McpConnectorTemplate link. **All five connector contracts now have
+fork templates or worked examples.** LocalModel is the only remaining
+"(coming)" slot — adopter signal-driven from here.
+
+### Audit findings (McpConnector-as-connector)
+
+Same shape as the v0.10 + v0.11 audits. Walk:
+
+| Layer | Pluggable? | Evidence |
+|---|---|---|
+| `McpConnector` interface | ✓ substrate-agnostic | types.ts:319-326 — 2 methods, no transport leakage |
+| Registry | ✓ | `Registry.registerMcpConnector(name, instance, allowedTools?)` |
+| Runtime consumers | ✓ interface-typed | runtime.ts:919-963, lint.ts:2641-2663, dispatch-validate.ts:55-77, skill-manager.ts:261, mcp-server.ts:753 |
+| Adopter class extensibility | ✓ | `registerConnectorClass()` (v0.7.3); already in place |
+| Class-aware lint | ✓ intentional | `getMcpConnectorCtor()` / `getMcpConnectorClass()` for `staticTools()` dispatch validation — not leakage |
+| `connectors.json` JSON-instantiability | ✓ | `fromConfig` factory pattern documented in template |
+
+No plumbing changes needed. McpConnector's substrate-agnostic claim was
+already true; v0.12 just makes the adopter-fork path discoverable.
+
+### The connector-house-in-order arc — what landed
+
+| Version | Contract | What shipped |
+|---|---|---|
+| v0.9.6 | AgentConnector | Audit (Q1-Q12) + contract lock |
+| v0.9.7 | AgentConnector | `HttpWebhookAgentConnector` worked example in `examples/connectors/` |
+| v0.10 | SkillStore | Audit + `SqliteSkillStore` bundled default in `src/connectors/` + `connectors.json` substrate section + `SkillStoreTemplate` fork skeleton |
+| v0.11 | MemoryStore | Audit + `MemoryStoreTemplate` fork skeleton (SqliteMemoryStore was already bundled since v0.8) |
+| v0.12 | McpConnector | Audit + `McpConnectorTemplate` fork skeleton (4 bundled impls already covered the common patterns) |
+
+Five connector contracts; four have adopter-fork stories complete
+(SkillStore + MemoryStore + AgentConnector + McpConnector). LocalModel
+remains "(coming)" — signal-driven.
+
+### Notes
+
+- No new dependencies. No CLI changes. No substrate-config changes.
+- McpConnector has no `substrate` slot in `connectors.json` by design —
+  the contract is intrinsically *instanced* (`youtrack`, `github`, `jira`,
+  ...), not singleton. Per-instance config via top-level `connectors.json`
+  keys is the right shape.
+- Auto-wired bridges (`llm`, `memory`, `memory_write`) continue to fire when
+  their substrates are configured — unchanged behavior.
+
+### Up next
+
+- Adopter-signal-driven LocalModel template, if a deployment wants something
+  other than Ollama
+- Tradita-internal work still floating (NanoClaw extraction)
+- Dogfood adopter ramp
+
 ## 0.11.0 — 2026-05-28 — MemoryStoreTemplate fork skeleton + MemoryStore contract audit
 
 **Per Perry's audit thread `6b442259`.** Symmetric to v0.10's SkillStore work:
