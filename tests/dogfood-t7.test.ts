@@ -24,8 +24,8 @@ const REPO_ROOT = join(__dirname, "..");
 const PACKAGE_JSON = JSON.parse(readFileSync(join(REPO_ROOT, "package.json"), "utf8")) as Record<string, unknown>;
 
 describe("T7 — package.json polish", () => {
-  it("1. version is 0.9.7 (HttpWebhookAgentConnector example impl — Q5 deliverable from v0.9.6 audit; spec `df34313e`)", () => {
-    expect(PACKAGE_JSON["version"]).toBe("0.9.7");
+  it("1. version is 0.9.8 (skill_list evolution → SkillCatalog response; agent-facing discovery; spec `f0b8b832`)", () => {
+    expect(PACKAGE_JSON["version"]).toBe("0.9.8");
   });
 
   it("2. main + types + bin + engines.node ≥ 22.5 declared", () => {
@@ -75,12 +75,12 @@ describe("T7 — distributed code surface", () => {
     expect(out.trim(), `found AMP identifiers: ${out}`).toBe("");
   });
 
-  it("7. narrow-core LOC ceiling holds (< 8550 / 20 files; ..., v0.7.0 → 7150, v0.7.1 → 7250, v0.7.2 → 7550, v0.8.0 → 8200, v0.9.4 → 8300, v0.9.6 → 8550)", () => {
+  it("7. narrow-core LOC ceiling holds (< 8650 / 20 files; ..., v0.7.0 → 7150, v0.7.1 → 7250, v0.7.2 → 7550, v0.8.0 → 8200, v0.9.4 → 8300, v0.9.6 → 8550, v0.9.8 → 8650)", () => {
     const out = execSync("node scripts/loc-ceiling.mjs", { cwd: REPO_ROOT, encoding: "utf8" });
     const match = /CORE\s+(\d+) LOC across (\d+) files/.exec(out);
     expect(match).not.toBeNull();
     const [, locStr, filesStr] = match!;
-    expect(Number(locStr)).toBeLessThan(8550);
+    expect(Number(locStr)).toBeLessThan(8650);
     expect(Number(filesStr)).toBeLessThan(20);
   });
 

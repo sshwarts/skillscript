@@ -1,5 +1,96 @@
 # Changelog
 
+## 0.9.8 — 2026-05-28 — skill_list evolution → SkillCatalog (agent-facing discovery)
+
+**Per Perry's audit thread `f0b8b832` + addendum `73c79a28` + lock `011feaf0`.**
+`skill_list` returns a pre-grouped `SkillCatalog` so cold agents reading at
+session start see immediately "what pushes to me" vs "what I can invoke."
+
+### Wire shape changes (BREAKING — pre-adoption rule)
+
+`skill_list` response shape changed from `SkillMeta[]` (flat array) to
+`SkillCatalog` (pre-grouped object):
+
+```typescript
+interface SkillCatalog {
+  receives?: SkillEntry[];   // augmenting (# Output: agent:)
+  skills?: SkillEntry[];     // template (# Output: template:) + agent-invokable
+  headless?: SkillEntry[];   // no agent/template output; present when audience filter allows
+}
+
+interface SkillEntry {
+  name: string;
+  category: "augmenting" | "template" | "headless";
+  description: string;
+  status: SkillStatus;
+  vars: Array<{ name: string; required: boolean; default: string | null }>;
+  output: Array<{ kind: "agent" | "template" | "text" | "file" | "none"; target?: string }>;
+  triggers: Array<
+    | { kind: "cron"; expression: string }
+    | { kind: "session"; phase: "start" | "end" }
+    | { kind: "webhook"; path?: string }
+    | { kind: "event"; event_type: string }
+  >;
+}
+```
+
+### Category derivation
+
+From existing `# Output:` semantics — no new frontmatter syntax. Multi-output rule:
+
+```
+ANY output[i].kind === "agent"    → "augmenting" (surfaces in `receives`)
+else ANY output[i].kind === "template" → "template" (surfaces in `skills`)
+else                              → "headless"   (surfaces only when audience filter allows)
+```
+
+### Filter mechanism (AND-composed)
+
+```typescript
+interface SkillListFilter {
+  audience?: "agent" | "all" | "headless";  // default "agent"
+  status?: SkillStatus;                      // default "Approved"
+  trigger_kind?: "cron" | "session" | "webhook" | "event";
+  domain_tags?: string[];                    // AND-match
+  name_prefix?: string;                      // adopter-side scoping
+}
+```
+
+### Vars rendering (per addendum `73c79a28`)
+
+| `# Vars:` frontmatter | Rendered entry |
+|---|---|
+| `NAME` (bare) | `{ name: "NAME", required: true, default: null }` |
+| `NAME=value` | `{ name: "NAME", required: false, default: "value" }` |
+| `NAME=` (equals, empty value) | `{ name: "NAME", required: false, default: "" }` |
+
+### Footnote pinned in SkillEntry doc-comment
+
+*"Invocation is independent of discovery grouping. `execute_skill(skill_name="X")`
+works regardless of whether X surfaced in `receives` or `skills`. Discovery
+grouping is signal, not gating."*
+
+### Added
+
+- `src/skill-catalog.ts` — `buildSkillCatalog()` + category derivation +
+  vars/outputs/triggers rendering helpers (~160 LOC; auxiliary surface, not narrow-core)
+- `src/connectors/types.ts` — `SkillCatalog`, `SkillEntry`, `SkillListFilter` interfaces
+- `tests/v0.9.8-skill-catalog.test.ts` — locked-shape coverage (category derivation,
+  vars rendering, triggers union, filter composition, audience grouping, Q2 footnote)
+
+### Migration
+
+- `mcp__skillscript__skill_list` callers consuming the flat-array shape break.
+  Pre-adoption rule applies; no shipped adopters.
+- Bundled dashboard updated to flatten the grouped response for its existing
+  table view.
+
+### LOC ceiling
+
+Bumped narrow-core 8550 → 8650 for the new contract types in `connectors/types.ts`.
+Fourth bump in v0.9.x; consolidate-first signal stands but new contract surface
+isn't consolidatable.
+
 ## 0.9.7 — 2026-05-27 — HttpWebhookAgentConnector example impl
 
 **Q5 deliverable from the v0.9.6 audit** (`df34313e`). Bundled example

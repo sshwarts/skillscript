@@ -1,4 +1,5 @@
-import type { SkillStore, SkillStatus, StaticCapabilities } from "./connectors/types.js";
+import type { SkillStore, SkillStatus, SkillListFilter, StaticCapabilities } from "./connectors/types.js";
+import { buildSkillCatalog } from "./skill-catalog.js";
 import type { Scheduler, ResolvableTriggerSource, TriggerRegistration } from "./scheduler.js";
 import type { TraceStore } from "./trace.js";
 import type { Registry } from "./connectors/registry.js";
@@ -31,7 +32,7 @@ import { evaluateApprovalGate } from "./approval.js";
  *
  * Surface: seven tools wrapping existing T6 primitives.
  *
- *   skill_list({filter?})          → SkillMeta[]
+ *   skill_list({filter?})          → SkillCatalog (v0.9.8 — pre-grouped by audience)
  *   skill_metadata({name})         → metadata + version history
  *   skill_status({name, new_state})→ SkillStatus update (write)
  *   list_triggers({filter?})       → TriggerRegistration[]
@@ -203,22 +204,26 @@ export class McpServer {
   private registerBuiltinTools(): void {
     this.registerTool({
       name: "skill_list",
-      description: "List skills in the configured SkillStore. Optionally filter by status (Draft/Approved/Disabled).",
+      description: "Discover skills in the configured SkillStore (v0.9.8). Returns a `SkillCatalog` pre-grouped by audience-derived category: `receives` (skills that push to the calling agent via `# Output: agent:`), `skills` (skills the agent can invoke), `headless` (admin-view only). Category derived from each skill's `# Output:` declarations. Filter by audience / status / trigger_kind / domain_tags / name_prefix (AND-composed). Default: audience=\"agent\", status=\"Approved\".",
       inputSchema: {
         type: "object",
         properties: {
           filter: {
             type: "object",
             properties: {
+              audience: { type: "string", enum: ["agent", "all", "headless"] },
               status: { type: "string", enum: ["Draft", "Approved", "Disabled"] },
+              trigger_kind: { type: "string", enum: ["cron", "session", "webhook", "event"] },
+              domain_tags: { type: "array", items: { type: "string" } },
+              name_prefix: { type: "string" },
             },
-            additionalProperties: true,
+            additionalProperties: false,
           },
         },
       },
       handler: async (args) => {
-        const filter = args["filter"] as { status?: SkillStatus } | undefined;
-        return this.deps.skillStore.query(filter ?? {});
+        const filter = (args["filter"] as SkillListFilter | undefined) ?? {};
+        return buildSkillCatalog(this.deps.skillStore, filter);
       },
     });
 

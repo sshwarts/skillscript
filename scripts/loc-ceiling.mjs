@@ -163,7 +163,14 @@ const CORE_PATHS = [
 // mark; three-per-series is the 'consolidate first' mark"), the connector-
 // house-in-order arc post-v0.9.6 should consolidate before another v0.9.x
 // bump.
-const NARROW_MAX_LOC = 8550;
+// v0.9.8: nudged narrow ceiling 8550 → 8650 for skill_list evolution
+// (Perry's `f0b8b832` audit). New contract types in connectors/types.ts:
+// SkillCatalog + SkillEntry + SkillListFilter (~80 LOC of contract surface +
+// doc-comments — load-bearing for adopter-agent discovery reads). Fourth
+// v0.9.x bump; consolidate-first signal stands but contract surface
+// additions aren't consolidatable. Discovery impl lives in src/skill-catalog.ts
+// (NOT in narrow-core CORE_PATHS — auxiliary surface).
+const NARROW_MAX_LOC = 8650;
 const NARROW_MAX_FILES = 20;
 const BROAD_INFO_LOC = 9500;
 const BROAD_INFO_FILES = 28;

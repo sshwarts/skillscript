@@ -113,40 +113,45 @@ describe("McpServer protocol", () => {
 });
 
 describe("McpServer.skill_list / skill_metadata / skill_status", () => {
-  it("skill_list returns empty array when store is empty", async () => {
+  it("skill_list returns empty SkillCatalog when store is empty (v0.9.8)", async () => {
     const { server, cleanup } = withServer();
     try {
       const resp = await server.handle(rpc("tools/call", { name: "skill_list", arguments: {} }));
-      const skills = parseToolResult<unknown[]>(resp);
-      expect(skills).toEqual([]);
+      const catalog = parseToolResult<{ receives: unknown[]; skills: unknown[] }>(resp);
+      expect(catalog.receives).toEqual([]);
+      expect(catalog.skills).toEqual([]);
     } finally {
       cleanup();
     }
   });
 
-  it("skill_list returns stored skills with metadata", async () => {
+  it("skill_list groups by audience-derived category (v0.9.8)", async () => {
     const { server, skillStore, cleanup } = withServer();
     try {
-      await skillStore.store("alpha", "# Skill: alpha\n# Status: Approved\nt:\n    ! hi\ndefault: t\n");
+      // Augmenting (has agent output) → receives
+      await skillStore.store("alpha-augment", "# Skill: alpha-augment\n# Status: Approved\n# Output: agent: oncall\nt:\n    emit(text=\"hi\")\ndefault: t\n");
+      // Template (has template output) → skills
+      await skillStore.store("beta-template", "# Skill: beta-template\n# Status: Approved\n# Output: template: assistant\nt:\n    emit(text=\"playbook\")\ndefault: t\n");
       const resp = await server.handle(rpc("tools/call", { name: "skill_list", arguments: {} }));
-      const skills = parseToolResult<Array<{ name: string; status: string }>>(resp);
-      expect(skills.length).toBe(1);
-      expect(skills[0]!.name).toBe("alpha");
-      expect(skills[0]!.status).toBe("Approved");
+      const catalog = parseToolResult<{ receives: Array<{ name: string }>; skills: Array<{ name: string }> }>(resp);
+      expect(catalog.receives.map((s) => s.name)).toEqual(["alpha-augment"]);
+      expect(catalog.skills.map((s) => s.name)).toEqual(["beta-template"]);
     } finally {
       cleanup();
     }
   });
 
-  it("skill_list with filter narrows by status", async () => {
+  it("skill_list with audience=all surfaces headless group (v0.9.8)", async () => {
     const { server, skillStore, cleanup } = withServer();
     try {
-      await skillStore.store("a", "# Skill: a\n# Status: Draft\nt:\n    ! hi\ndefault: t\n");
-      await skillStore.store("b", "# Skill: b\n# Status: Approved\nt:\n    ! hi\ndefault: t\n");
-      const resp = await server.handle(rpc("tools/call", { name: "skill_list", arguments: { filter: { status: "Approved" } } }));
-      const skills = parseToolResult<Array<{ name: string }>>(resp);
-      expect(skills.length).toBe(1);
-      expect(skills[0]!.name).toBe("b");
+      // Headless (no agent/template output) — only visible in audience=all
+      await skillStore.store("monitor", "# Skill: monitor\n# Status: Approved\nt:\n    emit(text=\"silent\")\ndefault: t\n");
+      const respAgent = await server.handle(rpc("tools/call", { name: "skill_list", arguments: { filter: { audience: "agent" } } }));
+      const respAll = await server.handle(rpc("tools/call", { name: "skill_list", arguments: { filter: { audience: "all" } } }));
+      const catalogAgent = parseToolResult<{ receives: unknown[]; skills: unknown[]; headless?: unknown[] }>(respAgent);
+      const catalogAll = parseToolResult<{ receives: unknown[]; skills: unknown[]; headless: Array<{ name: string }> }>(respAll);
+      expect(catalogAgent.headless).toBeUndefined();
+      expect(catalogAll.headless.map((s) => s.name)).toEqual(["monitor"]);
     } finally {
       cleanup();
     }

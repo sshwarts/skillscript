@@ -105,15 +105,19 @@ describe("T6b dogfood — dashboard end-to-end", () => {
     ]);
   });
 
-  it("3. Author + store skill; dashboard sees it via skill_list", async () => {
+  it("3. Author + store skill; dashboard sees it via skill_list (v0.9.8 SkillCatalog)", async () => {
     await ctx.skillStore.store("heartbeat",
       "# Skill: heartbeat\n# Status: Draft\n# Triggers: cron: */1 * * * *\n" +
       "emit:\n    ! heartbeat at $(EVENT.fired_at_unix)\ndefault: emit\n",
     );
-    const skills = await rpcCall<Array<{ name: string; status: string }>>(ctx.baseUrl, "skill_list");
-    expect(skills.length).toBe(1);
-    expect(skills[0]!.name).toBe("heartbeat");
-    expect(skills[0]!.status).toBe("Draft");
+    // v0.9.8 — default status filter is "Approved"; heartbeat is Draft so
+    // ask explicitly. audience=all surfaces headless (no `# Output:` decl).
+    const catalog = await rpcCall<{ headless: Array<{ name: string; status: string }> }>(
+      ctx.baseUrl, "skill_list", { filter: { status: "Draft", audience: "all" } },
+    );
+    expect(catalog.headless.length).toBe(1);
+    expect(catalog.headless[0]!.name).toBe("heartbeat");
+    expect(catalog.headless[0]!.status).toBe("Draft");
   });
 
   it("4. skill_metadata returns full skill detail with version history", async () => {
@@ -131,9 +135,12 @@ describe("T6b dogfood — dashboard end-to-end", () => {
     );
     expect(result.status).toBe("Approved");
     expect(result.previous_status).toBe("Draft");
-    // Verify via re-poll
-    const skills = await rpcCall<Array<{ name: string; status: string }>>(ctx.baseUrl, "skill_list");
-    expect(skills[0]!.status).toBe("Approved");
+    // Verify via re-poll — v0.9.8: heartbeat is headless (no # Output:), so
+    // audience=all to see it. Default status=Approved matches now.
+    const catalog = await rpcCall<{ headless: Array<{ name: string; status: string }> }>(
+      ctx.baseUrl, "skill_list", { filter: { audience: "all" } },
+    );
+    expect(catalog.headless[0]!.status).toBe("Approved");
   });
 
   it("6. Register trigger via MCP write path → list_triggers reflects it", async () => {
@@ -181,10 +188,11 @@ describe("T6b dogfood — dashboard end-to-end", () => {
 
   it("9. Status Approved → Disabled persists; scheduler will skip future fires", async () => {
     await rpcCall(ctx.baseUrl, "skill_status", { name: "heartbeat", new_state: "Disabled" });
-    const skills = await rpcCall<Array<{ name: string; status: string }>>(
-      ctx.baseUrl, "skill_list", { filter: { status: "Disabled" } },
+    // v0.9.8: heartbeat is headless (no # Output:); audience=all surfaces it.
+    const catalog = await rpcCall<{ headless: Array<{ name: string; status: string }>; receives: unknown[]; skills: unknown[] }>(
+      ctx.baseUrl, "skill_list", { filter: { status: "Disabled", audience: "all" } },
     );
-    expect(skills.find((s) => s.name === "heartbeat")?.status).toBe("Disabled");
+    expect(catalog.headless.find((s) => s.name === "heartbeat")?.status).toBe("Disabled");
 
     // Verify scheduler skip-on-disabled (read from logs would be ideal; the
     // dispatchSkill return is null for non-Approved status)

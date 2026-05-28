@@ -42,13 +42,20 @@ async function refresh() {
   const ts = new Date();
   document.getElementById("poll-status").textContent = `polling…`;
   try {
-    const [skills, triggers, metrics, capabilities] = await Promise.all([
-      callTool("skill_list", {}),
+    const [catalog, triggers, metrics, capabilities] = await Promise.all([
+      // v0.9.8 — skill_list returns SkillCatalog (pre-grouped by audience).
+      // Dashboard wants the full picture (all categories); flatten the
+      // groups into a single array for the existing rendering code.
+      callTool("skill_list", { filter: { audience: "all" } }),
       callTool("list_triggers", {}),
       callTool("health_metrics", {}),
       callTool("runtime_capabilities", { include: ["mcpConnectors", "mcpConnectorClasses", "localModels", "memoryStores", "skillStores", "agentConnectors", "runtimeVersion"] }),
     ]);
-    state.skills = skills;
+    state.skills = [
+      ...(catalog.receives ?? []),
+      ...(catalog.skills ?? []),
+      ...(catalog.headless ?? []),
+    ];
     state.triggers = triggers;
     state.metrics = metrics;
     state.capabilities = capabilities;

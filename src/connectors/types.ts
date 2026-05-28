@@ -121,6 +121,74 @@ export interface SkillFilter {
   [key: string]: unknown;
 }
 
+/**
+ * v0.9.8 — agent-facing discovery shape for `skill_list` MCP tool.
+ * Pre-grouped by audience-derived category so a cold agent reading the
+ * response at session start can immediately see "what pushes to me"
+ * (`receives`) vs "what I can invoke" (`skills`). Per Perry's audit
+ * thread `f0b8b832`; locked shape in `011feaf0`.
+ *
+ * Category derivation rule (multi-output safe):
+ *   ANY output[i].kind === "agent"    → "augmenting" (surfaces in `receives`)
+ *   else ANY output[i].kind === "template" → "template" (surfaces in `skills`)
+ *   else                              → "headless"   (surfaces only when audience filter allows)
+ *
+ * **Footnote**: invocation is independent of discovery grouping.
+ * `execute_skill(skill_name="X")` works regardless of whether X surfaced
+ * in `receives` or `skills`. Discovery grouping is signal, not gating.
+ */
+export interface SkillCatalog {
+  receives?: SkillEntry[];   // present when audience includes augmenting
+  skills?: SkillEntry[];     // present when audience includes template
+  headless?: SkillEntry[];   // present when audience filter allows
+}
+
+export interface SkillEntry {
+  name: string;
+  category: "augmenting" | "template" | "headless";
+  description: string;
+  status: SkillStatus;
+  /**
+   * Vars derived from `# Vars:` frontmatter per the `73c79a28` addendum:
+   *   `NAME` (bare)         → { required: true,  default: null }
+   *   `NAME=`               → { required: false, default: "" }
+   *   `NAME=value`          → { required: false, default: "value" }
+   * Order preserved as declared in frontmatter (left-to-right).
+   */
+  vars: Array<{ name: string; required: boolean; default: string | null }>;
+  /**
+   * Array of all `# Output:` declarations. Multi-output skills preserve
+   * the full picture; category derivation uses the first agent/template
+   * kind found.
+   */
+  output: Array<{ kind: "agent" | "template" | "text" | "file" | "none"; target?: string }>;
+  /**
+   * Discriminated union of triggers. v1.0-locked enum: cron / session /
+   * webhook / event. Phase-2 trigger kinds (`agent-event`, `file-watch`,
+   * `sensor`) added additively when those firing paths land — non-breaking
+   * via TS discriminated union semantics.
+   */
+  triggers: Array<
+    | { kind: "cron"; expression: string }
+    | { kind: "session"; phase: "start" | "end" }
+    | { kind: "webhook"; path?: string }
+    | { kind: "event"; event_type: string }
+  >;
+}
+
+export interface SkillListFilter {
+  /** Default "agent" — receives + skills. "all" adds headless. "headless" only. */
+  audience?: "agent" | "all" | "headless";
+  /** Default "Approved" — cold authors don't see Drafts unless asked. */
+  status?: SkillStatus;
+  /** Narrow to skills with at least one trigger of this kind. Absent = any. */
+  trigger_kind?: "cron" | "session" | "webhook" | "event";
+  /** AND-match — skill must have all listed tags in its metadata. */
+  domain_tags?: string[];
+  /** Adopter-side scoping (e.g., per-project filtering by name convention). */
+  name_prefix?: string;
+}
+
 export interface SkillStore {
   /** Throws `SkillNotFoundError` if `name` (+ optional `version`) is missing. */
   load(name: string, version?: string): Promise<SkillSource>;
