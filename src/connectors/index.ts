@@ -4,9 +4,11 @@
 //   import { type SkillStore, type MemoryStore } from "skillscript-runtime/connectors";
 //   class MySkillStore implements SkillStore { ... }
 //
-// Bundled reference implementations (FilesystemSkillStore, OllamaLocalModel,
-// SqliteMemoryStore, CallbackMcpConnector) are also re-exported for embedders
-// who want a one-import wiring path.
+// Bundled reference implementations (FilesystemSkillStore, SqliteSkillStore,
+// SqliteMemoryStore, OllamaLocalModel, CallbackMcpConnector) are also
+// re-exported for embedders who want a one-import wiring path. v0.10 base
+// config: SkillStore = filesystem, MemoryStore = sqlite, LocalModel = null;
+// see docs/configuration.md for substrate selection via connectors.json.
 
 export type {
   SkillStore,

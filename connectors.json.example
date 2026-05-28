@@ -1,49 +1,49 @@
 {
-  "_comment_": "connectors.json — per-host connector wiring (v0.4.0+). Copy to `connectors.json` (which is gitignored) and fill in real values. Each top-level key is a connector instance name referenced via `$ <name> args` in skill source.",
+  "_comment": "Per-host connector wiring. Copy to `connectors.json` (gitignored) and fill in real values. The top-level `substrate` key selects singleton substrate connectors (SkillStore, MemoryStore, LocalModel). All other top-level keys define named MCP connector instances referenced via `$ name args` in skill source.",
 
-  "_comment_substrate_": "v0.7.0 substrate framing: language-level dispatch is via `$ <connector_name>`. Skills don't assume any specific substrate; adopters wire their LLM / memory / business-tool MCPs under whatever names read well at the call sites. Common patterns: `llm`, `memory`, `youtrack`, `github`, `slack`. The legacy `~` (local model) and `>` (memory query) ops continue to work during the v0.7.x grace period via the bundled `LocalModel` / `MemoryStore` implementations; tier-1 deprecation lands in v0.8/v0.9.",
+  "_comment_substrate": "v0.10 substrate selection — runtime hosts (MCP server + web dashboard) honor whatever you configure here. The bundled CLI authoring commands (`skillfile compile`, `skillfile lint`, `skillfile audit`, `skillfile list`) stay filesystem-pinned regardless — they're the FS-authoring loop. Three legs: bundled filesystem, bundled sqlite, adopter-custom (write your own SkillStore impl).",
 
-  "_comment_security_": "Credentials in this file are SECRET-BEARING. Default `.gitignore` excludes `connectors.json` from version control. For deployed environments, prefer the `${VAR}` substitution shape (resolved from process env at load time) over literal in-file values.",
+  "_comment_substrate_forms": "Each substrate slot accepts: (a) bare string for built-in types — \"filesystem\", \"sqlite\", \"ollama\"; (b) null to explicitly disable; (c) object form `{type, config}` to override defaults; (d) object form `{type:\"custom\", module, export, config}` for adopter-custom impls (requires programmatic bootstrap today — sync `bootstrap()` doesn't dynamic-import yet).",
 
-  "_comment_classes_": "v0.4.0+ closed-set class registry: `RemoteMcpConnector` (stdio-bridged remote MCP, v0.4.1+). `CallbackMcpConnector` is embedder-wired, not configurable from JSON. Use `runtime_capabilities({include:['mcpConnectorClasses']})` to introspect the runtime's available set. v0.7.2 plans `LocalModelMcpConnector` + `MemoryStoreMcpConnector` bridge classes so `$ llm` / `$ memory` work canonically against the bundled Ollama + SQLite implementations.",
+  "substrate": {
+    "skill_store": "filesystem",
+    "memory_store": "sqlite",
+    "local_model": null,
 
-  "_example_business_tool_remote": {
+    "_example_sqlite_skills": "Uncomment to switch skill storage to SQLite. Adopter-portable; persists between restarts. dbPath defaults to <skillsDir>/skills.db.",
+    "_example_sqlite_skills_object": {
+      "type": "sqlite",
+      "config": { "dbPath": "/var/skillscript/skills.db" }
+    },
+
+    "_example_ollama": "Uncomment to wire OllamaLocalModel as the primary LocalModel. Default baseUrl is OLLAMA_BASE_URL env or http://localhost:11434.",
+    "_example_ollama_object": {
+      "type": "ollama",
+      "config": { "baseUrl": "http://gpu-host:11434", "defaultModelTag": "gemma2:9b" }
+    },
+
+    "_example_custom": "Adopter-custom impl. Write `class FooSkillStore implements SkillStore { ... }` then reference it here. NOTE v0.10 — this form requires a programmatic bootstrap (sync `bootstrap()` can't dynamic-import). Wire via your own bootstrap script today; declarative custom config arrives in a follow-up.",
+    "_example_custom_object": {
+      "type": "custom",
+      "module": "./my-amp-skill-store.js",
+      "export": "AmpSkillStore",
+      "config": { "vault": "team" }
+    }
+  },
+
+  "_comment_classes": "v0.4.0+ closed-set class registry. Available: `RemoteMcpConnector` (stdio-bridged remote MCP). Use `runtime_capabilities({include:['mcpConnectorClasses']})` to introspect the runtime's available class set. v0.7.2 added `LocalModelMcpConnector` + `MemoryStoreMcpConnector` bridges so `$ llm` / `$ memory` work canonically — these auto-wire when their substrates exist.",
+
+  "_comment_security": "This file is secret-bearing when filled with real credentials. The repo's `.gitignore` excludes `connectors.json` (the live copy) but tracks `connectors.json.example`. Prefer `${VAR}` substitution over in-file literals for deployments.",
+
+  "_example_disabled_remote_mcp": {
+    "comment": "Uncomment and adapt to wire any remote MCP server. The example shows the stdio-bridged shape used by `mcp-remote` and similar.",
     "class": "RemoteMcpConnector",
-    "comment": "Wire a remote MCP service (YouTrack, Linear, GitHub, etc.) via the stdio-bridged remote-mcp adapter. Replace endpoint + auth env-var name as needed.",
     "config": {
       "command": "npx",
       "args": ["mcp-remote", "https://example.com/mcp", "--header", "Authorization:${AUTH_HEADER}"],
       "env": {
         "AUTH_HEADER": "Bearer ${YOUR_TOKEN_ENV_VAR}"
       }
-    }
-  },
-
-  "_example_literal_credential": {
-    "class": "RemoteMcpConnector",
-    "comment": "Same shape with an in-file literal credential (less safe; document discipline says prefer ${VAR} substitution).",
-    "config": {
-      "command": "npx",
-      "args": ["mcp-remote", "https://example.com/mcp"],
-      "env": {
-        "AUTH_HEADER": "Bearer plnt-XXXXXXXXXXXXXXXXXXXX"
-      }
-    }
-  },
-
-  "_example_v072_local_model_bridge": {
-    "comment": "PLANNED v0.7.2 — `LocalModelMcpConnector` will bridge any registered `LocalModel` (Ollama backed by default) as an MCP connector named whatever you choose. The wiring shape will look like the below; the class doesn't exist yet in v0.7.1.",
-    "_class_planned": "LocalModelMcpConnector",
-    "_config_planned": {
-      "local_model_name": "default"
-    }
-  },
-
-  "_example_v072_memory_store_bridge": {
-    "comment": "PLANNED v0.7.2 — `MemoryStoreMcpConnector` will bridge any registered `MemoryStore` (SQLite-FTS backed by default) as an MCP connector. Wiring shape will look like the below.",
-    "_class_planned": "MemoryStoreMcpConnector",
-    "_config_planned": {
-      "memory_store_name": "default"
     }
   }
 }

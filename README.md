@@ -125,7 +125,7 @@ The three kinds describe the skill's *role* (who consumes the output). Orthogona
 
 Augmenting and Template skills don't just write somewhere; they deliver to a frontier agent through `AgentConnector`. The contract is substrate-neutral: a Headless monitor detects a condition, evaluates whether action is warranted, and either resolves silently or calls `AgentConnector.deliver(agent_id, payload)`. The implementation might write a memory the agent reads at next session, post to a chat thread the agent monitors, send a push notification, write to a tmux pane, or invoke a webhook. All the adopter's call.
 
-The runtime ships `NoOpAgentConnector` by default; production deployments wire their own. AgentConnector wiring is embedder-only in v0.7.0 — deployments instantiate a concrete impl in code at runtime startup and register it via the runtime's connector registry, rather than declaring it in `connectors.json`. Common wirings look like:
+The runtime ships `NoOpAgentConnector` by default; production deployments wire their own and register it via the runtime's connector registry, rather than declaring it in `connectors.json`. Common wirings look like:
 
 ```typescript
 // At runtime startup
@@ -298,19 +298,7 @@ Runtime hosts (MCP server + web dashboard) honor whichever substrate the deploym
 
 See **[`docs/configuration.md`](docs/configuration.md)** for the full substrate config reference.
 
-**v0.7.0 substrate framing.** The canonical syntax routes everything substrate-specific through MCP dispatch — `$ llm prompt="..."` rather than the legacy `~`, `$ memory mode=fts query="..."` rather than the legacy `>`. This keeps skill source portable across adopters who wire different substrates. Pick the connector names that read well at your call sites: `llm`, `memory`, `openai_chat`, `pinecone_query` — whatever matches the substrate.
-
-**Today's reality.** The `LocalModel` and `MemoryStore` contracts back the *legacy* `~` and `>` ops which continue to work during the grace period — Ollama via `LocalModel` (default endpoint `http://localhost:11434`) and SQLite via `MemoryStore`. The canonical `$ llm` / `$ memory` MCP-dispatch paths require an adopter-wired MCP bridge. v0.7.1 will ship generic bridge classes (`LocalModelMcpConnector` + `MemoryStoreMcpConnector`) that wrap the existing contracts as MCP connectors, so any `LocalModel`/`MemoryStore` implementation gets a canonical `$ <name>` dispatch surface. Until then:
-
-- **Use `~ prompt="..." model="qwen" -> R`** to call Ollama today (legacy syntax, fully functional)
-- **Use `> mode=fts query="..." limit=10 -> R`** to query the SQLite memory store today
-- **Use `$ llm prompt="..."`** only if you've wired an `llm` MCP connector in `connectors.json` (e.g., via `RemoteMcpConnector` pointing at an ollama-mcp server)
-
-The migration tool that ran on `examples/` rewrote everything to canonical form on the assumption that v0.7.1's bridge connectors will land; until then, examples that use `$ llm` / `$ memory` need adopter-wired connectors to execute.
-
 Wire your own by implementing the interface and registering in `connectors.json`. See [`docs/language-reference.md`](docs/language-reference.md) §10 for full contracts.
-
-**Coming from v0.5.x or earlier?** v0.7.0 is a breaking-shape release: symbol-form ops (`~`, `>`, `@`, `!`, `??`, `&`) and `$(VAR)` substitution are deprecated. They still compile in v0.7.x during the grace period; v0.7.1 ships visibility-nudge lints (`deprecated-symbol-op`, `deprecated-substitution-shape`); removal slated for v0.8.x or v0.9. The mechanical rewrite rules are documented in [`CHANGELOG.md`](CHANGELOG.md) under `## 0.7.0 — Migration`. Most adopters writing new skills against canonical surface won't need to migrate anything.
 
 ### `connectors.json`
 
@@ -388,7 +376,7 @@ This is the "agent reaches MCP" path — an external agent (Claude, GPT, anythin
 
 ## Examples
 
-Nine curated example skills in [`examples/`](examples/), migrated to canonical v0.7.0 syntax, covering:
+Nine curated example skills in [`examples/`](examples/), covering:
 
 - Multi-target DAG with `needs:` dependencies
 - Cron triggers with `# OnError:` fallback
@@ -398,7 +386,7 @@ Nine curated example skills in [`examples/`](examples/), migrated to canonical v
 - `inline(skill=...)` skill composition
 - `execute_skill(...)` skill-to-skill composition
 
-Each example is annotated with the language pattern it demonstrates. The pre-v0.7.0 cold-author harness corpus (R1/R2/R3 from v0.2.9 production) was retired in the v0.7.0 syntax revamp — pre-adoption means no external users depend on backwards-compat regression coverage. The R4 harness round will produce fresh canonical-form fixtures.
+Each example is annotated with the language pattern it demonstrates.
 
 ## Architecture and deep documentation
 
@@ -411,20 +399,7 @@ Each example is annotated with the language pattern it demonstrates. The pre-v0.
 
 ## Status
 
-**v0.7.3** — pre-1.0, breaking changes still expected through the v0.7→v1.0 arc. The language *shape* locked at v0.7.2 (`${VAR}` substitution, function-call op grammar, substrate-portable connectors); v0.7.3 hardens the adopter surface (canonical config externalization, public `registerConnectorClass` API, onboarding scaffold + adopter playbook, OutputKind substrate-neutrality cleanup).
-
-Test coverage: 998/999 passing (10 skipped, 1 env-gated YouTrack). Narrow-core LOC under the budget per ERD.
-
-What's coming next (per the v0.7.3 → v1.0 roadmap settled in `076bdeac`):
-- **v0.8.0** — auth model + `$ memory_write` bundled. Mixed model: op-level mutations passthrough (substrate enforces; runtime threads credentials); skill-level `Draft → Approved` runtime-enforced (non-author signer required). Drops `unconfirmed-mutation` lint under passthrough. New-version-of-same-name returns to Draft on content change. `MemoryStore.write()` contract extension ships `$ memory_write` against the new auth model. See thread `43178c86` for the settled design.
-- **R7 cold-author harness** (post-v0.7.3 ship) — empirically tests NFR-6 agent-modifiability against the v0.7.3 file layout. Cold agent adds a filter, a lint rule, and a runtime-intrinsic op; failure modes target which extension point to refactor first. Evidence before refactor.
-- **v0.8.x** — tool-schema introspection: `describe_connector(name)` MCP tool exposes per-tool JSON-Schema from MCP `tools/list`; compile-time `mcp-arg-out-of-range` + `mcp-unknown-kwarg` lints
-- **v0.9** — pagination / `while` loop primitive; `search_skills` MCP tool for cross-agent discovery; skill-evaluation feedback loop
-- **v0.10** — reference `AgentConnector` impls (webhook, memory-handoff) shipped concretely; `# Output:` channel posture explicit
-- **v0.11** — Phase 2 trigger sources (event + agent-event + file-watch + sensor)
-- **v0.12** — emit-as-binding + op-level `(fallback:)` uniformity; `# Tests:` block
-- **v0.13+** — observability for scale-out (per-skill latency/error-rate/aggregate panels); portability stress-test scaffold (vector-DB memory + hosted-API LLM + webhook AgentConnector) as v1.0 gate prep
-- **v1.0** — API stability commitment, gates on first external adopter shipping against canonical contracts against a substrate that isn't AMP (not just harness rounds)
+Still under development
 
 ## Contributing
 

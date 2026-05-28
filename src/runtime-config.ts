@@ -32,8 +32,6 @@ export interface SkillscriptConfig {
   traceDir?: string;
   /** SQLite memory store db path. Absent → no MemoryStore wired. */
   memoryDbPath?: string;
-  /** Override `OLLAMA_BASE_URL`. */
-  ollamaBaseUrl?: string;
   /** Scheduler poll interval. Default 30s. */
   pollIntervalSeconds?: number;
   /** When true, `shell(unsafe=true)` ops are permitted. Default false. */
@@ -106,7 +104,7 @@ export function loadSkillscriptConfig(opts: LoadSkillscriptConfigOpts): LoadSkil
   const config: SkillscriptConfig = {};
   const obj = resolved as Record<string, unknown>;
 
-  const stringFields = ["skillsDir", "traceDir", "memoryDbPath", "ollamaBaseUrl", "triggersFilePath", "connectorsConfigPath"] as const;
+  const stringFields = ["skillsDir", "traceDir", "memoryDbPath", "triggersFilePath", "connectorsConfigPath"] as const;
   for (const field of stringFields) {
     if (obj[field] === undefined) continue;
     if (typeof obj[field] !== "string") {

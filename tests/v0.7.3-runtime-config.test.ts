@@ -28,11 +28,13 @@ describe("v0.7.3 — loadSkillscriptConfig", () => {
   });
 
   it("parses a fully-populated config with all knobs set", () => {
+    // v0.10 — ollamaBaseUrl dropped from SkillscriptConfig. LocalModel
+    // wiring moved to connectors.json `substrate.local_model` per the
+    // base-config rework. Pre-adoption rule: no migration needed.
     withTempConfig({
       skillsDir: "/var/skills",
       traceDir: "/var/traces",
       memoryDbPath: "/var/memory.db",
-      ollamaBaseUrl: "http://ollama.internal:11434",
       pollIntervalSeconds: 60,
       enableUnsafeShell: true,
       mode: "serve",
@@ -46,7 +48,6 @@ describe("v0.7.3 — loadSkillscriptConfig", () => {
         skillsDir: "/var/skills",
         traceDir: "/var/traces",
         memoryDbPath: "/var/memory.db",
-        ollamaBaseUrl: "http://ollama.internal:11434",
         pollIntervalSeconds: 60,
         enableUnsafeShell: true,
         mode: "serve",

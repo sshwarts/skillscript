@@ -1,16 +1,20 @@
-// Reference bootstrap — wires the bundled defaults (FilesystemSkillStore,
-// SqliteMemoryStore, OllamaLocalModel, LocalModelMcpConnector +
-// MemoryStoreMcpConnector bridges, FilesystemTraceStore, Scheduler,
-// McpServer) so the CLI's `dashboard` / `serve` commands have a working
-// out-of-the-box deployment.
+// Reference bootstrap — wires the runtime surface for the CLI's `dashboard`
+// / `serve` commands. v0.10 base config:
+//   skill_store   → FilesystemSkillStore (override via connectors.json substrate)
+//   memory_store  → SqliteMemoryStore (conditional on memoryDbPath)
+//   local_model   → null (adopter opts in via substrate.local_model)
+//   mcp_connector → null (adopter wires named instances in connectors.json)
+//   agent_connector → null (adopter wires explicitly)
+// Plus v0.7.2 MCP bridges (`llm`, `memory`, `memory_write`) auto-wired when
+// their underlying substrates exist.
 //
 // **Adopters: this file is a starting point, not a contract.** For custom
 // substrate wiring (your own MemoryStore, your own LocalModel impl, a
 // non-bundled AgentConnector, etc.), write your own bootstrap that imports
 // the public APIs (`Registry`, `registerConnectorClass`, `loadConnectorsConfig`,
 // `loadSkillscriptConfig`, the individual connector classes) and constructs
-// the registry to match your environment. See `examples/custom-bootstrap.example.ts`
-// for a worked walkthrough. Modifying this file in place is supported (the
+// the registry to match your environment. See `docs/configuration.md` and
+// `docs/adopter-playbook.md`. Modifying this file in place is supported (the
 // codebase doesn't gate on it being unchanged) but creates merge friction
 // with every upstream release — prefer writing your own bootstrap that
 // imports from the public surface.

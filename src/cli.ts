@@ -674,7 +674,6 @@ async function cmdRuntimeHost(args: string[], opts: { mode: "serve" | "dashboard
     triggersFilePath,
     connectorsConfigPath,
     mode: opts.mode,
-    ...(fileConfig.ollamaBaseUrl !== undefined ? { ollamaBaseUrl: fileConfig.ollamaBaseUrl } : {}),
     ...(fileConfig.pollIntervalSeconds !== undefined ? { pollIntervalSeconds: fileConfig.pollIntervalSeconds } : {}),
     ...(fileConfig.enableUnsafeShell !== undefined ? { enableUnsafeShell: fileConfig.enableUnsafeShell } : {}),
     // Scheduler-fired skills record traces by default; `fires` / `health` /
