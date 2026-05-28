@@ -45,14 +45,46 @@ describe("v0.9.8 — category derivation from # Output:", () => {
     expect(catalog.receives).toEqual([]);
   });
 
-  it("no output → headless (surfaces only when audience filter allows)", async () => {
-    await store.store("monitor", "# Skill: monitor\n# Status: Approved\nt:\n    emit(text=\"silent\")\ndefault: t\n");
+  it("no output + autonomous trigger → headless (surfaces only when audience filter allows)", async () => {
+    // Cron-fired with no agent-bound output → autonomous; fires itself to a substrate.
+    await store.store("monitor",
+      "# Skill: monitor\n# Status: Approved\n# Triggers: cron: */5 * * * *\nt:\n    emit(text=\"silent\")\ndefault: t\n",
+    );
 
     const catalogAgent = await buildSkillCatalog(store, { audience: "agent" });
     expect(catalogAgent.headless).toBeUndefined();
 
     const catalogAll = await buildSkillCatalog(store, { audience: "all" });
     expect(catalogAll.headless?.map((e) => e.name)).toEqual(["monitor"]);
+  });
+
+  // v0.9.8.1 — agent-invokable inference branch per Perry's `ec74e5fd`.
+  // Skills with text/file/none output AND no autonomous triggers are
+  // agent-invokable (e.g., `cut-release-tag`, `hello`, analyzers). They
+  // surface in `skills` so cold agents see them at default discovery.
+  it("text/file/none output + NO triggers → template (agent-invokable inference)", async () => {
+    // Simulates `cut-release-tag` / `hello` shape — text output, no triggers
+    await store.store("hello", "# Skill: hello\n# Status: Approved\nt:\n    emit(text=\"hi\")\ndefault: t\n");
+    await store.store("releaser",
+      "# Skill: releaser\n# Status: Approved\n# Output: text\nt:\n    emit(text=\"ship it\")\ndefault: t\n",
+    );
+
+    const catalog = await buildSkillCatalog(store);
+    expect(catalog.skills?.map((e) => e.name).sort()).toEqual(["hello", "releaser"]);
+    expect(catalog.headless).toBeUndefined();  // audience=agent default
+  });
+
+  it("inference: trigger-presence disambiguates agent-invokable from autonomous", async () => {
+    // Same `output: []` shape — but autonomous-trigger skill lands in headless,
+    // agent-invokable skill lands in skills. Per Perry's verification table.
+    await store.store("invokable", "# Skill: invokable\n# Status: Approved\nt:\n    emit(text=\"call me\")\ndefault: t\n");
+    await store.store("autonomous",
+      "# Skill: autonomous\n# Status: Approved\n# Triggers: cron: 0 * * * *\nt:\n    emit(text=\"self-fire\")\ndefault: t\n",
+    );
+
+    const catalogAll = await buildSkillCatalog(store, { audience: "all" });
+    expect(catalogAll.skills?.map((e) => e.name)).toEqual(["invokable"]);
+    expect(catalogAll.headless?.map((e) => e.name)).toEqual(["autonomous"]);
   });
 
   it("BOTH agent + template outputs → receives (Q1 lock)", async () => {
@@ -208,8 +240,11 @@ describe("v0.9.8 — audience filter + empty-group stability", () => {
   });
 
   it("audience='headless' returns ONLY headless group", async () => {
+    // "b" needs a trigger to be headless (no agent/template output + autonomous fire).
     await store.store("a", "# Skill: a\n# Status: Approved\n# Output: agent: x\nt:\n    emit(text=\"hi\")\ndefault: t\n");
-    await store.store("b", "# Skill: b\n# Status: Approved\nt:\n    emit(text=\"hi\")\ndefault: t\n");
+    await store.store("b",
+      "# Skill: b\n# Status: Approved\n# Triggers: cron: 0 * * * *\nt:\n    emit(text=\"hi\")\ndefault: t\n",
+    );
     const catalog = await buildSkillCatalog(store, { audience: "headless" });
     expect(catalog.receives).toBeUndefined();
     expect(catalog.skills).toBeUndefined();
@@ -217,9 +252,12 @@ describe("v0.9.8 — audience filter + empty-group stability", () => {
   });
 
   it("audience='all' includes all three groups", async () => {
+    // "head" needs a trigger to be headless under v0.9.8.1 rule.
     await store.store("aug", "# Skill: aug\n# Status: Approved\n# Output: agent: x\nt:\n    emit(text=\"hi\")\ndefault: t\n");
     await store.store("tmpl", "# Skill: tmpl\n# Status: Approved\n# Output: template: x\nt:\n    emit(text=\"hi\")\ndefault: t\n");
-    await store.store("head", "# Skill: head\n# Status: Approved\nt:\n    emit(text=\"hi\")\ndefault: t\n");
+    await store.store("head",
+      "# Skill: head\n# Status: Approved\n# Triggers: cron: 0 * * * *\nt:\n    emit(text=\"hi\")\ndefault: t\n",
+    );
     const catalog = await buildSkillCatalog(store, { audience: "all" });
     expect(catalog.receives?.map((e) => e.name)).toEqual(["aug"]);
     expect(catalog.skills?.map((e) => e.name)).toEqual(["tmpl"]);

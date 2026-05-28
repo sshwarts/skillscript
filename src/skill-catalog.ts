@@ -93,7 +93,7 @@ export function buildEntry(
 ): SkillEntry {
   return {
     name,
-    category: deriveCategory(parsed.outputs),
+    category: deriveCategory(parsed.outputs, parsed.triggers),
     description,
     status,
     vars: renderVars(parsed.vars),
@@ -103,14 +103,25 @@ export function buildEntry(
 }
 
 /**
- * Multi-output category derivation rule (Perry's lock `011feaf0`):
- *   ANY output[i].kind === "agent"    → "augmenting"
+ * Multi-output category derivation rule (Perry's lock `011feaf0` + v0.9.8.1
+ * inference-branch fix per `ec74e5fd`):
+ *   ANY output[i].kind === "agent"        → "augmenting"
  *   else ANY output[i].kind === "template" → "template"
- *   else                              → "headless"
+ *   else IF no autonomous triggers        → "template" (agent-invokable inference)
+ *   else                                  → "headless"
+ *
+ * The inference branch: text/file/none output + NO autonomous triggers
+ * implies "I expect to be invoked" (e.g., `cut-release-tag`, `hello`,
+ * agent-callable analyzers). Without it, these skills land in `headless`
+ * and disappear from default agent discovery. Trigger-presence
+ * disambiguates: text/file/none output + autonomous triggers (cron/session/
+ * event) means "I fire myself and write to a substrate" → headless.
  */
-function deriveCategory(outputs: OutputDecl[]): SkillEntry["category"] {
+function deriveCategory(outputs: OutputDecl[], triggers: TriggerDecl[]): SkillEntry["category"] {
   if (outputs.some((o) => o.kind === "agent")) return "augmenting";
   if (outputs.some((o) => o.kind === "template")) return "template";
+  // v0.9.8.1 — agent-invokable inference branch
+  if (triggers.length === 0) return "template";
   return "headless";
 }
 

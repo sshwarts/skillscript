@@ -1,5 +1,53 @@
 # Changelog
 
+## 0.9.9 — 2026-05-28 — categorization rule fix (v0.9.8.1 thematic patch)
+
+**Per Perry's `ec74e5fd` test-pass.** v0.9.8 shipped a derivation rule with a
+gap: skills with text/file/none output AND no autonomous triggers were
+landing in `headless` instead of `skills`. Cold agents calling `skill_list()`
+at session start couldn't see this common skill class — `hello`,
+`cut-release-tag`, agent-callable analyzers, etc.
+
+### Fixed
+
+Derivation rule grew an "agent-invokable inference" branch:
+
+```
+ANY output[i].kind === "agent"        → "augmenting"
+else ANY output[i].kind === "template" → "template"
+else IF no autonomous triggers        → "template" (agent-invokable inference)
+else                                  → "headless"
+```
+
+The trigger-presence check disambiguates:
+- text/file/none output + NO triggers = "I expect to be invoked" → `skills`
+- text/file/none output + cron/session/event triggers = "I fire myself" → `headless`
+
+Verification table:
+- `cut-release-tag` (output=text, no triggers) → Template ✓ (was Headless)
+- `hello` (output=[], no triggers) → Template ✓
+- `analyzer` (output=[], no triggers) → Template ✓
+- `queue-length-monitor` (output=[], cron trigger) → Headless ✓ (unchanged)
+- `service-health-watch` (output=none, cron trigger) → Headless ✓ (unchanged)
+- `morning-brief` (output=agent, cron trigger) → Augmenting ✓ (unchanged)
+- `classify-support-ticket` (output=agent, no triggers) → Augmenting ✓ (unchanged)
+
+### Process note pinned
+
+Perry's `ec74e5fd` flagged that v0.9.8 pushed without her pre-push test pass
+— deviation from the v0.9.6/v0.9.7 "share in shared → test pass → push"
+pattern. The probe-pass-finds-bug here would have caught this pre-push.
+The pattern is load-bearing even when discipline is high; v0.9.9 onward,
+hold the push until Perry's signal.
+
+### Lesson banked
+
+When tightening a derivation rule to handle a new dimension (multi-output),
+re-walk the original cases to verify they still resolve correctly. Same
+shape as `1bc9d7a2` (multi-layer-check-inconsistency) at the derivation-rule
+layer: lose a branch silently, faithful downstream impl misses it, only
+catches at wire-surface probe.
+
 ## 0.9.8 — 2026-05-28 — skill_list evolution → SkillCatalog (agent-facing discovery)
 
 **Per Perry's audit thread `f0b8b832` + addendum `73c79a28` + lock `011feaf0`.**

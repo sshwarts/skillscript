@@ -107,7 +107,8 @@ describe("DashboardServer /rpc endpoint", () => {
   });
 
   it("POST /rpc routes tools/call (skill_list, v0.9.8 SkillCatalog)", async () => {
-    // alpha is headless (no # Output:) — audience=all to surface.
+    // alpha is agent-invokable (no # Output:, no triggers) — surfaces in skills
+    // per v0.9.8.1 inference branch.
     await ctx.skillStore.store("alpha", "# Skill: alpha\n# Status: Approved\nt:\n    ! hi\ndefault: t\n");
     const r = await fetch(`${ctx.baseUrl}/rpc`, {
       method: "POST",
@@ -116,13 +117,13 @@ describe("DashboardServer /rpc endpoint", () => {
         jsonrpc: "2.0",
         id: 3,
         method: "tools/call",
-        params: { name: "skill_list", arguments: { filter: { audience: "all" } } },
+        params: { name: "skill_list", arguments: {} },
       }),
     });
     const json = await r.json();
     const catalog = JSON.parse(json.result.content[0].text);
-    expect(catalog.headless.length).toBe(1);
-    expect(catalog.headless[0].name).toBe("alpha");
+    expect(catalog.skills.length).toBe(1);
+    expect(catalog.skills[0].name).toBe("alpha");
   });
 
   it("POST /rpc with malformed JSON returns -32700 parse error", async () => {

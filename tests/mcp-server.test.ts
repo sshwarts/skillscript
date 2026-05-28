@@ -144,8 +144,11 @@ describe("McpServer.skill_list / skill_metadata / skill_status", () => {
   it("skill_list with audience=all surfaces headless group (v0.9.8)", async () => {
     const { server, skillStore, cleanup } = withServer();
     try {
-      // Headless (no agent/template output) — only visible in audience=all
-      await skillStore.store("monitor", "# Skill: monitor\n# Status: Approved\nt:\n    emit(text=\"silent\")\ndefault: t\n");
+      // Headless (no agent/template output + autonomous trigger) — only visible in audience=all.
+      // v0.9.8.1: trigger-presence disambiguates agent-invokable from autonomous.
+      await skillStore.store("monitor",
+        "# Skill: monitor\n# Status: Approved\n# Triggers: cron: */5 * * * *\nt:\n    emit(text=\"silent\")\ndefault: t\n",
+      );
       const respAgent = await server.handle(rpc("tools/call", { name: "skill_list", arguments: { filter: { audience: "agent" } } }));
       const respAll = await server.handle(rpc("tools/call", { name: "skill_list", arguments: { filter: { audience: "all" } } }));
       const catalogAgent = parseToolResult<{ receives: unknown[]; skills: unknown[]; headless?: unknown[] }>(respAgent);
