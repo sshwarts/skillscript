@@ -175,17 +175,49 @@ export class ConnectorNotFoundError extends OpError {
     public readonly connectorType: ConnectorType,
     opKind: string,
     target?: string,
+    /**
+     * v0.10 — when bare-form (`$ llm`, `$ memory`, `$ memory_write`) errors
+     * because the auto-wired substrate bridge isn't registered, pass the tool
+     * name so the error message points cold authors at the right
+     * `connectors.json` substrate setting instead of the generic "register
+     * via API" copy. Omit for non-bridge errors.
+     */
+    bareBridgeTool?: string,
   ) {
-    const message = `${connectorType} '${connectorName}' not registered with the runtime.`;
-    const remediation =
-      `Configure the connector via the registry (\`registry.register${connectorType.replace(/_./g, (m) => m[1]!.toUpperCase())}\` API), ` +
-      `or check the spelling against the registered connector names. ` +
-      `Bare \`${opKind} ...\` routes through the 'primary'/'default' connector; ` +
-      `\`${opKind} <name>.<tool>\` routes through the named instance.`;
+    const bridgeInfo = bareBridgeTool !== undefined ? RESOLVE_BRIDGE_INFO[bareBridgeTool] : undefined;
+    let message: string;
+    let remediation: string;
+    if (bridgeInfo !== undefined) {
+      message = `No \`${bareBridgeTool}\` connector wired.`;
+      remediation =
+        `Set \`substrate.${bridgeInfo.slot}: '${bridgeInfo.defaultType}'\` in \`~/.skillscript/connectors.json\` to enable ${bridgeInfo.bridgeName}, ` +
+        `or register a custom ${bridgeInfo.contract} programmatically. See docs/configuration.md for the full substrate config reference.`;
+    } else {
+      message = `${connectorType} '${connectorName}' not registered with the runtime.`;
+      remediation =
+        `Configure the connector via the registry (\`registry.register${connectorType.replace(/_./g, (m) => m[1]!.toUpperCase())}\` API), ` +
+        `or check the spelling against the registered connector names. ` +
+        `Bare \`${opKind} ...\` routes through the 'primary'/'default' connector; ` +
+        `\`${opKind} <name>.<tool>\` routes through the named instance.`;
+    }
     super(message, opKind, remediation, target);
     this.name = "ConnectorNotFoundError";
   }
 }
+
+/**
+ * v0.10 — substrate-bridge-tool → (slot, defaultType, bridgeName, contract).
+ * Used by ConnectorNotFoundError to surface substrate-aware remediation copy
+ * when a bare bridge name (`$ llm`, `$ memory`, `$ memory_write`) errors
+ * against a null substrate slot. Auto-wired in `bootstrap.ts` when the
+ * relevant substrate exists, so reaching this error path means the substrate
+ * slot is null + cold author needs the config pointer.
+ */
+const RESOLVE_BRIDGE_INFO: Record<string, { slot: string; defaultType: string; bridgeName: string; contract: string }> = {
+  llm: { slot: "local_model", defaultType: "ollama", bridgeName: "the default Ollama bridge", contract: "LocalModel" },
+  memory: { slot: "memory_store", defaultType: "sqlite", bridgeName: "the default SQLite memory bridge", contract: "MemoryStore" },
+  memory_write: { slot: "memory_store", defaultType: "sqlite", bridgeName: "the default SQLite memory bridge", contract: "MemoryStore" },
+};
 
 /** An op exceeded its resolved timeout (per-op > skill > built-in). */
 export class OpTimeoutError extends OpError {

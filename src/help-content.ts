@@ -325,7 +325,7 @@ $ memory mode=fts query="recent incidents" limit=10 -> CONTEXT
 $ memory_write content="\${REPORT}" recipients=[oncall] tags=[morning-sweep] approved="cron deliverable" -> R
 \`\`\`
 
-**Today's reality (v0.9.x).** Default deployments auto-wire \`llm\` + \`memory\` + \`memory_write\` MCP connectors via bundled bridges (\`LocalModelMcpConnector\` over \`LocalModel\`; \`MemoryStoreMcpConnector\` over \`MemoryStore\` — the same bridge instance registered under both \`memory\` and \`memory_write\` names so query + write share substrate). All three work zero-config against the bundled Ollama + SQLite contracts; adopters override by re-registering the same connector names against their own substrate. The legacy \`~ prompt=...\` and \`> mode=... query=...\` ops continue to dispatch through the bundled typed contracts with tier-2 \`deprecated-symbol-op\` warnings; \`$ memory_write content="..." recipients=[...] -> R\` is the canonical durable-handoff path shipped in v0.8.0.
+**Today's reality (v0.10).** Default deployments auto-wire \`llm\` + \`memory\` + \`memory_write\` MCP connectors via bundled bridges — but **only when the underlying substrate is configured**. v0.10 base config: \`SqliteMemoryStore\` is wired conditionally (substrate.memory_store: \`"sqlite"\`); \`LocalModel\` is \`null\` by default. To enable \`$ llm\`, set \`substrate.local_model: "ollama"\` in \`~/.skillscript/connectors.json\` (then restart the runtime host). To enable \`$ memory\` / \`$ memory_write\`, set \`substrate.memory_store: "sqlite"\` (default value in the scaffold). The bridges are the same shape they've always been (\`LocalModelMcpConnector\` over \`LocalModel\`; \`MemoryStoreMcpConnector\` over \`MemoryStore\` — same instance under both \`memory\` + \`memory_write\` names so query + write share substrate). Adopters with their own substrate impl wire it programmatically. See [\`docs/configuration.md\`](docs/configuration.md) for the substrate config reference.
 
 **One canonical call surface per concern.** \`$ memory\` is **the** memory-retrieval call surface — one contract (\`mode=... query=... limit=N -> R\` returning \`{items: [...]}\` envelope), one connector name. Both bare-form (\`$ memory ...\`) and dotted-form (\`$ memory.query ...\`) dispatch through the same registered connector. Same shape for \`$ llm\` (one \`prompt=... [maxTokens=N] [model="..."] -> R\` contract returning the response string). Author against the canonical \`$ llm\` / \`$ memory\` surfaces today; legacy \`~\` / \`>\` removal lands in v0.8/v0.9.
 
@@ -735,12 +735,26 @@ Skillscript skills don't import packages — they invoke connectors. The runtime
 | Contract | Purpose | Op surface |
 |---|---|---|
 | \`SkillStore\` | Skill source persistence + status lifecycle | implicit (\`inline\` / \`execute_skill\` reference) |
-| \`LocalModel\` | LLM inference (Ollama by default) | \`$ llm\` MCP dispatch via auto-wired \`LocalModelMcpConnector\` bridge (v0.7.2); legacy \`~\` op during grace period |
-| \`MemoryStore\` | Knowledge retrieval (SQLite-FTS by default) | \`$ memory\` MCP dispatch via auto-wired \`MemoryStoreMcpConnector\` bridge (v0.7.2); legacy \`>\` op during grace period |
+| \`LocalModel\` | LLM inference | \`$ llm\` MCP dispatch via \`LocalModelMcpConnector\` bridge — auto-wired ONLY when \`substrate.local_model\` is set in \`connectors.json\`. v0.10 default: null (off). |
+| \`MemoryStore\` | Knowledge retrieval | \`$ memory\` MCP dispatch via \`MemoryStoreMcpConnector\` bridge — auto-wired when \`substrate.memory_store\` is set (default in v0.10 scaffold: \`"sqlite"\`). |
 | \`McpConnector\` | MCP tool dispatch — all external tools | \`$ <connector_name> args\` |
 | \`AgentConnector\` | Deliver augment/template payloads | \`# Output: agent:\` / \`template:\` |
 
-**v0.7.3 substrate framing.** Canonical syntax routes substrate-specific dispatch through MCP (\`$ llm\` / \`$ memory\` rather than legacy \`~\` / \`>\`). Default deployments auto-wire the \`llm\` and \`memory\` connector names via bundled bridges (\`LocalModelMcpConnector\` over \`LocalModel\`; \`MemoryStoreMcpConnector\` over \`MemoryStore\`), so \`$ llm\` and \`$ memory\` work zero-config. Adopters override by re-registering those same connector names against their own substrate (e.g., a hosted-model MCP server in place of the local Ollama bridge); the canonical call sites don't change.
+**v0.10 substrate framing.** Canonical syntax routes substrate-specific dispatch through MCP (\`$ llm\` / \`$ memory\` rather than legacy \`~\` / \`>\`). Runtime hosts (MCP server + web dashboard) honor whichever substrate the deployment configures via \`~/.skillscript/connectors.json\`:
+
+\`\`\`json
+{
+  "substrate": {
+    "skill_store": "filesystem",
+    "memory_store": "sqlite",
+    "local_model": "ollama"
+  }
+}
+\`\`\`
+
+Short-form (\`"sqlite"\`, \`"ollama"\`, \`"filesystem"\`, \`null\`) wires bundled defaults. Object form (\`{type, config}\`) overrides config. Adopters with custom substrate impls (AMP, Pinecone, etc.) write a programmatic bootstrap. Authoring CLI commands (\`skillfile compile\` / \`lint\` / \`audit\` / \`list\`) stay filesystem-pinned regardless. See \`docs/configuration.md\`.
+
+**Cold-author footgun (v0.10).** \`$ llm\` errors with \`No \`llm\` connector wired. Set \`substrate.local_model: 'ollama'\` in connectors.json...\` when the substrate slot is null. Same for \`$ memory\` / \`$ memory_write\` against null \`substrate.memory_store\`. The error message points at the right config knob — no need to dig through API docs.
 
 **Adopter-extensible class registration (v0.7.3).** Custom \`McpConnector\` classes that are JSON-instantiable register via \`registerConnectorClass(name, entry)\` from adopter bootstrap before \`loadConnectorsConfig\` runs. Replaces the pre-v0.7.3 pattern of editing the bundled \`KNOWN_CONNECTOR_CLASSES\` Map directly (merge-conflict bait). See \`examples/custom-bootstrap.example.ts\`.
 

@@ -286,15 +286,17 @@ Swap in `$ ticketing_search`, `$ llm`, `$ memory_write` once you've wired connec
 
 Skills don't know what they're talking to. Five contracts decouple language from substrate:
 
-| Contract | Purpose | Routes |
+| Contract | Purpose | v0.10 base config |
 |---|---|---|
-| `SkillStore` | Skill source persistence | `.skill.md` files (filesystem default) |
-| `LocalModel` † | Local LLM dispatch — Ollama backed by default | `~ prompt=...` legacy op + future `$ llm` MCP bridge |
-| `MemoryStore` † | Retrieval over a knowledge store — SQLite-backed by default | `>` legacy op + future `$ memory` MCP bridge |
-| `McpConnector` | MCP tool invocation — external dispatch (any wired connector) | `$ <connector> args` ops |
-| `AgentConnector` | Delivery to a frontier agent | `prompt-context:` and `template:` outputs |
+| `SkillStore` | Skill source persistence | `FilesystemSkillStore` (default); switch via `substrate.skill_store` in `connectors.json` |
+| `MemoryStore` | Retrieval over a knowledge store | `SqliteMemoryStore` (conditional on dbPath); switch via `substrate.memory_store` |
+| `LocalModel` | Local LLM dispatch | **null** (adopter wires explicitly via `substrate.local_model`) |
+| `McpConnector` | MCP tool invocation — external dispatch | adopter wires named instances in `connectors.json` |
+| `AgentConnector` | Delivery to a frontier agent | adopter wires explicitly (no bundled default) |
 
-<sub>† `LocalModel` and `MemoryStore` are scheduled to be deprivileged to adopter-level wiring in v0.7.1 via the generic bridge classes (`LocalModelMcpConnector`, `MemoryStoreMcpConnector`). They back the legacy `~` and `>` ops during the v0.7.x grace period; the canonical v0.7.0+ path routes through `$ llm` / `$ memory` MCP dispatch instead. The language-relevant contracts going forward are `McpConnector`, `AgentConnector`, and `SkillStore`.</sub>
+Runtime hosts (MCP server + web dashboard) honor whichever substrate the deployment configures. Authoring CLI commands (`skillfile compile`, `skillfile lint`, `skillfile audit`, `skillfile list`) stay filesystem-pinned by design — they're the FS-authoring loop.
+
+See **[`docs/configuration.md`](docs/configuration.md)** for the full substrate config reference.
 
 **v0.7.0 substrate framing.** The canonical syntax routes everything substrate-specific through MCP dispatch — `$ llm prompt="..."` rather than the legacy `~`, `$ memory mode=fts query="..."` rather than the legacy `>`. This keeps skill source portable across adopters who wire different substrates. Pick the connector names that read well at your call sites: `llm`, `memory`, `openai_chat`, `pinecone_query` — whatever matches the substrate.
 
@@ -310,12 +312,21 @@ Wire your own by implementing the interface and registering in `connectors.json`
 
 **Coming from v0.5.x or earlier?** v0.7.0 is a breaking-shape release: symbol-form ops (`~`, `>`, `@`, `!`, `??`, `&`) and `$(VAR)` substitution are deprecated. They still compile in v0.7.x during the grace period; v0.7.1 ships visibility-nudge lints (`deprecated-symbol-op`, `deprecated-substitution-shape`); removal slated for v0.8.x or v0.9. The mechanical rewrite rules are documented in [`CHANGELOG.md`](CHANGELOG.md) under `## 0.7.0 — Migration`. Most adopters writing new skills against canonical surface won't need to migrate anything.
 
-### `connectors.json` (v0.4.0)
+### `connectors.json`
 
-Per-host MCP connector configuration. The runtime loads it at startup; each top-level entry becomes a named connector instance referenced via `$ name.tool` in skill source.
+Per-host configuration. The runtime loads it at startup. Two top-level concerns:
+
+1. **`substrate`** (v0.10+) — which `SkillStore` / `MemoryStore` / `LocalModel` the runtime hosts use
+2. **Named MCP connector instances** (v0.4.0+) — each becomes a connector referenced via `$ <name>` in skill source
 
 ```json
 {
+  "substrate": {
+    "skill_store": "sqlite",
+    "memory_store": "sqlite",
+    "local_model": null
+  },
+
   "youtrack": {
     "class": "RemoteMcpConnector",
     "config": {
@@ -326,6 +337,8 @@ Per-host MCP connector configuration. The runtime loads it at startup; each top-
   }
 }
 ```
+
+Substrate short-form (`"sqlite"` etc.) wires bundled defaults. Object form (`{type, config}`) overrides config. See **[`docs/configuration.md`](docs/configuration.md)** for the full schema + adopter-custom impl path.
 
 Two credential shapes:
 
@@ -390,6 +403,10 @@ Each example is annotated with the language pattern it demonstrates. The pre-v0.
 ## Architecture and deep documentation
 
 - **[Language Reference](docs/language-reference.md)** — canonical spec (1600+ lines, 13 sections). The single source of truth on syntax + semantics.
+- **[Configuration](docs/configuration.md)** — `connectors.json` substrate selection + named MCP connector wiring + adopter-custom impl path.
+- **[Adopter Playbook](docs/adopter-playbook.md)** — patterns for adopters embedding skillscript-runtime in their own deployment.
+- **[Connector Contract Reference](docs/connector-contract-reference.md)** — interface contracts for adopters writing their own connector impls.
+- **[SqliteSkillStore](docs/sqlite-skill-store.md)** — the bundled DB-backed SkillStore: schema, semantics, forking checklist.
 - **ROADMAP** — *coming soon to docs/*
 
 ## Status

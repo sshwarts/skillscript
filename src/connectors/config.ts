@@ -31,6 +31,37 @@ import { MemoryStoreMcpConnector } from "./memory-store-mcp.js";
 import type { McpConnector, McpConnectorClass } from "./types.js";
 
 /**
+ * v0.10 — substrate config (top-level `substrate` key in connectors.json).
+ * Singleton substrates (SkillStore, MemoryStore, LocalModel) declared here
+ * are consumed by `bootstrap()` / `defaultRegistry()` BEFORE the
+ * per-instance MCP connectors load. Each slot accepts three forms:
+ *
+ *   short form  → `"filesystem"` | `"sqlite"` | `null`
+ *   object form → `{ "type": "sqlite", "config": { "dbPath": "/path/skills.db" } }`
+ *   custom form → `{ "type": "custom", "module": "./my-store.js", "export": "MyStore", "config": {...} }`
+ *
+ * Built-in `type` values per slot:
+ *   skill_store:   "filesystem" | "sqlite"
+ *   memory_store:  "sqlite"
+ *   local_model:   "ollama"
+ *
+ * Adopter-custom (`type: "custom"`) loads the named module + exported class
+ * via dynamic import at bootstrap time. Class must implement the relevant
+ * contract; `config` is passed to the class constructor verbatim.
+ */
+export type SubstrateChoice =
+  | { type: "filesystem"; config?: Record<string, unknown> }
+  | { type: "sqlite"; config?: Record<string, unknown> }
+  | { type: "ollama"; config?: Record<string, unknown> }
+  | { type: "custom"; module: string; export?: string; config?: Record<string, unknown> };
+
+export interface SubstrateConfig {
+  skill_store?: SubstrateChoice | null;
+  memory_store?: SubstrateChoice | null;
+  local_model?: SubstrateChoice | null;
+}
+
+/**
  * Closed-set class registry. v0.4.0 ships with `CallbackMcpConnector`
  * registered for type-tracking + the lookup mechanism — but without a
  * `fromConfig` factory, since `CallbackMcpConnector` requires a dispatch
@@ -142,6 +173,13 @@ export interface LoadConnectorsConfigResult {
   connectors: ConfiguredConnector[];
   /** Hard errors from parsing/validation/instantiation. Surfaced at startup. */
   errors: string[];
+  /**
+   * v0.10 — parsed substrate intent (skill_store / memory_store / local_model)
+   * from the top-level `substrate` key. `undefined` when the key is absent.
+   * Consumer (`bootstrap()`) translates intent → instances + threads them
+   * into `defaultRegistry()`.
+   */
+  substrate?: SubstrateConfig;
 }
 
 export interface LoadConnectorsConfigOpts {
@@ -268,8 +306,19 @@ export function loadConnectorsConfig(opts: LoadConnectorsConfigOpts): LoadConnec
 
   const connectors: ConfiguredConnector[] = [];
   const errors: string[] = [];
+  let substrate: SubstrateConfig | undefined;
 
   for (const [name, entry] of Object.entries(parsed)) {
+    // v0.10 — `substrate` is a reserved top-level key for singleton substrate
+    // config (skill_store / memory_store / local_model). Not an MCP connector.
+    if (name === "substrate") {
+      const parseResult = parseSubstrateSection(entry);
+      if (parseResult.errors.length > 0) errors.push(...parseResult.errors);
+      substrate = parseResult.substrate;
+      continue;
+    }
+    // v0.4.0 `_*` keys are reserved for inline comments / metadata. Skip.
+    if (name.startsWith("_")) continue;
     if (entry === null || typeof entry !== "object" || Array.isArray(entry)) {
       errors.push(`connectors.json: entry '${name}' must be an object with {class, config}. Got: ${Array.isArray(entry) ? "array" : entry === null ? "null" : typeof entry}.`);
       continue;
@@ -375,5 +424,100 @@ export function loadConnectorsConfig(opts: LoadConnectorsConfigOpts): LoadConnec
     });
   }
 
-  return { connectors, errors };
+  return { connectors, errors, ...(substrate !== undefined ? { substrate } : {}) };
+}
+
+/**
+ * v0.10 — parse the `substrate` block of connectors.json. Surfaces parsed
+ * intent (`SubstrateChoice` per slot); instantiation happens in `bootstrap.ts`
+ * where built-in classes + dynamic-import for custom impls live.
+ *
+ * Validates: top-level shape, slot names (`skill_store` / `memory_store` /
+ * `local_model`), per-slot value shape (short / object / custom form).
+ * Unknown slot names or malformed values surface as errors and the slot is
+ * dropped.
+ */
+function parseSubstrateSection(entry: unknown): { substrate?: SubstrateConfig; errors: string[] } {
+  const errors: string[] = [];
+  if (entry === null || typeof entry !== "object" || Array.isArray(entry)) {
+    errors.push(`connectors.json: 'substrate' must be an object (got ${Array.isArray(entry) ? "array" : entry === null ? "null" : typeof entry}).`);
+    return { errors };
+  }
+  const VALID_SLOTS = new Set(["skill_store", "memory_store", "local_model"]);
+  const out: SubstrateConfig = {};
+  for (const [slot, value] of Object.entries(entry)) {
+    if (slot.startsWith("_")) continue; // reserved for inline comments
+    if (!VALID_SLOTS.has(slot)) {
+      errors.push(`connectors.json: substrate.${slot} — unknown slot. Valid: ${[...VALID_SLOTS].join(", ")}.`);
+      continue;
+    }
+    const parsed = parseSubstrateChoice(slot, value);
+    if (parsed.error !== undefined) errors.push(parsed.error);
+    if (parsed.choice !== undefined) {
+      // null → explicit "no substrate" — preserved as null in SubstrateConfig
+      (out as Record<string, SubstrateChoice | null | undefined>)[slot] = parsed.choice;
+    }
+  }
+  return { substrate: out, errors };
+}
+
+const VALID_SUBSTRATE_TYPES: Record<string, ReadonlySet<string>> = {
+  skill_store: new Set(["filesystem", "sqlite", "custom"]),
+  memory_store: new Set(["sqlite", "custom"]),
+  local_model: new Set(["ollama", "custom"]),
+};
+
+function parseSubstrateChoice(slot: string, value: unknown): { choice?: SubstrateChoice | null; error?: string } {
+  // null → "no substrate" for this slot. Valid for all slots.
+  if (value === null) return { choice: null };
+  // Short form: bare string, e.g., "sqlite"
+  if (typeof value === "string") {
+    if (!VALID_SUBSTRATE_TYPES[slot]!.has(value)) {
+      return { error: `connectors.json: substrate.${slot} — unknown type '${value}'. Valid: ${[...VALID_SUBSTRATE_TYPES[slot]!].join(", ")}.` };
+    }
+    if (value === "custom") {
+      return { error: `connectors.json: substrate.${slot} — 'custom' requires object form with 'module' field.` };
+    }
+    return { choice: { type: value as "filesystem" | "sqlite" | "ollama" } };
+  }
+  // Object form
+  if (typeof value !== "object" || Array.isArray(value)) {
+    return { error: `connectors.json: substrate.${slot} — must be string, null, or object (got ${Array.isArray(value) ? "array" : typeof value}).` };
+  }
+  const obj = value as Record<string, unknown>;
+  const type = obj["type"];
+  if (typeof type !== "string" || type === "") {
+    return { error: `connectors.json: substrate.${slot} — object form requires 'type' (string).` };
+  }
+  if (!VALID_SUBSTRATE_TYPES[slot]!.has(type)) {
+    return { error: `connectors.json: substrate.${slot} — unknown type '${type}'. Valid: ${[...VALID_SUBSTRATE_TYPES[slot]!].join(", ")}.` };
+  }
+  const rawConfig = obj["config"] ?? {};
+  if (rawConfig === null || typeof rawConfig !== "object" || Array.isArray(rawConfig)) {
+    return { error: `connectors.json: substrate.${slot} — 'config' must be an object.` };
+  }
+  if (type === "custom") {
+    const modulePath = obj["module"];
+    if (typeof modulePath !== "string" || modulePath === "") {
+      return { error: `connectors.json: substrate.${slot} — custom form requires 'module' (path to JS file).` };
+    }
+    const exportName = obj["export"];
+    if (exportName !== undefined && typeof exportName !== "string") {
+      return { error: `connectors.json: substrate.${slot} — 'export' must be a string when provided.` };
+    }
+    return {
+      choice: {
+        type: "custom",
+        module: modulePath,
+        ...(typeof exportName === "string" ? { export: exportName } : {}),
+        config: rawConfig as Record<string, unknown>,
+      },
+    };
+  }
+  return {
+    choice: {
+      type: type as "filesystem" | "sqlite" | "ollama",
+      config: rawConfig as Record<string, unknown>,
+    },
+  };
 }

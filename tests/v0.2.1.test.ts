@@ -57,12 +57,12 @@ describe("v0.2.1 — bootstrap()", () => {
     expect(result.enableUnsafeShell).toBe(false);
   });
 
-  it("registers primary SkillStore + three LocalModels in the registry", () => {
+  it("registers primary SkillStore only by default (v0.10 — LocalModel null unless opted in)", () => {
     const { registry } = defaultRegistry({ skillsDir: join(home, "skills") });
     expect(registry.hasSkillStore("primary")).toBe(true);
-    expect(registry.hasLocalModel("default")).toBe(true);
-    expect(registry.hasLocalModel("gemma2")).toBe(true);
-    expect(registry.hasLocalModel("qwen")).toBe(true);
+    // v0.10 — LocalModel is null by default. Adopters wire via
+    // connectors.json substrate config or defaultRegistry opts.
+    expect(registry.hasLocalModel("default")).toBe(false);
   });
 
   it("propagates enableUnsafeShell into result + McpServer", async () => {
@@ -164,15 +164,17 @@ describe("v0.2.1 — runtime_capabilities MCP tool", () => {
     expect(caps["runtimeVersion"]).toBeUndefined();
   });
 
-  it("surfaces FilesystemSkillStore + Ollama models per default wiring", async () => {
+  it("surfaces FilesystemSkillStore + no LocalModels by default (v0.10)", async () => {
     const { mcpServer } = bootstrap({ skillsDir: join(home, "skills"), traceDir: join(home, "traces") });
     const caps = await callTool(mcpServer, "runtime_capabilities");
     const stores = caps["skillStores"] as Array<{ name: string; implementation: string }>;
     expect(stores).toEqual([
       expect.objectContaining({ name: "primary", implementation: "FilesystemSkillStore" }),
     ]);
-    const models = (caps["localModels"] as Array<{ name: string }>).map((m) => m.name).sort();
-    expect(models).toEqual(["default", "gemma2", "qwen"]);
+    // v0.10 — LocalModel is null by default. Adopters wire explicitly via
+    // connectors.json `substrate.local_model: {type: "ollama", ...}`.
+    const models = (caps["localModels"] as Array<{ name: string }> | undefined) ?? [];
+    expect(models).toEqual([]);
   });
 
   it("shellExecution reports structural-spawn + unsafe_enabled flag", async () => {

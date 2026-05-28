@@ -86,11 +86,11 @@ describe("v0.4.1 item 7 — unknown-connector lint auto-wires from runtime regis
     const finding = data.diagnostics.find((d) => d.rule === "unknown-connector");
     expect(finding).toBeDefined();
     expect(finding!.message).toMatch(/unknown connector 'unknown_conn'/);
-    // v0.7.2 — bootstrap auto-wires `llm` bridge connector, so the
-    // wired-connectors list now includes `llm` alongside the test-wired
-    // `known` connector.
+    // v0.10 — bootstrap no longer auto-wires `llm` bridge by default
+    // (LocalModel is null unless adopter opts in via `substrate.local_model`
+    // in connectors.json). The wired-connectors list reflects only what
+    // adopter wired explicitly.
     expect(finding!.message).toMatch(/Wired connectors: .*known/);
-    expect(finding!.message).toMatch(/llm/);
   });
 
   it("compile_skill preflight uses registry for disallowed-tool detection", async () => {

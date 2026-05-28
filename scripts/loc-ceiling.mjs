@@ -170,8 +170,15 @@ const CORE_PATHS = [
 // v0.9.x bump; consolidate-first signal stands but contract surface
 // additions aren't consolidatable. Discovery impl lives in src/skill-catalog.ts
 // (NOT in narrow-core CORE_PATHS — auxiliary surface).
-const NARROW_MAX_LOC = 8650;
-const NARROW_MAX_FILES = 20;
+// v0.10:  nudged narrow ceiling 8650 → 9300 for the substrate-portability
+// arc. New SkillStore impl SqliteSkillStore (~400 LOC in src/connectors/) +
+// substrate parser additions in connectors/config.ts (~120 LOC) + substrate
+// instance-building in bootstrap.ts (~80 LOC). Promotes SqliteSkillStore
+// from examples/ to src/connectors/ so runtime hosts (MCP server + dashboard)
+// can honor substrate config from connectors.json. Per Scott direction
+// (2026-05-28) — MCP and dashboard MUST honor whatever skillstore is configured.
+const NARROW_MAX_LOC = 9300;
+const NARROW_MAX_FILES = 22;
 const BROAD_INFO_LOC = 9500;
 const BROAD_INFO_FILES = 28;
 

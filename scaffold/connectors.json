@@ -1,9 +1,37 @@
 {
-  "_comment": "Per-host connector wiring. Copied to ~/.skillscript/connectors.json by `skillfile init`. Each top-level key is a connector instance name referenced via `$ name args` in skill source. Pick names that read well at your call sites (e.g. `llm`, `memory`, `youtrack`, `github`).",
+  "_comment": "Per-host connector wiring. Copied to ~/.skillscript/connectors.json by `skillfile init`. The top-level `substrate` key selects singleton substrate connectors (SkillStore, MemoryStore, LocalModel). All other top-level keys define named MCP connector instances referenced via `$ name args` in skill source.",
 
-  "_comment_substrate": "v0.7.0 substrate framing: language-level dispatch is via `$ <connector_name>`. Wire whatever substrate you want under whatever name reads well. Tradita's deployment is separate from this scaffold; ship your own wiring here.",
+  "_comment_substrate": "v0.10 substrate selection — runtime hosts (MCP server + web dashboard) honor whatever you configure here. The bundled CLI authoring commands (`skillfile compile`, `skillfile lint`, `skillfile audit`, `skillfile list`) stay filesystem-pinned regardless — they're the FS-authoring loop. Three legs: bundled filesystem, bundled sqlite, adopter-custom (write your own SkillStore impl).",
 
-  "_comment_classes": "v0.4.0+ closed-set class registry. Available: `RemoteMcpConnector` (stdio-bridged remote MCP). Use `runtime_capabilities({include:['mcpConnectorClasses']})` to introspect the runtime's available class set. v0.7.2 plans to ship `LocalModelMcpConnector` + `MemoryStoreMcpConnector` bridges so `$ llm` / `$ memory` work canonically.",
+  "_comment_substrate_forms": "Each substrate slot accepts: (a) bare string for built-in types — \"filesystem\", \"sqlite\", \"ollama\"; (b) null to explicitly disable; (c) object form `{type, config}` to override defaults; (d) object form `{type:\"custom\", module, export, config}` for adopter-custom impls (requires programmatic bootstrap today — sync `bootstrap()` doesn't dynamic-import yet).",
+
+  "substrate": {
+    "skill_store": "filesystem",
+    "memory_store": "sqlite",
+    "local_model": null,
+
+    "_example_sqlite_skills": "Uncomment to switch skill storage to SQLite. Adopter-portable; persists between restarts. dbPath defaults to <skillsDir>/skills.db.",
+    "_example_sqlite_skills_object": {
+      "type": "sqlite",
+      "config": { "dbPath": "/var/skillscript/skills.db" }
+    },
+
+    "_example_ollama": "Uncomment to wire OllamaLocalModel as the primary LocalModel. Default baseUrl is OLLAMA_BASE_URL env or http://localhost:11434.",
+    "_example_ollama_object": {
+      "type": "ollama",
+      "config": { "baseUrl": "http://gpu-host:11434", "defaultModelTag": "gemma2:9b" }
+    },
+
+    "_example_custom": "Adopter-custom impl. Write `class FooSkillStore implements SkillStore { ... }` then reference it here. NOTE v0.10 — this form requires a programmatic bootstrap (sync `bootstrap()` can't dynamic-import). Wire via your own bootstrap script today; declarative custom config arrives in a follow-up.",
+    "_example_custom_object": {
+      "type": "custom",
+      "module": "./my-amp-skill-store.js",
+      "export": "AmpSkillStore",
+      "config": { "vault": "team" }
+    }
+  },
+
+  "_comment_classes": "v0.4.0+ closed-set class registry. Available: `RemoteMcpConnector` (stdio-bridged remote MCP). Use `runtime_capabilities({include:['mcpConnectorClasses']})` to introspect the runtime's available class set. v0.7.2 added `LocalModelMcpConnector` + `MemoryStoreMcpConnector` bridges so `$ llm` / `$ memory` work canonically — these auto-wire when their substrates exist.",
 
   "_comment_security": "This file is secret-bearing when filled with real credentials. The repo's `.gitignore` excludes `connectors.json` (the live copy) but tracks `connectors.json.example`. Prefer `${VAR}` substitution over in-file literals for deployments.",
 

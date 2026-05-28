@@ -46,6 +46,8 @@ export type {
 export { Registry } from "./registry.js";
 
 export { FilesystemSkillStore } from "./skill-store.js";
+export { SqliteSkillStore } from "./sqlite-skill-store.js";
+export type { SqliteSkillStoreConfig } from "./sqlite-skill-store.js";
 export { OllamaLocalModel } from "./local-model.js";
 export type { OllamaConfig } from "./local-model.js";
 export { SqliteMemoryStore } from "./memory-store.js";
@@ -77,4 +79,6 @@ export type {
   ConfiguredConnector,
   LoadConnectorsConfigOpts,
   LoadConnectorsConfigResult,
+  SubstrateChoice,
+  SubstrateConfig,
 } from "./config.js";

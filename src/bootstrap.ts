@@ -23,25 +23,33 @@ import { dirname } from "node:path";
 
 import { Registry } from "./connectors/registry.js";
 import { FilesystemSkillStore } from "./connectors/skill-store.js";
-import { OllamaLocalModel } from "./connectors/local-model.js";
+import { SqliteSkillStore } from "./connectors/sqlite-skill-store.js";
 import { SqliteMemoryStore } from "./connectors/memory-store.js";
+import { OllamaLocalModel } from "./connectors/local-model.js";
 import { LocalModelMcpConnector } from "./connectors/local-model-mcp.js";
 import { MemoryStoreMcpConnector } from "./connectors/memory-store-mcp.js";
-import { loadConnectorsConfig, detectGitignoreRisk } from "./connectors/config.js";
+import { loadConnectorsConfig, detectGitignoreRisk, type SubstrateConfig, type SubstrateChoice } from "./connectors/config.js";
 import { FilesystemTraceStore } from "./trace.js";
 import { Scheduler, type ResolvableTriggerSource, type TriggerRegistration } from "./scheduler.js";
 import type { TraceConfig } from "./trace.js";
 import { McpServer } from "./mcp-server.js";
 import { parse } from "./parser.js";
-import type { SkillStore } from "./connectors/types.js";
+import { join } from "node:path";
+import type { SkillStore, MemoryStore, LocalModel } from "./connectors/types.js";
 
 export interface BootstrapOpts {
   skillsDir: string;
   traceDir: string;
   /** When set + existing, register `SqliteMemoryStore` as primary memory_store. */
   memoryDbPath?: string;
-  /** Override `OLLAMA_BASE_URL` env default. */
-  ollamaBaseUrl?: string;
+  /** Override the bundled-default SkillStore. v0.10 — threaded by the CLI when
+   * `connectors.json` substrate config selects sqlite / adopter-custom. */
+  skillStore?: SkillStore;
+  /** Override the conditional Sqlite MemoryStore wiring. */
+  memoryStore?: MemoryStore;
+  /** Optional LocalModel to register as `"default"`. v0.10 — base config is
+   * null; adopters wire explicitly via `connectors.json` or this opt. */
+  localModel?: LocalModel;
   /** Scheduler poll interval (default 30s). */
   pollIntervalSeconds?: number;
   /** Forwarded to scheduler/runtime. Default false. */
@@ -75,7 +83,10 @@ export interface BootstrapResult {
   registry: Registry;
   scheduler: Scheduler;
   mcpServer: McpServer;
-  skillStore: FilesystemSkillStore;
+  /** v0.10 — generalized from concrete `FilesystemSkillStore` to the
+   * `SkillStore` interface since the connector is now configurable via
+   * `connectors.json` substrate config. */
+  skillStore: SkillStore;
   traceStore: FilesystemTraceStore;
   /** Read back so runtime_capabilities can surface the active mode. */
   enableUnsafeShell: boolean;
@@ -132,44 +143,69 @@ const VALID_TRIGGER_SOURCES: ReadonlyArray<ResolvableTriggerSource> = [
 export interface DefaultRegistryOpts {
   skillsDir: string;
   memoryDbPath?: string;
-  ollamaBaseUrl?: string;
+  /**
+   * Override the bundled-default SkillStore. When supplied, used instead of
+   * `new FilesystemSkillStore(skillsDir)`. Threaded through by the CLI when
+   * `connectors.json` substrate config selects sqlite or adopter-custom.
+   */
+  skillStore?: SkillStore;
+  /**
+   * Override the conditional-Sqlite MemoryStore wiring. When supplied, used
+   * instead of the `memoryDbPath`-conditional `SqliteMemoryStore`.
+   */
+  memoryStore?: MemoryStore;
+  /**
+   * Optional LocalModel to register as `"default"`. **v0.10 — base config:
+   * LocalModel is NULL unless explicitly provided.** Adopters wanting Ollama
+   * (or any other LocalModel) wire it explicitly via `connectors.json`
+   * substrate config or by passing here.
+   */
+  localModel?: LocalModel;
 }
 
 /**
- * Build the default connector registry: primary SkillStore + primary
- * MemoryStore (if the db file/directory exists) + three named LocalModels
- * pointed at Ollama. Used by both `bootstrap()` (long-lived host) and the
- * `skillfile run` one-shot path so both surfaces wire the same defaults.
+ * Build the default connector registry: primary SkillStore (configurable),
+ * primary MemoryStore (configurable / conditional), and optional LocalModel
+ * (null by default — v0.10). Used by both `bootstrap()` (long-lived host)
+ * and the `skillfile run` one-shot path so both surfaces wire the same
+ * defaults.
+ *
+ * **v0.10 base config**:
+ *   skill_store   → FilesystemSkillStore (override via `opts.skillStore`)
+ *   memory_store  → SqliteMemoryStore (conditional on `memoryDbPath`)
+ *   local_model   → null (override via `opts.localModel`)
+ *   mcp_connector → null (adopter wires via `connectors.json`)
+ *   agent_connector → null (adopter wires explicitly)
  */
-export function defaultRegistry(opts: DefaultRegistryOpts): { registry: Registry; skillStore: FilesystemSkillStore } {
+export function defaultRegistry(opts: DefaultRegistryOpts): { registry: Registry; skillStore: SkillStore } {
   const registry = new Registry();
-  const skillStore = new FilesystemSkillStore(opts.skillsDir);
+  const skillStore = opts.skillStore ?? new FilesystemSkillStore(opts.skillsDir);
   registry.registerSkillStore("primary", skillStore);
 
-  if (opts.memoryDbPath !== undefined && (existsSync(opts.memoryDbPath) || existsSync(dirname(opts.memoryDbPath)))) {
-    registry.registerMemoryStore("primary", new SqliteMemoryStore({ dbPath: opts.memoryDbPath }));
+  let memoryStore: MemoryStore | undefined = opts.memoryStore;
+  if (memoryStore === undefined && opts.memoryDbPath !== undefined && (existsSync(opts.memoryDbPath) || existsSync(dirname(opts.memoryDbPath)))) {
+    memoryStore = new SqliteMemoryStore({ dbPath: opts.memoryDbPath });
+  }
+  if (memoryStore !== undefined) {
+    registry.registerMemoryStore("primary", memoryStore);
   }
 
-  const ollamaUrl = opts.ollamaBaseUrl ?? process.env["OLLAMA_BASE_URL"] ?? "http://localhost:11434";
-  registry.registerLocalModel("default", new OllamaLocalModel({ baseUrl: ollamaUrl, defaultModelTag: "gemma2:9b" }));
-  registry.registerLocalModel("gemma2", new OllamaLocalModel({ baseUrl: ollamaUrl, defaultModelTag: "gemma2:9b" }));
-  registry.registerLocalModel("qwen", new OllamaLocalModel({ baseUrl: ollamaUrl, defaultModelTag: "qwen2.5:7b" }));
+  // v0.10 — LocalModel default is null. Only register if explicitly provided.
+  if (opts.localModel !== undefined) {
+    registry.registerLocalModel("default", opts.localModel);
+  }
 
-  // v0.7.2 — auto-wire bridge connectors so the canonical `$ llm` and
-  // `$ memory` MCP-dispatch paths Just Work in default deployments. The
-  // bridges wrap the LocalModel + MemoryStore impls registered above as
-  // McpConnector instances. Adopters override by re-registering "llm"
-  // or "memory" with their own connector (post-bootstrap) OR by adding
-  // entries to connectors.json — connectors.json loading runs AFTER
-  // defaultRegistry, so adopter overrides win.
-  const defaultLocalModel = registry.getLocalModel("default");
-  registry.registerMcpConnector("llm", new LocalModelMcpConnector(defaultLocalModel));
-  const memoryStore = registry.listMemoryStores().find((e) => e.name === "primary");
+  // v0.7.2 — auto-wire bridge connectors when their substrate exists.
+  // Adopters override by re-registering the bridge name post-bootstrap OR
+  // by adding entries to connectors.json (which loads after defaultRegistry).
+  if (registry.hasLocalModel("default")) {
+    registry.registerMcpConnector("llm", new LocalModelMcpConnector(registry.getLocalModel("default")));
+  }
   if (memoryStore !== undefined) {
     // v0.8.0 — register the SAME bridge instance under both names so
     // bare-form `$ memory mode=fts ...` and `$ memory_write content=...`
     // both route to it. The bridge dispatches on toolName internally.
-    const bridge = new MemoryStoreMcpConnector(memoryStore.instance);
+    const bridge = new MemoryStoreMcpConnector(memoryStore);
     registry.registerMcpConnector("memory", bridge);
     registry.registerMcpConnector("memory_write", bridge);
   }
@@ -178,15 +214,20 @@ export function defaultRegistry(opts: DefaultRegistryOpts): { registry: Registry
 }
 
 /**
- * Construct the runtime surface with bundled-default substrate wiring.
+ * Construct the runtime surface with configurable substrate wiring.
  *
- * **Reference deployment.** This function wires `FilesystemSkillStore`,
- * `OllamaLocalModel` (`default` / `gemma2` / `qwen`), `SqliteMemoryStore`
- * (if `memoryDbPath` is set + the file/dir exists), the v0.7.2 bridge
- * connectors (`llm` + `memory`), and any `McpConnector` declared in
- * `connectors.json`. Adopters wanting custom substrate wiring should write
- * their own bootstrap that imports the public APIs (Registry, the
- * individual connector classes, `loadConnectorsConfig`, etc.) directly.
+ * **Reference deployment, v0.10.** Base config:
+ *   - `FilesystemSkillStore` (override via `opts.skillStore` or `connectors.json` substrate)
+ *   - `SqliteMemoryStore` (conditional on `memoryDbPath`; override via `opts.memoryStore`)
+ *   - LocalModel `null` (provide via `opts.localModel` or `connectors.json` substrate)
+ *   - v0.7.2 MCP bridges (`llm`, `memory`, `memory_write`) wired when their
+ *     substrates exist
+ *   - Any `McpConnector` declared in `connectors.json`
+ *
+ * Adopters wanting custom substrate wiring write `connectors.json` with a
+ * `substrate` section (per `docs/sqlite-skill-store.md`) OR write their own
+ * bootstrap that imports the public APIs (Registry, individual connector
+ * classes, `loadConnectorsConfig`, etc.) directly.
  *
  * Caller is expected to:
  *   1. Optionally call `wireDeclarativeTriggers(result)` to register
@@ -196,27 +237,53 @@ export function defaultRegistry(opts: DefaultRegistryOpts): { registry: Registry
  *      `result.mcpServer`.
  */
 export function bootstrap(opts: BootstrapOpts): BootstrapResult {
-  const { registry, skillStore } = defaultRegistry(opts);
+  // v0.10 — pre-load connectors.json (if configured) to extract substrate
+  // intent BEFORE defaultRegistry runs. The substrate section selects
+  // SkillStore / MemoryStore / LocalModel impls; the MCP-connector entries
+  // are registered after defaultRegistry below.
+  const configuredConnectorNames: string[] = [];
+  const connectorConfigErrors: string[] = [];
+  let loadedConnectors: ReturnType<typeof loadConnectorsConfig> | undefined;
+  if (opts.connectorsConfigPath !== undefined) {
+    loadedConnectors = loadConnectorsConfig({ path: opts.connectorsConfigPath });
+    connectorConfigErrors.push(...loadedConnectors.errors);
+  }
+
+  // Convert substrate intent → instances. Programmatic opts (opts.skillStore
+  // etc.) win over connectors.json substrate config — explicit wiring beats
+  // declarative. connectors.json beats built-in defaults.
+  const substrateResult = buildSubstrateInstances(loadedConnectors?.substrate, opts);
+  connectorConfigErrors.push(...substrateResult.errors);
+
+  // Precedence: programmatic opts > substrate config > built-in default.
+  // Explicit wiring (`opts.skillStore = ...`) beats declarative substrate;
+  // declarative beats the FilesystemSkillStore fallback inside defaultRegistry.
+  const skillStoreToUse = opts.skillStore ?? substrateResult.skillStore;
+  const memoryStoreToUse = opts.memoryStore ?? substrateResult.memoryStore;
+  const localModelToUse = opts.localModel ?? substrateResult.localModel;
+
+  const { registry, skillStore } = defaultRegistry({
+    ...opts,
+    ...(skillStoreToUse !== undefined ? { skillStore: skillStoreToUse } : {}),
+    ...(memoryStoreToUse !== undefined ? { memoryStore: memoryStoreToUse } : {}),
+    ...(localModelToUse !== undefined ? { localModel: localModelToUse } : {}),
+  });
   const traceStore = new FilesystemTraceStore(opts.traceDir);
   const enableUnsafeShell = opts.enableUnsafeShell ?? false;
   const mode = opts.mode ?? "dashboard";
 
-  // v0.4.0 — load and register configured MCP connectors from connectors.json.
-  // Errors surface via the result; bootstrap doesn't throw (lets the caller
-  // decide whether a malformed config should abort startup or warn).
-  const configuredConnectorNames: string[] = [];
-  const connectorConfigErrors: string[] = [];
-  if (opts.connectorsConfigPath !== undefined) {
-    const result = loadConnectorsConfig({ path: opts.connectorsConfigPath });
-    connectorConfigErrors.push(...result.errors);
-    for (const c of result.connectors) {
+  // v0.4.0 — register the MCP connectors from the pre-loaded connectors.json
+  // result. Errors surface via the result; bootstrap doesn't throw (lets the
+  // caller decide whether a malformed config should abort startup or warn).
+  if (loadedConnectors !== undefined) {
+    for (const c of loadedConnectors.connectors) {
       if (c.instance !== undefined) {
         registry.registerMcpConnector(c.name, c.instance, c.allowedTools);
         configuredConnectorNames.push(c.name);
       }
     }
-    if (result.errors.length > 0) {
-      for (const err of result.errors) {
+    if (loadedConnectors.errors.length > 0) {
+      for (const err of loadedConnectors.errors) {
         process.stderr.write(`[bootstrap] ${err}\n`);
       }
     }
@@ -227,10 +294,11 @@ export function bootstrap(opts: BootstrapOpts): BootstrapResult {
     }
     // v0.4.1 — credential-discipline backstop. One-time stderr warning if
     // connectors.json is in a git-tracked dir without a .gitignore entry.
-    // Informational; doesn't block startup.
-    const giWarning = detectGitignoreRisk(opts.connectorsConfigPath);
-    if (giWarning !== null) {
-      process.stderr.write(`[bootstrap] WARNING: ${giWarning}\n`);
+    if (opts.connectorsConfigPath !== undefined) {
+      const giWarning = detectGitignoreRisk(opts.connectorsConfigPath);
+      if (giWarning !== null) {
+        process.stderr.write(`[bootstrap] WARNING: ${giWarning}\n`);
+      }
     }
   }
 
@@ -280,6 +348,92 @@ export function bootstrap(opts: BootstrapOpts): BootstrapResult {
     connectorConfigErrors,
     ...(opts.triggersFilePath !== undefined ? { triggersFilePath: opts.triggersFilePath } : {}),
   };
+}
+
+/**
+ * v0.10 — translate parsed substrate intent into concrete connector instances
+ * for `defaultRegistry()` to register. Defaults to db paths under the
+ * deployment's `skillsDir` so adopters get sensible out-of-box behavior
+ * without explicit config.
+ *
+ * Programmatic opts (`opts.skillStore`, etc.) take precedence over substrate
+ * intent. Substrate intent takes precedence over built-in defaults (which
+ * `defaultRegistry` applies when nothing is supplied).
+ *
+ * **Custom substrate impls** (`type: "custom"` in connectors.json) require
+ * dynamic import. Today's sync `bootstrap()` doesn't support that — surfaces
+ * a clear error and falls back to defaults. Adopters wanting custom impls
+ * write their own bootstrap script (existing pattern). Promoting bootstrap()
+ * to async + supporting custom-via-connectors.json is future work.
+ */
+function buildSubstrateInstances(
+  substrate: SubstrateConfig | undefined,
+  opts: BootstrapOpts,
+): { skillStore?: SkillStore; memoryStore?: MemoryStore; localModel?: LocalModel; errors: string[] } {
+  const errors: string[] = [];
+  const result: { skillStore?: SkillStore; memoryStore?: MemoryStore; localModel?: LocalModel; errors: string[] } = { errors };
+  if (substrate === undefined) return result;
+
+  // skill_store
+  if (substrate.skill_store !== undefined && substrate.skill_store !== null) {
+    const built = buildSkillStoreFromChoice(substrate.skill_store, opts);
+    if (built.error !== undefined) errors.push(built.error);
+    else if (built.instance !== undefined) result.skillStore = built.instance;
+  }
+  // memory_store
+  if (substrate.memory_store !== undefined && substrate.memory_store !== null) {
+    const built = buildMemoryStoreFromChoice(substrate.memory_store, opts);
+    if (built.error !== undefined) errors.push(built.error);
+    else if (built.instance !== undefined) result.memoryStore = built.instance;
+  }
+  // local_model (null → explicit "no LocalModel", which is also the v0.10 default)
+  if (substrate.local_model !== undefined && substrate.local_model !== null) {
+    const built = buildLocalModelFromChoice(substrate.local_model);
+    if (built.error !== undefined) errors.push(built.error);
+    else if (built.instance !== undefined) result.localModel = built.instance;
+  }
+  return result;
+}
+
+function buildSkillStoreFromChoice(choice: SubstrateChoice, opts: BootstrapOpts): { instance?: SkillStore; error?: string } {
+  if (choice.type === "filesystem") {
+    return { instance: new FilesystemSkillStore(opts.skillsDir) };
+  }
+  if (choice.type === "sqlite") {
+    const dbPath = (choice.config?.["dbPath"] as string | undefined) ?? join(opts.skillsDir, "skills.db");
+    return { instance: new SqliteSkillStore({ dbPath }) };
+  }
+  if (choice.type === "custom") {
+    return { error: `connectors.json: substrate.skill_store — 'custom' type not yet supported via connectors.json (sync bootstrap can't dynamic-import). Wire your custom SkillStore via a programmatic bootstrap script that calls registry.registerSkillStore() directly.` };
+  }
+  return { error: `connectors.json: substrate.skill_store — unknown type '${(choice as { type: string }).type}'.` };
+}
+
+function buildMemoryStoreFromChoice(choice: SubstrateChoice, opts: BootstrapOpts): { instance?: MemoryStore; error?: string } {
+  if (choice.type === "sqlite") {
+    const dbPath = (choice.config?.["dbPath"] as string | undefined)
+      ?? opts.memoryDbPath
+      ?? join(opts.skillsDir, "memories.db");
+    return { instance: new SqliteMemoryStore({ dbPath }) };
+  }
+  if (choice.type === "custom") {
+    return { error: `connectors.json: substrate.memory_store — 'custom' type not yet supported via connectors.json (sync bootstrap can't dynamic-import). Wire your custom MemoryStore via a programmatic bootstrap script.` };
+  }
+  return { error: `connectors.json: substrate.memory_store — unknown type '${(choice as { type: string }).type}'.` };
+}
+
+function buildLocalModelFromChoice(choice: SubstrateChoice): { instance?: LocalModel; error?: string } {
+  if (choice.type === "ollama") {
+    const baseUrl = (choice.config?.["baseUrl"] as string | undefined)
+      ?? process.env["OLLAMA_BASE_URL"]
+      ?? "http://localhost:11434";
+    const defaultModelTag = (choice.config?.["defaultModelTag"] as string | undefined) ?? "gemma2:9b";
+    return { instance: new OllamaLocalModel({ baseUrl, defaultModelTag }) };
+  }
+  if (choice.type === "custom") {
+    return { error: `connectors.json: substrate.local_model — 'custom' type not yet supported via connectors.json. Wire via programmatic bootstrap.` };
+  }
+  return { error: `connectors.json: substrate.local_model — unknown type '${(choice as { type: string }).type}'.` };
 }
 
 /**

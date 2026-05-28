@@ -972,7 +972,17 @@ async function execOpInner(
           // errors silently, masking real failures. Now: throw, so the
           // op-level (fallback:) catch below can recover if declared, or
           // the error surfaces immediately.
-          throw new ConnectorNotFoundError(connectorName, "mcp_connector", "$", targetName);
+          // v0.10 — when bare-form (`$ llm`/`$ memory`/`$ memory_write`),
+          // pass the tool name so the error message surfaces substrate-aware
+          // remediation copy (point cold authors at `substrate.local_model`/
+          // `substrate.memory_store` in connectors.json, not the generic API).
+          throw new ConnectorNotFoundError(
+            connectorName,
+            "mcp_connector",
+            "$",
+            targetName,
+            op.mcpConnector === undefined ? toolName : undefined,
+          );
         }
       } catch (err) {
         if (dollarFallback !== undefined) {

@@ -1,5 +1,132 @@
 # Changelog
 
+## 0.10.0 — 2026-05-28 — SqliteSkillStore bundled default + connectors.json substrate section
+
+**Per Perry's audit thread `2a674169` + Scott's re-scope direction 2026-05-28
+("MCP and dashboard MUST honor the configuration that skillscript is built at").**
+First within-contract substrate-portability ship for SkillStore. SqliteSkillStore
+ships as a bundled default in `src/connectors/` (parallel to `SqliteMemoryStore`
+precedent), wired via `connectors.json` substrate section so MCP server +
+web dashboard honor whichever leg the deployment configures.
+
+### Added
+
+**`src/connectors/sqlite-skill-store.ts`** — `SqliteSkillStore` bundled default
+(promoted from examples/ after Scott's re-scope; pattern parallel to
+`SqliteMemoryStore`):
+
+- Two-table schema: `skills` (current-state fast path) + `skill_versions`
+  (append-only history with full body bytes per version)
+- WAL journal mode at bootstrap (concurrent readers don't block writers)
+- Transactional status transitions: `update_status()` wraps UPDATE skills +
+  INSERT skill_versions in BEGIN/COMMIT (`supports_atomic_status_transitions: true`,
+  the SQL advantage over FilesystemSkillStore)
+- Tag filtering via `json_extract(metadata_json, '$.tags')` (O(n) table scan
+  documented in `manifest()`)
+- `delete()` hard-cascade: removes both `skills` row + `skill_versions` rows.
+  Footgun-guard documented on the README + JSDoc
+- `load(name, version)` returns historical bytes (substrate-portability gain
+  over FilesystemSkillStore which only retains current bytes)
+- 49 tests including the framework-agnostic `SkillStoreConformance.buildTests()`
+  suite — same suite that validates FilesystemSkillStore, so adopter forks get
+  drift-detection for free
+
+**`docs/sqlite-skill-store.md`** — three-leg model docs (FS / Sqlite /
+adopter-custom), programmatic-embedding framing, schema overview, footgun-guard,
+forking checklist for adopters writing their own SkillStore impl.
+
+**`substrate` section in `connectors.json`** — singleton substrate config for
+SkillStore / MemoryStore / LocalModel. Three forms per slot:
+
+```json
+{
+  "substrate": {
+    "skill_store": "sqlite",
+    "memory_store": "sqlite",
+    "local_model": null
+  }
+}
+```
+
+- Short form (`"sqlite"`, `"filesystem"`, `"ollama"`, `null`) wires bundled
+  defaults with sensible defaults
+- Object form (`{type, config}`) overrides config (e.g., custom dbPath)
+- Custom form (`{type: "custom", module, export, config}`) declares an
+  adopter-written impl. **v0.10 limitation**: sync `bootstrap()` can't
+  dynamic-import; custom-via-connectors.json surfaces a clear error and falls
+  back to default. Adopters wanting custom impls write a programmatic
+  bootstrap (existing pattern, no change). Future: async bootstrap supporting
+  custom impls.
+
+Precedence: programmatic opts (`opts.skillStore`) > substrate config > built-in
+default.
+
+### Changed — base config
+
+Per Scott's "base config" framing (2026-05-28):
+
+| Substrate | v0.9.x default | v0.10 default |
+|---|---|---|
+| SkillStore | FilesystemSkillStore | FilesystemSkillStore (unchanged) |
+| MemoryStore | SqliteMemoryStore (conditional) | SqliteMemoryStore (conditional) (unchanged) |
+| LocalModel | **3 Ollama models pre-wired** | **null** (adopter wires explicitly) |
+| McpConnector | null + `llm`/`memory` bridge auto-wire when substrate exists | same |
+| AgentConnector | null | null (unchanged) |
+
+The Ollama default cleanup: previously `defaultRegistry()` registered three
+OllamaLocalModel instances against `localhost:11434` unconditionally. They'd
+fail at `run()` if Ollama wasn't actually running on the machine. v0.10
+removes the unconditional registration — adopters who want Ollama wire it via
+`substrate.local_model: "ollama"` (or `opts.localModel` programmatically).
+Removes the "registered-but-broken" footgun.
+
+### Audit findings (FilesystemSkillStore-as-connector)
+
+Audited per the v0.10 scope addition: is SkillStore genuinely
+connector-pluggable? Result: YES at the runtime layer.
+
+- `Registry.registerSkillStore(name, instance)` exists (registry.ts:62) and is
+  the canonical adopter-facing wire-up
+- All runtime consumers (mcp-server, scheduler, lint, composition,
+  skill-catalog) take the `SkillStore` interface, not a concrete impl
+- `FilesystemSkillStore` lives in `src/connectors/` as the bundled default,
+  no hardcoded references in runtime code paths
+- The only hardcoded sites are the CLI (`src/cli.ts` — 5 sites) and
+  `bootstrap.ts:defaultRegistry()`. Both are *reference-deployment helpers*;
+  adopter-custom paths skip them entirely
+
+No plumbing work needed. The architecture promise ("pluggable") is real.
+
+### Scope decisions
+
+- **CLI widening walked back** (`b574e4f2`). Initial proposal: env-var-driven
+  `SKILLSCRIPT_SKILL_STORE=sqlite` config in the CLI. Walkback per Perry's
+  use-case analysis: CLI is fundamentally a filesystem-first authoring tool
+  (vim → lint → compile loop). Sqlite-first and adopter-custom users author
+  via dashboard or `skill_write` MCP, never CLI. The widening served a phantom
+  use case. Future tension at `skillfile dashboard` / `skillfile serve` flagged
+  but not acted on — wait for dogfood signal
+- **Cascade delete locked** over preserve-versions. Pre-adoption rule wins;
+  soft-delete is the upgrade path if adopter signal demands audit-grade
+  retention later
+- **Two SQLite databases by default** for adopters who want zero-external-dep
+  bundled storage: one for skills (this connector), one for memories
+  (`SqliteMemoryStore`, already bundled — v0.11 will restructure as example)
+
+### Lesson banked
+
+When framing a surface-change decision as "narrow vs wider", do the use-case
+analysis FIRST. Ask "who uses this surface and for what?" before sizing the
+trade-off. Without that step, you size trade-offs for use cases that don't
+exist (the CLI widening was solving for "Sqlite user wants to run `skillfile
+compile`" — a user that doesn't exist; they author via dashboard).
+
+### Up next
+
+- **v0.11** — MemoryStore audit + SqliteMemoryStore restructure as example connector
+- **v0.12** — McpConnector audit
+- Dogfood after v0.12
+
 ## 0.9.9 — 2026-05-28 — categorization rule fix (v0.9.8.1 thematic patch)
 
 **Per Perry's `ec74e5fd` test-pass.** v0.9.8 shipped a derivation rule with a

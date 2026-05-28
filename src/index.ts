@@ -53,6 +53,8 @@ export type { ExecuteContext, ExecuteResult, ExecutionError } from "./runtime.js
 export { Registry } from "./connectors/registry.js";
 
 export { FilesystemSkillStore } from "./connectors/skill-store.js";
+export { SqliteSkillStore } from "./connectors/sqlite-skill-store.js";
+export type { SqliteSkillStoreConfig } from "./connectors/sqlite-skill-store.js";
 export { OllamaLocalModel } from "./connectors/local-model.js";
 export type { OllamaConfig } from "./connectors/local-model.js";
 export { SqliteMemoryStore } from "./connectors/memory-store.js";
