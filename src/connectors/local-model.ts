@@ -4,17 +4,28 @@ import { messageOf } from "../errors.js";
 const CONTRACT_VERSION = "1.0.0";
 
 /**
- * Ollama HTTP client. Wraps `POST /api/generate` with the registered model
- * names from the registry instance. The bundled-default registry wires
- * `default` / `gemma2` to `gemma2:9b` and `qwen` to `qwen2.5:7b`, matching
- * the v1 spec.
+ * Ollama HTTP client. Bundled reference implementation of `LocalModel` —
+ * wraps `POST /api/generate` against a running Ollama instance.
+ *
+ * Wired via `substrate.local_model: "ollama"` (or `{type: "ollama", config: {...}}`)
+ * in `connectors.json`. Default is no LocalModel wired; adopters opt in.
  *
  * Configuration:
- *   - `baseUrl` — Ollama endpoint, defaults to `http://localhost:11434`.
+ *   - `baseUrl` — Ollama endpoint. Default `http://localhost:11434` (Ollama
+ *     convention). Can be set via the `OLLAMA_BASE_URL` env var or
+ *     `substrate.local_model.config.baseUrl` in `connectors.json`.
  *   - `defaultModelTag` — the Ollama model tag this instance dispatches to
- *     (e.g. `gemma2:9b`).
- *   - `timeoutMs` — per-call timeout. Default 60s. v1 runtime supports
- *     per-op overrides via the `# Timeout:` header (T5 thread).
+ *     (e.g. `gemma2:9b`, `llama3.1:8b`, `qwen2.5:7b`). **Required** — must
+ *     be a model already pulled on the Ollama instance. v0.13.1 made this
+ *     required after observing silent defaults could target a model the
+ *     adopter hadn't pulled.
+ *   - `timeoutMs` — per-call timeout. Default 60s. Per-op overrides via the
+ *     `# Timeout:` header.
+ *
+ * Adopters wanting OpenAI-compat, Anthropic-compat, vLLM, TGI, or any other
+ * LocalModel substrate fork `examples/connectors/LocalModelTemplate/` and
+ * register their impl programmatically (substrate `custom` form via
+ * `connectors.json` is deferred until async-bootstrap support lands).
  */
 export interface OllamaConfig {
   baseUrl?: string;

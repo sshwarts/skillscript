@@ -24,8 +24,8 @@ const REPO_ROOT = join(__dirname, "..");
 const PACKAGE_JSON = JSON.parse(readFileSync(join(REPO_ROOT, "package.json"), "utf8")) as Record<string, unknown>;
 
 describe("T7 — package.json polish", () => {
-  it("1. version is 0.13.0 (code-smell sweep: discriminated capabilities + per-kind manifests + OpError remediation + SqliteSkillStore REGEXP probe + memory-store tag relation + AgentConnector symmetric registry)", () => {
-    expect(PACKAGE_JSON["version"]).toBe("0.13.0");
+  it("1. version is 0.13.1 (LocalModel shape alignment: defaultModelTag required + LocalModelTemplate + stale-content cleanup)", () => {
+    expect(PACKAGE_JSON["version"]).toBe("0.13.1");
   });
 
   it("2. main + types + bin + engines.node ≥ 22.5 declared", () => {

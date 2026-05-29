@@ -16,18 +16,14 @@ plugins_dir = "~/.skillscript/plugins"
 # security-conscious deployments invert this to ["packages"] only.
 resolution_order = ["filesystem", "packages"]
 
-[local_model.default]
-# Bundled-default LocalModel: Ollama gemma2:9b at localhost.
-kind = "ollama"
-base_url = "http://localhost:11434"
-model_tag = "gemma2:9b"
-timeout_ms = 60000
-
-[local_model.qwen]
-kind = "ollama"
-base_url = "http://localhost:11434"
-model_tag = "qwen2.5:7b"
-timeout_ms = 60000
+# LocalModel wiring lives in `connectors.json` under `substrate.local_model`,
+# NOT here. v0.10+ moved substrate selection out of this file. Example:
+#   {
+#     "substrate": {
+#       "local_model": { "type": "ollama", "config": { "defaultModelTag": "gemma2:9b" } }
+#     }
+#   }
+# See docs/configuration.md.
 
 [runtime]
 # `@@` opt-in unsafe shell. Disabled by default. v1 spec gates this behind

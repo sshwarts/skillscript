@@ -1,5 +1,53 @@
 # Changelog
 
+## 0.13.1 — 2026-05-29 — LocalModel shape alignment + stale-content cleanup
+
+Per Scott review — LocalModel was the asymmetric contract. Other contracts
+have fork templates; LocalModel had `*(coming)*` since v0.12 ("signal-driven").
+Signal received. Plus the bundled `OllamaLocalModel` was silently defaulting
+the model tag to `gemma2:9b` (may not be pulled on the adopter's Ollama);
+that's the same silent-fallback footgun smell #5 fixed elsewhere.
+
+### Added
+
+`examples/connectors/LocalModelTemplate/` — fork-me skeleton for adopters
+writing OpenAI-compat / Anthropic-compat / vLLM / TGI / SGLang / hosted-LLM /
+any-other LocalModel substrate impls:
+
+- `LocalModelTemplate.ts` — 2 stubbed methods (`run`, `manifest`) +
+  `staticCapabilities`. Constructor throws so forks force customization.
+- `README.md` — forking workflow, contract semantics (2-method LocalModel vs
+  McpConnector's 1 + SkillStore's 8), `OllamaLocalModel` reference notes
+  (timeout pattern, fetch_error surfacing, dedupe stderr), explicit note on
+  why there's no `registerLocalModelClass()` equivalent (LocalModel is
+  intrinsically singleton; adopters wire programmatically).
+
+### Changed
+
+- **`OllamaLocalModel.defaultModelTag` now required** when wiring via
+  `substrate.local_model.config.defaultModelTag`. Was silently defaulted to
+  `"gemma2:9b"` in `bootstrap.ts:buildLocalModelFromChoice` — that model may
+  not be pulled on the adopter's Ollama instance, leading to opaque "model
+  not found" errors at first dispatch. Now: clear bootstrap error pointing
+  at the config knob (matches v0.10 Concern-1 cold-author UX pattern).
+- **`examples/connectors/README.md` index** — LocalModel "(coming)" cell
+  replaced with link to `LocalModelTemplate`. **All five connector contracts
+  now have fork stories.**
+- **OllamaLocalModel JSDoc refreshed** — removed stale "registers `default` /
+  `gemma2` / `qwen`" references (that multi-instance wire was dropped in
+  v0.10's defaultRegistry cleanup; nothing wires it that way anymore).
+- **`scaffold/config.toml` LocalModel sections dropped** — stale references
+  to multi-instance wire pre-v0.10. Replaced with a pointer at
+  `connectors.json` substrate section + `docs/configuration.md`.
+
+### Notes
+
+- No new dependencies. No contract changes. No substrate-config parser
+  changes.
+- Adopters with `substrate.local_model: "ollama"` (bare short form, no
+  config) will hit the new error pointing at `defaultModelTag`. Pre-adoption
+  rule: cheap fix for any adopter (add the field).
+
 ## 0.13.0 — 2026-05-29 — code-smell sweep (5 surfaces, contract + runtime + connector tightening)
 
 Quality-bar pass through five distinct smells (per Scott's review). All fixes

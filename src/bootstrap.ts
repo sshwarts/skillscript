@@ -431,7 +431,13 @@ function buildLocalModelFromChoice(choice: SubstrateChoice): { instance?: LocalM
     const baseUrl = (choice.config?.["baseUrl"] as string | undefined)
       ?? process.env["OLLAMA_BASE_URL"]
       ?? "http://localhost:11434";
-    const defaultModelTag = (choice.config?.["defaultModelTag"] as string | undefined) ?? "gemma2:9b";
+    // v0.13.1 — defaultModelTag is REQUIRED (was silently defaulted to
+    // "gemma2:9b", which may not be pulled on the adopter's Ollama). Pin
+    // the model explicitly so cold authors see what they're running against.
+    const defaultModelTag = choice.config?.["defaultModelTag"] as string | undefined;
+    if (typeof defaultModelTag !== "string" || defaultModelTag === "") {
+      return { error: `connectors.json: substrate.local_model — \`config.defaultModelTag\` is required (e.g., "gemma2:9b", "llama3.1:8b"). Pin the Ollama model tag explicitly; was silently defaulted pre-v0.13.1.` };
+    }
     return { instance: new OllamaLocalModel({ baseUrl, defaultModelTag }) };
   }
   if (choice.type === "custom") {
