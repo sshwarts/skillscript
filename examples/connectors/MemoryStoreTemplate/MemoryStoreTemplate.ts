@@ -35,7 +35,7 @@ import type {
   MemoryWriteRecord,
   MemoryStoreCapabilities,
   ManifestInfo,
-} from "../../../src/connectors/types.js";
+} from "skillscript-runtime/connectors";
 
 /** Replace with your substrate's connection config (host, dbName, API key, etc.). */
 export interface MemoryStoreTemplateConfig {

@@ -31,8 +31,24 @@ export type {
   ManifestInfo,
   ConnectorType,
   CuratedMemoryField,
+  // v0.13.7 — per-kind Capabilities interfaces. Fork templates (e.g.
+  // examples/connectors/SkillStoreTemplate/) need these to declare what their
+  // impl supports. Were previously not re-exported, forcing template imports
+  // to dig into `../../../src/connectors/types.js` — a path that doesn't
+  // resolve from `node_modules` after install. Phase 2 dogfood finding.
+  SkillStoreCapabilities,
+  MemoryStoreCapabilities,
+  LocalModelCapabilities,
+  McpConnectorCapabilities,
+  AgentConnectorCapabilities,
+  // Per-kind Manifest interfaces — adopters returning `ManifestInfo<K>` from
+  // their connector's `manifest()` need the typed payload shape.
+  SkillStoreManifest,
+  MemoryStoreManifest,
+  LocalModelManifest,
+  McpConnectorManifest,
 } from "./types.js";
-export { CURATED_MEMORY_FIELDS } from "./types.js";
+export { CURATED_MEMORY_FIELDS, VALID_SKILL_STATUSES, isSkillStatus } from "./types.js";
 
 export type {
   AgentConnector,
@@ -41,6 +57,9 @@ export type {
   AgentStatus,
   DeliveryPayload,
   DeliveryReceipt,
+  DeliveryMeta,
+  RequestResponseOpts,
+  Response,
   WakeOpts,
   WakeReceipt,
 } from "./agent.js";

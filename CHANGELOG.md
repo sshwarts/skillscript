@@ -1,5 +1,85 @@
 # Changelog
 
+## 0.13.7 — 2026-05-29 — skill_status silent-corruption hardening + fork-template re-exports
+
+Phase 2 dogfood (a cold adopter wrote a real `AmpSkillStore` against the 8-method
+contract via programmatic bootstrap, ran end-to-end including execute_skill,
+persistence-across-restart, audit trail, approval stamping) **empirically
+validated the typed-contract substrate-portability claim**. The audit/lock
+discipline on the SkillStore contract paid off — the cold adopter built to
+spec without needing source-repo access, and it worked. Banking that as an
+architecture invariant — see dev-log §27.
+
+Two real bugs surfaced.
+
+### Fixed
+
+- **`skill_status` silent skill corruption (F1).** The MCP handler's
+  `inputSchema` declared `new_state` as required with an enum, but the
+  dispatcher doesn't enforce inputSchema — the handler's `args["new_state"]
+  as SkillStatus` cast was a runtime lie. A caller omitting/misnaming the
+  arg flowed `undefined` through to `rewriteStatusHeader`, which silently
+  wrote literal `# Status: undefined` into the skill body. Since `# Status:`
+  is load-bearing for the approval gate, a corrupted skill becomes
+  unauthorized to run — and the corruption was invisible to the caller (the
+  RPC call returned success). The bundled `SqliteSkillStore` and
+  `FilesystemSkillStore` were equally vulnerable to direct API calls
+  bypassing the MCP layer.
+  
+  Defense in depth (per Perry's thread `0217b0e0` framing):
+  - **MCP handler layer**: `skill_status` validates `new_state` against
+    `VALID_SKILL_STATUSES` before dispatching to the store. Rejects with
+    structured `OpError` if invalid.
+  - **Store layer**: both `SqliteSkillStore.update_status` and
+    `FilesystemSkillStore.update_status` validate input at entry. Direct
+    API callers bypassing the MCP layer can't corrupt skills either.
+  - **New exports**: `VALID_SKILL_STATUSES: readonly SkillStatus[]` + 
+    `isSkillStatus(value): value is SkillStatus` type guard, both re-exported
+    from `skillscript-runtime/connectors`.
+  - **Tests**: MCP layer tests for both missing-arg and invalid-arg paths
+    verify clean error + body-untouched; store-layer tests for both
+    `undefined` and bad-string inputs verify defense-in-depth holds.
+
+- **Connector fork templates couldn't compile from `node_modules` (F2).**
+  All four template TS files (`SkillStoreTemplate`, `MemoryStoreTemplate`,
+  `LocalModelTemplate`, `McpConnectorTemplate`) imported their per-kind
+  `Capabilities` interfaces from `../../../src/connectors/types.js` — a path
+  that ships in the source repo but NOT in the npm tarball (`src/` isn't in
+  the `files` array). `HttpWebhookAgentConnector` had the same issue
+  importing from `../../../src/connectors/agent.js`. Adopters following the
+  fork-this-template workflow hit TS2305 immediately.
+  
+  - Re-exported `SkillStoreCapabilities`, `MemoryStoreCapabilities`,
+    `LocalModelCapabilities`, `McpConnectorCapabilities`,
+    `AgentConnectorCapabilities` (and the per-kind `*Manifest` interfaces)
+    from `skillscript-runtime/connectors`.
+  - Re-exported `DeliveryMeta`, `RequestResponseOpts`, `Response` from the
+    same path — `HttpWebhookAgentConnector` needed them.
+  - Fixed all four template imports to use `skillscript-runtime/connectors`.
+
+### Architecture invariant banked
+
+**SkillStore contract validated portable via cold-adopter AmpSkillStore impl,
+v0.13.6 / 2026-05-29.** A cold adopter wrote the 8-method `SkillStore`
+contract against AMP (hand-rolled streamable-HTTP MCP client, payload_type
+"skill" memory mapping, full version-history per memory) entirely from the
+shipped spec + template + docs. Persistence across daemon restart confirmed
+the skill lives in AMP not in process. This is the load-bearing externalize
+signal that internal probes can't produce — the typed-contract substrate-
+portability claim in `docs/adopter-playbook.md` § "Substrate ship-status"
+is now empirical, not aspirational.
+
+### Meta-lesson
+
+The `skill_status` bug is an instance of a broader class: **`inputSchema`
+declares constraints, but the McpServer dispatcher doesn't enforce them
+before invoking handlers.** Every tool with `required` or `enum` constraints
+is similarly vulnerable. v0.13.7 closes the *instance* (Perry's call —
+narrow defense in depth at two layers, shippable today). The *class* fix
+(dispatcher validates args against tool.inputSchema for ALL tools) is its
+own ship cycle. Same lesson as v0.13.5: a contract that declares constraints
+should enforce them — but scope the fix to what's blocking adopters today.
+
 ## 0.13.6 — 2026-05-29 — Cold-adopter docs sweep + REGEXP warning UX
 
 Fresh-agent Phase 1 dogfood (v0.13.5 install, isolated `SKILLSCRIPT_HOME=

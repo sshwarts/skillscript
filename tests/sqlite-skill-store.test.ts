@@ -201,6 +201,30 @@ describe("SqliteSkillStore — update_status", () => {
   it("throws SkillNotFoundError on missing skill", async () => {
     await expect(store.update_status("nope", "Approved")).rejects.toBeInstanceOf(SkillNotFoundError);
   });
+
+  // v0.13.7 — defense in depth against the silent-corruption bug Phase 2
+  // dogfood surfaced. Direct API callers (bypassing the MCP handler) must
+  // also be rejected when status is invalid.
+  it("rejects undefined status (v0.13.7 defense in depth)", async () => {
+    await store.store("guard", SAMPLE_SKILL);
+    await expect(
+      store.update_status("guard", undefined as unknown as "Draft"),
+    ).rejects.toThrow(/Draft.*Approved.*Disabled|status must be one of/);
+    // Body untouched — no `# Status: undefined` corruption.
+    const src = await store.load("guard");
+    expect(src.source).toContain("# Status: Draft");
+    expect(src.source).not.toContain("# Status: undefined");
+  });
+
+  it("rejects invalid status string (v0.13.7 defense in depth)", async () => {
+    await store.store("guard2", SAMPLE_SKILL);
+    await expect(
+      store.update_status("guard2", "Bogus" as unknown as "Draft"),
+    ).rejects.toThrow(/Draft.*Approved.*Disabled|status must be one of/);
+    const src = await store.load("guard2");
+    expect(src.source).toContain("# Status: Draft");
+    expect(src.source).not.toContain("# Status: Bogus");
+  });
 });
 
 describe("SqliteSkillStore — delete (hard cascade)", () => {

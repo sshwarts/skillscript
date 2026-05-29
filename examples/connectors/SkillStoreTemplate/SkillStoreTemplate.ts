@@ -37,7 +37,7 @@ import type {
   VersionInfo,
   SkillStoreCapabilities,
   ManifestInfo,
-} from "../../../src/connectors/types.js";
+} from "skillscript-runtime/connectors";
 
 /** Replace with your substrate's connection config (host, dbName, credentials, etc.). */
 export interface SkillStoreTemplateConfig {

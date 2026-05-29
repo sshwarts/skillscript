@@ -220,6 +220,46 @@ describe("McpServer.skill_list / skill_metadata / skill_status", () => {
       cleanup();
     }
   });
+
+  // v0.13.7 — Phase 2 dogfood found that omitting/misnaming `new_state`
+  // silently corrupted the skill body with `# Status: undefined` because the
+  // dispatcher doesn't enforce inputSchema and the handler cast a missing arg
+  // as SkillStatus. Now: clean structured error, body untouched.
+  it("skill_status with missing new_state returns clean error (v0.13.7)", async () => {
+    const { server, skillStore, cleanup } = withServer();
+    try {
+      const original = "# Skill: guard\n# Status: Draft\nt:\n    ! hi\ndefault: t\n";
+      await skillStore.store("guard", original);
+      const resp = await server.handle(rpc("tools/call", { name: "skill_status", arguments: { name: "guard" } }));
+      expect("error" in resp).toBe(true);
+      const errResp = resp as { error: { message: string } };
+      expect(errResp.error.message).toMatch(/new_state/);
+      // Body MUST NOT have been rewritten to `# Status: undefined`.
+      const loaded = await skillStore.load("guard");
+      expect(loaded.source).toContain("# Status: Draft");
+      expect(loaded.source).not.toContain("# Status: undefined");
+    } finally {
+      cleanup();
+    }
+  });
+
+  it("skill_status with invalid new_state value returns clean error (v0.13.7)", async () => {
+    const { server, skillStore, cleanup } = withServer();
+    try {
+      const original = "# Skill: guard2\n# Status: Draft\nt:\n    ! hi\ndefault: t\n";
+      await skillStore.store("guard2", original);
+      const resp = await server.handle(rpc("tools/call", { name: "skill_status", arguments: { name: "guard2", new_state: "Bogus" } }));
+      expect("error" in resp).toBe(true);
+      const errResp = resp as { error: { message: string } };
+      expect(errResp.error.message).toMatch(/new_state/);
+      expect(errResp.error.message).toMatch(/Draft|Approved|Disabled/);
+      const loaded = await skillStore.load("guard2");
+      expect(loaded.source).toContain("# Status: Draft");
+      expect(loaded.source).not.toContain("# Status: Bogus");
+    } finally {
+      cleanup();
+    }
+  });
 });
 
 describe("McpServer.list_triggers / register_trigger / unregister_trigger", () => {

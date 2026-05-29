@@ -11,6 +11,7 @@ import type {
   SkillStoreCapabilities,
   ManifestInfo,
 } from "./types.js";
+import { VALID_SKILL_STATUSES, isSkillStatus } from "./types.js";
 import { SkillNotFoundError, VersionNotFoundError, StorageConflictError } from "../errors.js";
 import { stampApprovalToken, extractStatusFromBody } from "../approval.js";
 
@@ -217,6 +218,15 @@ export class FilesystemSkillStore implements SkillStore {
   }
 
   async update_status(name: string, status: SkillStatus): Promise<VersionInfo> {
+    // v0.13.7 — defense in depth. The MCP handler already validates, but
+    // direct API callers can bypass that layer. Guard at store entry so
+    // `rewriteStatusHeader` never sees undefined/invalid status (which would
+    // silently corrupt the skill body with `# Status: undefined`).
+    if (!isSkillStatus(status)) {
+      throw new Error(
+        `FilesystemSkillStore.update_status(${JSON.stringify(name)}, ...): status must be one of ${VALID_SKILL_STATUSES.map((s) => `"${s}"`).join(", ")}; got ${JSON.stringify(status)}.`,
+      );
+    }
     const path = this.pathFor(name);
     let source: string;
     try {

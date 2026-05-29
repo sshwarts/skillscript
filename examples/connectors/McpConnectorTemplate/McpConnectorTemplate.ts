@@ -61,7 +61,7 @@ import type {
   McpDispatchCtx,
   McpConnectorCapabilities,
   ManifestInfo,
-} from "../../../src/connectors/types.js";
+} from "skillscript-runtime/connectors";
 
 /** Replace with your transport's connection config (URL, auth, timeouts, etc.). */
 export interface McpConnectorTemplateConfig {

@@ -49,8 +49,8 @@ import type {
   Response as AgentResponse,
   WakeOpts,
   WakeReceipt,
-} from "../../../src/connectors/agent.js";
-import type { StaticCapabilities } from "../../../src/connectors/types.js";
+  StaticCapabilities,
+} from "skillscript-runtime/connectors";
 
 /** Per-agent config — `url` required; `wake_url` + `status_url` optional. */
 export interface HttpWebhookAgentConfig {

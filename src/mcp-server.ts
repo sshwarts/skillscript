@@ -1,4 +1,5 @@
 import type { SkillStore, SkillStatus, SkillListFilter, StaticCapabilities } from "./connectors/types.js";
+import { VALID_SKILL_STATUSES, isSkillStatus } from "./connectors/types.js";
 import { buildSkillCatalog } from "./skill-catalog.js";
 import type { Scheduler, ResolvableTriggerSource, TriggerRegistration } from "./scheduler.js";
 import type { TraceStore } from "./trace.js";
@@ -7,7 +8,7 @@ import { healthMetrics, type HealthMetrics } from "./metrics.js";
 import { lint } from "./lint.js";
 import { compile } from "./compile.js";
 import { listKnownConnectorClasses } from "./connectors/config.js";
-import { LintFailureError, MissingSkillReferenceError } from "./errors.js";
+import { LintFailureError, MissingSkillReferenceError, OpError } from "./errors.js";
 import {
   executeSkillByName,
   executeSkillFromSource,
@@ -302,7 +303,19 @@ export class McpServer {
       },
       handler: async (args) => {
         const name = args["name"] as string;
-        const newState = args["new_state"] as SkillStatus;
+        const newState = args["new_state"];
+        // v0.13.7 — explicit validation. inputSchema declares the enum but
+        // the dispatcher doesn't enforce it, so an undefined/typo'd arg would
+        // silently flow to rewriteStatusHeader and corrupt the skill body
+        // with literal `# Status: undefined`. Reject at the MCP handler.
+        if (!isSkillStatus(newState)) {
+          throw new OpError(
+            `\`skill_status\` requires \`new_state\` to be one of ${VALID_SKILL_STATUSES.map((s) => `"${s}"`).join(", ")}; got ${JSON.stringify(newState)}.`,
+            "skill_status",
+            `Pass \`new_state\` as one of: ${VALID_SKILL_STATUSES.join(" | ")}.`,
+            name,
+          );
+        }
         return this.deps.skillStore.update_status(name, newState);
       },
     });

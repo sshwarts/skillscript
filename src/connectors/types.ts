@@ -198,6 +198,19 @@ export interface ManifestInfo<K extends Exclude<ConnectorType, "agent_connector"
 export type SkillStatus = "Draft" | "Approved" | "Disabled";
 
 /**
+ * Closed enumeration of valid `SkillStatus` values. Use with `isSkillStatus`
+ * to guard at MCP-handler / store-layer entry points so undefined/typo'd
+ * statuses never reach `rewriteStatusHeader` (which would silently write
+ * literal `# Status: undefined` into the skill body — v0.13.7 fix).
+ */
+export const VALID_SKILL_STATUSES: readonly SkillStatus[] = ["Draft", "Approved", "Disabled"] as const;
+
+/** Runtime type guard for `SkillStatus`. Returns false for undefined, null, wrong type, or unknown strings. */
+export function isSkillStatus(value: unknown): value is SkillStatus {
+  return typeof value === "string" && (VALID_SKILL_STATUSES as readonly string[]).includes(value);
+}
+
+/**
  * The source bytes of a skill plus its identity metadata. Returned by
  * `SkillStore.load()`. `version` is opaque-substrate-declared (equality
  * comparison only); `content_hash` is substrate-independent SHA-256 of
