@@ -24,8 +24,8 @@ const REPO_ROOT = join(__dirname, "..");
 const PACKAGE_JSON = JSON.parse(readFileSync(join(REPO_ROOT, "package.json"), "utf8")) as Record<string, unknown>;
 
 describe("T7 — package.json polish", () => {
-  it("1. version is 0.13.3 (docs/install hardening: bundle adopter-facing docs, drop ARCHITECTURE from package, build-time link guard, skill_read MCP tool)", () => {
-    expect(PACKAGE_JSON["version"]).toBe("0.13.3");
+  it("1. version is 0.13.4 (Dockerfile build context: include README.md + docs/ so v0.13.3's check-published-paths.mjs script doesn't ENOENT inside container build)", () => {
+    expect(PACKAGE_JSON["version"]).toBe("0.13.4");
   });
 
   it("2. main + types + bin + engines.node ≥ 22.5 declared", () => {

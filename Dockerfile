@@ -17,6 +17,12 @@ COPY tsconfig*.json ./
 COPY src ./src
 COPY scaffold ./scaffold
 COPY scripts ./scripts
+# v0.13.4 — README.md + docs/ are needed in the build context because
+# scripts/check-published-paths.mjs (v0.13.3) reads README.md and verifies
+# every relative link resolves against `npm pack --dry-run --json`. Without
+# them the build fails ENOENT. (Runtime image doesn't need them; only build.)
+COPY README.md ./README.md
+COPY docs ./docs
 RUN pnpm run build
 
 # Prune dev deps for the runtime image.

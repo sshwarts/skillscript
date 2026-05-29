@@ -1,5 +1,32 @@
 # Changelog
 
+## 0.13.4 — 2026-05-29 — Dockerfile build context patch for v0.13.3 link guard
+
+v0.13.3 tests + build + version-tag-match all passed in the release pipeline,
+but the multi-arch GHCR container build failed: `scripts/check-published-paths.mjs`
+(new in v0.13.3) reads `README.md` and runs `npm pack --dry-run`, but the
+Dockerfile build stage only `COPY`ed `package.json`, `pnpm-lock.yaml`,
+`tsconfig*.json`, `src`, `scaffold`, `scripts` — no README, no docs/. Result:
+ENOENT on `/work/README.md` inside the container build; container/release/npm
+publish all skipped.
+
+### Fixed
+
+- `Dockerfile` build stage now `COPY`s `README.md ./README.md` and
+  `COPY docs ./docs`. The runtime image is unchanged (still distroless
+  nodejs22 with just dist/, scaffold/, node_modules/, package.json) — only
+  the build stage needs the markdown sources for the link-guard script.
+
+### Meta-lesson
+
+Same shape as the v0.13.2 → v0.13.3 dependency: when adding a build-time
+guard, audit every build context that invokes `pnpm run build` — host, CI
+release.yml, dogfood-t7's pack test, AND the Dockerfile build stage. Three
+out of four were exercised before tagging; the Dockerfile context wasn't
+because local `pnpm run build` doesn't go through Docker. The fix is to
+think "what does this script need to read?" and ensure every build context
+provides those files.
+
 ## 0.13.3 — 2026-05-29 — Docs/install hardening + skill_read MCP tool
 
 Fresh-agent Phase 1 dogfood (against v0.13.2 fresh install) surfaced 5 findings.
