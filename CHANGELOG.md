@@ -1,5 +1,51 @@
 # Changelog
 
+## 0.13.5 — 2026-05-29 — Build script split: link-guard out of the Docker build path
+
+v0.13.4 (Dockerfile-COPY patch) failed in CI for the same root cause as
+v0.13.3: `scripts/check-published-paths.mjs` running inside the Docker build
+needs more of the source tree than the runtime image cares about. v0.13.4
+added `COPY README.md` and `COPY docs`; v0.13.5's failure surfaced two MORE
+missing paths the script flagged (`examples/` and `LICENSE` — both linked from
+README but not COPYed into Docker). Whack-a-mole.
+
+### The architectural fix
+
+The link-guard is **build-for-publish validation**. Docker produces a runtime
+image, not an npm tarball. Conceptually the script doesn't belong inside the
+Docker build path.
+
+`package.json` `scripts` split:
+
+| Script | Chain | Used by |
+|---|---|---|
+| `build:dist` (new) | `tsc + copy-dashboard-assets` | Dockerfile build stage |
+| `build` (existing) | `build:dist + check-published-paths.mjs` | Local dev, CI release pipeline, dogfood-t7 |
+
+Dockerfile build stage now invokes `pnpm run build:dist` instead of
+`pnpm run build`. Reverted the `COPY README.md` + `COPY docs` additions from
+v0.13.4 — no longer needed since Docker doesn't run the link-check.
+
+### Meta-lesson (combined v0.13.3 + .4 + .5 arc)
+
+When adding a build-time guard, ask "which build contexts is this guard
+meant for?" before wiring it. The link-guard's job is "would the npm
+tarball, if published from this state, have valid README references?"
+That's only meaningful in contexts that produce npm tarballs:
+
+- Host dev environment (the dev about to tag a release) ✓
+- CI release pipeline (the pipeline about to publish) ✓
+- `dogfood-t7` pack test (validating the would-publish artifact) ✓
+- Docker build stage (produces a runtime image, NOT a tarball) ✗
+
+I wired the guard into `build` which runs in all four. Should have wired
+it only into the publish-relevant chain. v0.13.5's split is what should
+have shipped with v0.13.3.
+
+Combined with v0.13.2's "audit silent-broken signals" lesson and v0.13.3's
+"ship the guard, not just the fix" lesson, the pattern is: **a build-time
+guard is itself a contract that needs to think about its consumers.**
+
 ## 0.13.4 — 2026-05-29 — Dockerfile build context patch for v0.13.3 link guard
 
 v0.13.3 tests + build + version-tag-match all passed in the release pipeline,

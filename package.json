@@ -1,6 +1,6 @@
 {
   "name": "skillscript-runtime",
-  "version": "0.13.4",
+  "version": "0.13.5",
   "description": "Runtime, compiler, lint, CLI, and dashboard for Skillscript — a small declarative language for authoring agent workflows.",
   "license": "MIT",
   "author": "Scott Shwarts <scotts@pobox.com>",
@@ -69,7 +69,8 @@
     "node": ">=22.5"
   },
   "scripts": {
-    "build": "tsc -p tsconfig.build.json && node scripts/copy-dashboard-assets.mjs && node scripts/check-published-paths.mjs",
+    "build:dist": "tsc -p tsconfig.build.json && node scripts/copy-dashboard-assets.mjs",
+    "build": "pnpm run build:dist && node scripts/check-published-paths.mjs",
     "dev": "tsc -p tsconfig.build.json --watch",
     "test": "vitest run",
     "test:watch": "vitest",
