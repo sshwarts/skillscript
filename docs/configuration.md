@@ -59,7 +59,7 @@ Valid short-form values per slot:
 |---|---|
 | `skill_store` | `"filesystem"` \| `"sqlite"` |
 | `memory_store` | `"sqlite"` |
-| `local_model` | `"ollama"` |
+| `local_model` | (none — `"ollama"` requires the object form with `defaultModelTag`; see below) |
 
 ### Null — explicit "no substrate"
 
@@ -87,7 +87,24 @@ The runtime doesn't register a connector for this slot. Useful for explicitly di
 | `filesystem` (skill_store) | none — uses the CLI's `skillsDir` |
 | `sqlite` (skill_store) | `dbPath` (default: `<skillsDir>/skills.db`) |
 | `sqlite` (memory_store) | `dbPath` (default: CLI's `MEMORY_DB` or `<skillsDir>/memories.db`) |
-| `ollama` (local_model) | `baseUrl` (default: `OLLAMA_BASE_URL` env or `http://localhost:11434`), `defaultModelTag` (default: `gemma2:9b`) |
+| `ollama` (local_model) | `baseUrl` (default: `OLLAMA_BASE_URL` env or `http://localhost:11434`), **`defaultModelTag` (required — e.g., `"gemma2:9b"`, `"llama3.1:8b"`)** |
+
+Worked Ollama example (because the short form isn't valid for `local_model`):
+
+```json
+{
+  "substrate": {
+    "local_model": {
+      "type": "ollama",
+      "config": {
+        "defaultModelTag": "gemma2:9b"
+      }
+    }
+  }
+}
+```
+
+Pin the model tag explicitly — must be a tag your Ollama instance has pulled (`ollama pull gemma2:9b`). Bare `"local_model": "ollama"` errors out at bootstrap because the model name is too important to silently default.
 
 ### Custom form — adopter-written impl
 
