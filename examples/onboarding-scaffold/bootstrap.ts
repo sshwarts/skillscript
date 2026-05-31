@@ -63,10 +63,15 @@ const agentConnector = new TmuxShellAgentConnector({
 });
 registry.registerAgentConnector("primary", agentConnector);
 
-// Step 3: wire bridges so `$ llm` / `$ data_read` dispatch through the
-// adopter substrates above (case 1 typed-contract wiring — portable).
+// Step 3: wire bridges so `$ llm` / `$ data_read` / `$ data_write` dispatch
+// through the adopter substrates above (case 1 typed-contract wiring —
+// portable). The DataStore bridge handles BOTH read and write via toolName
+// discrimination; register the same instance under both connector names so
+// bare-form name-match resolution picks the right route.
 registry.registerMcpConnector("llm", new LocalModelMcpConnector(openai));
-registry.registerMcpConnector("data_read", new DataStoreMcpConnector(dataStore));
+const dataBridge = new DataStoreMcpConnector(dataStore);
+registry.registerMcpConnector("data_read", dataBridge);
+registry.registerMcpConnector("data_write", dataBridge);
 
 // Step 4: wire connectors.json instances (adopter-defined MCP servers).
 for (const c of connectors) {

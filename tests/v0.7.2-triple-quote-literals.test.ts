@@ -97,6 +97,7 @@ describe("v0.7.2 — triple-quote in function-call kwargs", () => {
     const src = [
       "# Skill: t",
       "# Status: Approved",
+      "# Autonomous: true",
       `# Vars: P=${path}`,
       "run:",
       '    file_write(path="${P}", content="""# Report',

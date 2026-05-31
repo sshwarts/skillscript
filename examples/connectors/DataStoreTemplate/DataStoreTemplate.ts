@@ -88,6 +88,13 @@ export class DataStoreTemplate implements DataStore {
    *   { capabilities_version: "1", manifest: { kind: "sqlite-fts",
    *       supported_modes: ["fts"], score_range: "unbounded",
    *       supported_filters: ["domain_tags"], supports_write: true } }
+   *
+   * **v0.14.1 — `supported_filters` is load-bearing.** The DataStoreMcpConnector
+   * bridge enforces this declaration: filter keys passed to `$ data_read` that
+   * aren't in `supported_filters` throw `UnsupportedFilterError` at the bridge
+   * BEFORE your `query()` runs. Adopters can opt out per-call with
+   * `permissive_filters: true`. Declare every filter your `query()` actually
+   * honors here; omissions become silent "this filter is rejected".
    */
   async manifest(): Promise<ManifestInfo<"data_store">> {
     // TODO — return a snapshot of your substrate's capabilities.
@@ -103,11 +110,17 @@ export class DataStoreTemplate implements DataStore {
    *   - `query`: string (search terms; substrate-specific interpretation)
    *   - `limit`: number (max results)
    *   - `mode`: "fts" | "semantic" | "rerank" | substrate-specific string
-   *   - Plus arbitrary additional filter fields (`domain_tags`, `thread_status`,
-   *     `payload_type`, `pinned`, `agent_id`, etc.) — substrate honors what
-   *     it supports, ignores the rest. Per the curated-subset framing in
-   *     `types.ts`, these top-level fields are first-class for substrates
-   *     that have them.
+   *   - Plus filter fields you declared in `manifest().supported_filters`
+   *     (`domain_tags`, `thread_status`, `payload_type`, `pinned`, `agent_id`,
+   *     etc.). Per the curated-subset framing in `types.ts`, these top-level
+   *     fields are first-class for substrates that have them.
+   *
+   * **v0.14.1 — what reaches `query()`.** The DataStoreMcpConnector bridge
+   * pre-filters the keys against your `manifest().supported_filters`
+   * declaration; unsupported keys throw `UnsupportedFilterError` upstream and
+   * never reach this method. So when `query()` runs, every non-base key in
+   * `filters` is one your manifest declared. Don't defensively code for
+   * "filter the caller didn't declare" — that's the bridge's job.
    *
    * `PortableData` core fields:
    *   - Always: `id`, `summary`, `created_at`

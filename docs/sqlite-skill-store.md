@@ -42,7 +42,7 @@ const store = registry.getSkillStore("primary");
 await store.store("morning-status", `# Skill: morning-status
 # Status: Approved
 t:
-    ! report status
+    emit(text="report status")
 default: t
 `);
 ```

@@ -59,6 +59,7 @@ describe("v0.7.0 — file_read / file_write function-call ops", () => {
     const src = [
       `# Skill: t`,
       `# Status: Approved`,
+      `# Autonomous: true`,
       `# Vars: PATH=${path}`,
       `run:`,
       `    file_write(path="\${PATH}", content="hello from skill")`,
@@ -102,6 +103,7 @@ describe("v0.7.0 — file_read / file_write function-call ops", () => {
     const src = [
       `# Skill: t`,
       `# Status: Approved`,
+      `# Autonomous: true`,
       `# Vars: P=${path}`,
       `run:`,
       `    file_write(path="\${P}", content="nested")`,

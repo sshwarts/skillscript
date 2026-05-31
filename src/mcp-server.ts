@@ -831,15 +831,18 @@ export class McpServer {
     }
     if (want("agentConnectors")) out["agentConnectors"] = reg ? reg.listAgentConnectors().map((e) => describeEntry(e)) : [];
     if (want("shellExecution")) {
-      // The runtime has no fixed command allowlist — `@ <cmd> ...` ops are
-      // structurally sandboxed via direct spawn (no shell expansion). Bash
-      // is only invoked when `@ unsafe` is used AND `enableUnsafeShell` is
-      // true. This surface reports that mode so cold agents can author
-      // accordingly instead of guessing at a list that doesn't exist.
+      // The runtime has no fixed command allowlist — `shell(command=...)` ops
+      // are structurally sandboxed via direct spawn (no shell expansion). Bash
+      // is only invoked when `shell(command=..., unsafe=true)` is used AND
+      // `enableUnsafeShell` is true. This surface reports that mode so cold
+      // agents can author accordingly instead of guessing at a list that
+      // doesn't exist. Legacy `@ <cmd>` / `@ unsafe <body>` parse to the same
+      // AST node via the v0.7.1+ source-form collapse (lint surfaces them
+      // as deprecated-symbol-op) — runtime semantics are identical.
       out["shellExecution"] = {
         mode: "structural-spawn",
         unsafe_enabled: this.deps.enableUnsafeShell === true,
-        description: "Safe `@ <cmd> args` ops spawn the binary directly without bash. Any binary on PATH may be invoked. `@ unsafe <body>` ops require `enableUnsafeShell: true` and are lint-flagged tier-2 every appearance.",
+        description: "Safe `shell(command=\"...\")` ops spawn the binary directly without bash; any binary on PATH may be invoked. `shell(command=\"...\", unsafe=true)` ops require `enableUnsafeShell: true` on the runtime and are lint-flagged tier-2 every appearance. Legacy `@ <cmd>` / `@ unsafe <body>` symbol forms parse to the same AST and run identically (lint surfaces them as deprecated-symbol-op).",
       };
     }
     return out;

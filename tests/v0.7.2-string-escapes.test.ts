@@ -73,7 +73,7 @@ describe("v0.7.2 — escape interpretation in skill execution", () => {
   it("file_write(content=\"...\\n...\") writes real newlines", async () => {
     const home = mkdtempSync(join(tmpdir(), "v072fw-"));
     const path = join(home, "report.txt");
-    const src = `# Skill: t\n# Status: Approved\n# Vars: P=${path}\nrun:\n    file_write(path="\${P}", content="line one\\nline two\\nline three")\ndefault: run\n`;
+    const src = `# Skill: t\n# Status: Approved\n# Autonomous: true\n# Vars: P=${path}\nrun:\n    file_write(path="\${P}", content="line one\\nline two\\nline three")\ndefault: run\n`;
     const result = await runSkill(src);
     expect(result.errors).toEqual([]);
     const { readFileSync } = await import("node:fs");

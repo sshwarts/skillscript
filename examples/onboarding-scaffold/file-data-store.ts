@@ -106,6 +106,17 @@ export class FileDataStore implements DataStore {
         file_path: this.config.filePath,
         record_count: this.loadFile().length,
         supports_write: true,
+        // v0.14.1 strict-filters: the bridge enforces every non-base filter
+        // key in `query()` calls against this declared set, throwing
+        // UnsupportedFilterError for unknowns. This reference impl's
+        // substring scorer doesn't actually filter on any field (it
+        // ignores everything beyond `query` + `limit`), so the honest
+        // declaration is `[]`. Adopters who extend `query()` to honor
+        // `domain_tags` / `payload_type` / etc. should add those names
+        // here so the bridge stops rejecting them. Callers that need
+        // to pass advisory filters this impl ignores can opt out per-
+        // call via `permissive_filters: true`.
+        supported_filters: [],
       },
     };
   }

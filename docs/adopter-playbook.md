@@ -8,12 +8,52 @@ This playbook covers the load-bearing decisions, the two wiring patterns, and th
 
 Skillscript-runtime is substrate-neutral and assumes you have (or will choose):
 
-1. **A filesystem** — for skill source files (`.skill.md`), trace records, possibly a memory database. Sandbox via container, chroot, or limited-privilege process — operator's call.
-2. **A data store** — for knowledge retrieval and data writes. Could be SQLite-FTS (bundled), a vector database, an in-house store, an Obsidian-style notes system, a memory broker — whatever you already have.
+1. **A filesystem** — for skill source files (`.skill.md`), trace records, the bundled sqlite databases. Sandbox via container, chroot, or limited-privilege process — operator's call.
+2. **A data store** — for retrieval and writes from skill ops. Could be SQLite-FTS (bundled), a vector database, an in-house store, an Obsidian-style notes system, a memory broker — whatever you already have.
 3. **An LLM endpoint** — Ollama running locally (bundled), a hosted API like OpenAI / Anthropic / Azure, or your own inference server.
 4. **An agent harness** — where skill output is delivered. Could be tmux sessions, a webhook receiver, an in-house agent runtime, or no harness at all (skills run for their text output only).
 
 Each of these maps to a typed connector contract: `SkillStore`, `DataStore`, `LocalModel`, `AgentConnector`. Plus `McpConnector` for any external tool you want to invoke from a skill body.
+
+## What the runtime promises connector implementors
+
+You only need to know what methods the runtime will call. Everything else — where data lives, what fields you honor, internal authorization, expiration, indexing — is your implementation choice. The contracts:
+
+```
+DataStore — substrate-neutral data persistence
+  query(filters)    runtime asks: "find records matching these filters"
+  write(record)     runtime asks: "store this; return id + timestamp"
+  get(id)           runtime asks: "give me this specific record"
+
+SkillStore — substrate-neutral skill source persistence
+  load(name)             "give me this skill's source"
+  store(name, source)    "write/version this skill"
+  query(filter)          "list matching skills"
+  update_status()        "Draft → Approved → Disabled transition"
+  versions(name)         "audit trail"
+  metadata(name)         "header info without body"
+  delete(name)           "remove all versions"
+
+LocalModel — substrate-neutral LLM dispatch
+  run(prompt, opts)      "complete this prompt; return text"
+
+AgentConnector — substrate-neutral agent delivery
+  list_agents()          "what agent ids do you handle?"
+  deliver(id, payload)   "send this to that agent"
+  wake(id, opts)         "rouse that agent"
+  health_check()         "are you reachable?"
+  request_response(...)  "deliver + collect a reply"
+
+McpConnector — external tool dispatch (substrate-neutral wire)
+  call(toolName, args, ctx?)   "invoke this tool with these kwargs"
+```
+
+What's NOT in the contracts (and is your concern as implementor):
+- Where the data lives (sqlite / your DB / hosted service / vector store)
+- What metadata fields your substrate honors or ignores (kwargs passed via `metadata.<key>` ride through; you choose what to do with them)
+- Vaults, namespaces, tenants, access-control — substrate-specific
+- Expiration / decay / pinning / reranking — substrate-specific
+- Authentication into your own backend — your code, your decision
 
 ## Case 1 vs Case 2 — the load-bearing wiring decision
 
@@ -26,11 +66,12 @@ You implement the typed connector contracts (`DataStore`, `LocalModel`, etc.) ag
 ```typescript
 class MyDataStore implements DataStore {
   async query(filters: QueryFilters): Promise<PortableData[]> { /* ... */ }
+  async write(record: DataWrite): Promise<DataWriteRecord> { /* ... */ }
+  async get(id: string): Promise<PortableData | null> { /* ... */ }
   async manifest(): Promise<ManifestInfo> { /* ... */ }
 }
 
 registry.registerDataStore("primary", new MyDataStore());
-registry.registerMcpConnector("data_read", new DataStoreMcpConnector(new MyDataStore()));
 ```
 
 **In skills:**
@@ -38,7 +79,7 @@ registry.registerMcpConnector("data_read", new DataStoreMcpConnector(new MyDataS
 $ data_read mode=fts query="customer feedback" limit=10 -> CONTEXT
 ```
 
-This same skill body runs unchanged against your substrate, against SQLite-FTS (bundled), against Pinecone, against any substrate that conforms to the typed contract. **Skills are portable.**
+This same skill body runs unchanged against your substrate, against SQLite-FTS (bundled), against Pinecone, against any substrate that conforms to the typed contract. **Skills are portable.** Substrate-specific concerns (where the records live, what metadata you honor) stay inside your impl.
 
 ### Case 2 — MCP-tools wiring (substrate-locked)
 
@@ -47,11 +88,11 @@ Your substrate exposes itself as MCP tools (via a local MCP server or remote one
 ```typescript
 // connectors.json:
 {
-  "my_memory": {
+  "my_store": {
     "class": "RemoteMcpConnector",
     "config": {
-      "command": "my-memory-mcp-server",
-      "args": ["--db", "/var/memory"]
+      "command": "my-store-mcp-server",
+      "args": ["--db", "/var/store"]
     }
   }
 }
@@ -59,21 +100,21 @@ Your substrate exposes itself as MCP tools (via a local MCP server or remote one
 
 **In skills:**
 ```
-$ my_memory.search query="customer feedback" vault="team" tags=["urgent"] -> CONTEXT
+$ my_store.search query="customer feedback" region="eu-west" cluster="prod" -> CONTEXT
 ```
 
-This skill body is locked to `my_memory` — its specific kwargs (`vault`, `tags`) and response shape. To move to a different substrate, every call site has to be rewritten.
+This skill body is locked to `my_store` — its specific kwargs (`region`, `cluster`) and response shape. To move to a different substrate, every call site has to be rewritten.
 
 ### Picking — the tradeoff
 
 | Aspect | Case 1 (typed) | Case 2 (MCP) |
 |---|---|---|
 | Skill portability | ✓ portable | ✗ substrate-locked |
-| Substrate feature coverage | Limited to typed contract | Full substrate surface |
+| Substrate feature coverage | Limited to typed contract surface | Full substrate surface |
 | Implementation effort | Implement typed interface | Wire existing MCP server |
 | Best for | Skills you want to ship | Substrate-specific power features |
 
-**The choice is per-skill, not per-substrate.** You can wire both — register `memory` (typed-contract via bridge) AND `my_memory` (MCP) — and let skills opt into portability by which connector name they reference.
+**The choice is per-skill, not per-substrate.** You can wire both — register `data_read` (typed-contract via bridge) AND `my_store` (MCP) — and let skills opt into portability by which connector name they reference.
 
 For the substrate-portability claim to hold, **the substrates you care about must be Case-1-wired**.
 
@@ -90,7 +131,7 @@ This creates `~/.skillscript/` with `skills/`, `traces/`, an empty `connectors.j
 
 ### 2. Decide on substrate wiring
 
-For each of the four substrates (memory, LLM, agent harness, MCP tools), decide Case 1 or Case 2. The onboarding scaffold (`examples/onboarding-scaffold/`) is Case 1 end-to-end against file-backed memory + OpenAI + tmux.
+For each of the four substrates (data store, LLM, agent harness, MCP tools), decide Case 1 or Case 2. The onboarding scaffold (`examples/onboarding-scaffold/`) is Case 1 end-to-end against a file-backed data store + OpenAI + tmux.
 
 ### 3. Configure runtime knobs
 
@@ -100,7 +141,7 @@ Create `skillscript.config.json` in your `$SKILLSCRIPT_HOME`:
 {
   "skillsDir": "${SKILLSCRIPT_HOME}/skills",
   "traceDir": "${SKILLSCRIPT_HOME}/traces",
-  "dataDbPath": "${SKILLSCRIPT_HOME}/memory.json",
+  "dataDbPath": "${SKILLSCRIPT_HOME}/data.db",
   "dashboard": { "port": 7878 }
 }
 ```
@@ -143,15 +184,15 @@ Each instance reads its own config; ports/paths/db files don't collide.
 
 ## Conventions for upstream-merge-friendly modifications
 
-If your wiring needs require modifying skillscript-runtime source (rather than just configuration), follow these conventions to minimize merge friction:
+If your wiring needs require modifying skillscript-runtime source (rather than just configuration), follow these conventions to minimize merge friction.
 
 ### 1. Prefer dedicated adopter files over editing upstream
 
 Put your code in dedicated paths upstream won't touch:
 
 ```
-src/connectors/local/my-memory-adapter.ts    ← adopter-owned
-src/connectors/local/my-llm-adapter.ts       ← adopter-owned
+src/connectors/local/my-data-store-adapter.ts    ← adopter-owned
+src/connectors/local/my-llm-adapter.ts           ← adopter-owned
 ```
 
 Upstream changes to `src/connectors/data-store.ts` won't conflict with your `local/` files.
@@ -181,20 +222,21 @@ See `examples/custom-bootstrap.example.ts` for a worked walkthrough.
 
 | Substrate | Shipped contract | Shipped impls | Shipped bridge |
 |---|---|---|---|
-| SkillStore | ✓ `load`/`query`/`store`/`update_status`/`delete`/`versions`/`metadata`/`staticCapabilities` | `FilesystemSkillStore`, `SqliteSkillStore` | n/a |
-| DataStore | ✓ `query`/`write` | `SqliteDataStore` | ✓ `DataStoreMcpConnector` |
-| LocalModel | ✓ `run` | `OllamaLocalModel` | ✓ `LocalModelMcpConnector` |
-| McpConnector | ✓ `call` | `RemoteMcpConnector`, `CallbackMcpConnector` | n/a |
-| AgentConnector | ✓ `list_agents`/`deliver`/`wake`/`health_check`/`request_response`; optional `agent_status` | `NoOpAgentConnector` (default), `HttpWebhookAgentConnector` | n/a |
+| SkillStore | ✓ 8 methods (`load` / `query` / `store` / `update_status` / `delete` / `versions` / `metadata` / `staticCapabilities`) | `FilesystemSkillStore`, `SqliteSkillStore` | n/a |
+| DataStore | ✓ 3 methods (`query` / `write` / `get`) | `SqliteDataStore` | ✓ `DataStoreMcpConnector` |
+| LocalModel | ✓ 1 method (`run`) | `OllamaLocalModel` | ✓ `LocalModelMcpConnector` |
+| McpConnector | ✓ 1 method (`call`) | `RemoteMcpConnector`, `CallbackMcpConnector` | n/a |
+| AgentConnector | ✓ 5 required (`list_agents` / `deliver` / `wake` / `health_check` / `request_response`) + 1 optional (`agent_status`) | `NoOpAgentConnector` (default), `HttpWebhookAgentConnector` | n/a |
 
-**Notable gaps the playbook should be honest about:**
+**Notable things the playbook should be honest about:**
 
-- **`SqliteDataStore` is a deliberately minimal reference impl.** It satisfies the contract (`query` / `write` / `get` / `staticCapabilities` / `manifest`) and exposes `supports_writes` + `supports_tag_filter` as true. It does NOT support semantic retrieval, pinning, decay scoring, or thread-status filtering (`supports_semantic` / `supports_pinning` / `supports_decay_model` / `supports_thread_status_filter` are all false). The bundled impl exists so the runtime works out-of-box for FTS-style tag/text retrieval. Deployments that need richer query semantics fork `examples/connectors/DataStoreTemplate/` and wire their backing system (memory broker, vector DB, AMP, etc.). Check `manifest()` at runtime to confirm what your wired DataStore actually supports.
-- **SkillStore and DataStore have different lifecycle models — by design.** SkillStore is mutable / versioned / named CRUD (Draft→Approved→Disabled→Delete with audit trail; specific named artifacts). DataStore is an append-only search log (write → query/get; no per-record lifecycle beyond TTL/decay if substrate has one). Backing both onto one substrate (per [[project_memorystore_holds_skills]] — skill payloads ride as `payload_type: "skill"` memories) means serving both lifecycle models at once. The contract doesn't state the asymmetry as a design stance, but it's load-bearing: substrates that conflate "memory expiry" with "skill expiry" silently break authored code. Phase 3 cold-adopter dogfood surfaced this — AMP's 7-day TTL on `knowledge_type: common` memories would have decayed skills if AmpSkillStore had defaulted to `common`. Adopter mitigation: pick a `knowledge_type` your substrate treats as durable (e.g., `hard_won` in AMP), or wrap the SkillStore with a re-pin sweep.
-- **Durability is implementer's responsibility.** The typed SkillStore and DataStore contracts assume durable storage. Neither interface declares "writes live forever" — but the runtime + lint + dashboard all behave as if writes persist indefinitely. Substrate backends with their own GC / TTL / decay scoring surprise the skillscript layer invisibly. **If your substrate has these behaviors, build adopter-side guards** (pin-rules, retention policies, periodic re-pin sweeps) OR pick a substrate posture that satisfies "durable forever." The contract doesn't enforce — silent staleness is the failure mode. See `docs/connector-contract-reference.md` § "Storage-layer conventions" for the full discussion.
-- **Filter scope is advisory today; v0.14.0 will make it enforceable.** `query(filters)` accepts arbitrary fields; substrates honor what they support and silently drop the rest. For non-scope-sensitive filters (`tag`, `since`) this is fine. For scope/visibility/security-relevant filters (any future `vault` filter, tenant-id, access-control) the silent-drop is a leak waiting to happen. Until v0.14.0's `strict_filters: true`, enforce scope-relevant filters *above* the contract — adopter wraps the SkillStore/DataStore with a guard that asserts the substrate honors the filter, or the wrapping layer applies the filter in-memory after the substrate returns. Banked meta-pattern ([[feedback_defaults_over_knobs_security]]): defaults that protect by default > knobs that adopters opt into for security-relevant surfaces; aware adopters opt out, naive adopters get protection.
+- **`SqliteDataStore` is a deliberately minimal reference impl.** It satisfies the contract (`query` / `write` / `get` / `staticCapabilities` / `manifest`) with FTS-style tag/text retrieval. It does NOT support semantic retrieval, pinning, decay scoring, or thread-status filtering (the relevant `supports_*` flags are all false). Deployments that need richer query semantics fork `examples/connectors/DataStoreTemplate/` and wire their backing substrate.
+- **SkillStore and DataStore have different lifecycle models — by design.** SkillStore is mutable / versioned / named CRUD (Draft→Approved→Disabled→Delete with audit trail). DataStore is append-only with query/get (no per-record lifecycle in the contract). If you back both onto one substrate, you're serving both lifecycle models at once. Substrates that conflate "data record expiry" with "skill expiry" silently break authored code; the contract doesn't enforce this, you handle it impl-side.
+- **Durability is implementer's responsibility.** The typed contracts assume durable storage. Neither interface declares "writes live forever" — but the runtime + lint + dashboard all behave as if writes persist indefinitely. If your substrate has GC / TTL / decay scoring, build adopter-side guards (pin-rules, retention policies, periodic re-pin sweeps) or pick a substrate posture that satisfies "durable forever." Silent staleness is the failure mode the contract won't catch.
+- **Mutation ops require runtime-enforced authorization (v0.14.1).** `$ data_write` / `file_write` / `$ <mutating-name-tool>` (write/update/delete/etc.) fire `UnconfirmedMutationError` at the runtime boundary unless the skill carries `# Autonomous: true` (cron/agent-fired) OR a preceding `??` / `ask(...)` confirms in the same target OR the op carries `approved="reason"` per-op kwarg. This fires regardless of how the skill was invoked — `execute_skill({skill_name})` AND `execute_skill({source})` honor the gate identically; lint stays advisory. Adopters running unattended skills programmatically should set `# Autonomous: true` at the header.
+- **Filter scope was advisory in v0.14.0; v0.14.1 makes it enforceable.** Pre-v0.14.1, `query(filters)` accepted arbitrary fields and substrates silently dropped what they didn't support. Pass-through is fine for non-scope-sensitive filters but is a leak for security-relevant ones. v0.14.1 ships strict default enforcement at the `DataStoreMcpConnector` bridge: filter keys outside the substrate's declared `supported_filters` manifest throw `UnsupportedFilterError`. Adopters who want pre-v0.14.1 permissive behavior opt out per-call via `permissive_filters: true`. Substrate implementors: declare your honored filters in `manifest().supported_filters` so the bridge validates against your truth, not a guess.
 - **4 of 6 trigger sources parse but don't fire.** `cron` and `session: start` work; `event`, `agent-event`, `file-watch`, `sensor` are parser-only stubs awaiting the event-bus surface.
-- **Output kinds are intentionally substrate-neutral.** `# Output:` accepts `text` / `agent: <name>` / `template: <name>` / `file: <path>` / `none`. Substrate-specific values (`slack:`, `card:`, etc.) are deliberately out of scope — adopters wanting Slack / WhatsApp / Discord / etc. delivery use either `$ slack.post ...` MCP dispatch inside the skill body OR deliver via `agent: <name>` and let the receiving agent decide.
+- **Output kinds are intentionally substrate-neutral.** `# Output:` accepts `text` / `agent: <name>` / `template: <name>` / `file: <path>` / `none`. Substrate-specific values (`slack:`, `card:`, etc.) are out of scope — adopters wanting Slack / WhatsApp / Discord / etc. delivery use either `$ slack.post ...` MCP dispatch inside the skill body OR deliver via `agent: <name>` and let the receiving agent decide.
 - **Authorization is hash-token approval.** Skills must carry `# Status: Approved vN:<token>` where the token re-computes from the body minus its `# Status:` line. Bundled `v1:` is CRC32 — discipline-barrier strength, suited to single-operator deployments. Adversarial threat models swap a stronger function:
 
   ```ts
@@ -212,7 +254,7 @@ See `examples/custom-bootstrap.example.ts` for a worked walkthrough.
 
 ## Skill discovery + cross-agent composition
 
-Under Case-1 wiring against a memory substrate that holds skill payloads (e.g., AMP's payload_type model where compiled `.skill.md` artifacts live alongside thread / prose / document entries), skill discovery uses the canonical `$ data_read` surface:
+If you back your SkillStore against a substrate that ALSO holds general data records (one substrate serving both contracts), skill discovery can use the canonical `$ data_read` surface to find skills via tag/query:
 
 ```
 $ data_read mode=fts query="incident triage" limit=5 -> SKILLS
@@ -220,7 +262,9 @@ foreach S in ${SKILLS.items}:
     execute_skill(skill_name="${S.name}", ...) -> RESULT
 ```
 
-This works *only* when the memory substrate is Case-1 wired (typed-contract via bridge). Under Case-2 wiring, you'd need substrate-specific tool calls (`$ amp.search query=... payload_type=skill`) which are non-portable.
+This works *only* when the data substrate is Case-1 wired (typed-contract via bridge) AND your substrate's records identify skills somehow (a tag, a payload-type marker, etc. — your impl's choice). Under Case-2 wiring, you'd need substrate-specific tool calls which are non-portable.
+
+For most deployments, skill discovery goes through the canonical `skill_list` MCP tool (which calls `SkillStore.query()`). The `$ data_read`-as-discovery pattern is for the niche case where skills and other records share a backing store with rich tag/query semantics.
 
 ## Contributing — dispatch-shape discipline
 
@@ -236,7 +280,7 @@ Connector class authors implementing new `McpConnectorClass`-shaped contracts sh
 
 ## Resources
 
-- **Onboarding scaffold** — `examples/onboarding-scaffold/` — complete adopter deployment with file-backed memory + OpenAI + tmux
+- **Onboarding scaffold** — `examples/onboarding-scaffold/` — complete adopter deployment with a file-backed data store + OpenAI + tmux
 - **Custom bootstrap walkthrough** — `examples/custom-bootstrap.example.ts` — registering custom MCP connector classes
 - **Connectors example** — `scaffold/connectors.json` — annotated `connectors.json` shape
 - **Language reference** — `docs/language-reference.md` — skill syntax + frontmatter + lint codes

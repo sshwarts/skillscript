@@ -89,11 +89,18 @@ registry.registerSkillStore("primary", skillStore);
 //   registry.registerDataStore("primary", new MyDataStoreAdapter(...));
 //   registry.registerAgentConnector("primary", new MyAgentHarnessAdapter(...));
 
-// Then wire bridges if you want the canonical `$ llm` / `$ data_read` surfaces:
+// Then wire bridges if you want the canonical `$ llm` / `$ data_read` /
+// `$ data_write` surfaces. The DataStore bridge handles BOTH read and
+// write via toolName discrimination; register the same instance under both
+// connector names so bare-form name-match resolution picks the right route.
 //   import { LocalModelMcpConnector, DataStoreMcpConnector } from "skillscript-runtime";
 //   registry.registerMcpConnector("llm", new LocalModelMcpConnector(registry.getLocalModel("default")));
 //   const ms = registry.listDataStores().find((e) => e.name === "primary");
-//   if (ms !== undefined) registry.registerMcpConnector("data_read", new DataStoreMcpConnector(ms.instance));
+//   if (ms !== undefined) {
+//     const dataBridge = new DataStoreMcpConnector(ms.instance);
+//     registry.registerMcpConnector("data_read", dataBridge);
+//     registry.registerMcpConnector("data_write", dataBridge);
+//   }
 
 // Wire any connectors.json instances.
 for (const c of connectors) {

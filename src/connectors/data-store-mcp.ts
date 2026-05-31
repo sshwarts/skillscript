@@ -39,9 +39,11 @@ import type {
   McpConnectorCapabilities,
   ManifestInfo,
   DataStore,
+  DataStoreManifest,
   DataWrite,
   QueryFilters,
 } from "./types.js";
+import { enforceSupportedFilters } from "./filter-enforcement.js";
 
 const CONTRACT_VERSION = "1.0.0";
 
@@ -75,6 +77,23 @@ export class DataStoreMcpConnector implements McpConnector {
   }
 
   constructor(private readonly dataStore: DataStore) {}
+
+  /**
+   * v0.14.1 — cached `supported_filters` list from the wrapped DataStore's
+   * manifest. Lazily fetched on first dispatchQuery so the enforcement
+   * path doesn't pay an async call per query. The substrate's
+   * supported_filters set is static-per-instance (declared at manifest
+   * time, not per-call), so caching is safe.
+   */
+  private supportedFiltersCache: readonly string[] | undefined;
+
+  private async resolveSupportedFilters(): Promise<readonly string[] | undefined> {
+    if (this.supportedFiltersCache !== undefined) return this.supportedFiltersCache;
+    const m = await this.dataStore.manifest();
+    const manifest = m.manifest as DataStoreManifest | undefined;
+    this.supportedFiltersCache = manifest?.supported_filters ?? [];
+    return this.supportedFiltersCache;
+  }
 
   async call(
     toolName: string,
@@ -112,6 +131,14 @@ export class DataStoreMcpConnector implements McpConnector {
       if (k === "query" || k === "limit" || k === "mode") continue;
       filters[k] = v;
     }
+    // v0.14.1 — strict-filters enforcement at the bridge boundary. Filter
+    // keys outside the substrate's declared `supported_filters` manifest
+    // throw `UnsupportedFilterError` unless the caller opted out via
+    // `permissive_filters: true`. Closes the silent-scope-leak class
+    // (substrate silently drops unknown filters; caller assumes filtering
+    // happened). Sibling to the F1 mutation-gate runtime enforcement.
+    const supported = await this.resolveSupportedFilters();
+    enforceSupportedFilters(filters, supported, "DataStoreMcpConnector");
     const items = await this.dataStore.query(filters);
     // Envelope-wrap per the canonical contract. Cold-author iteration
     // pattern: `foreach M in ${R.items}` (consistent with the v0.7.2

@@ -411,6 +411,19 @@ export interface QueryFilters {
   query: string;
   limit: number;
   mode: "fts" | "semantic" | "rerank" | string;
+  /**
+   * v0.14.1 — per-call opt-out from strict filter-key enforcement. Default
+   * is strict: filter keys outside the substrate's declared
+   * `supported_filters` manifest throw `UnsupportedFilterError` at the
+   * `DataStoreMcpConnector.dispatchQuery` boundary. Set to `true` to
+   * acknowledge that unknown filter keys are advisory and the substrate
+   * may silently ignore them. Closes the silent-scope-leak class where
+   * pre-v0.14.1 substrates dropped unsupported filters and the caller
+   * assumed filtering happened. Sibling default to the mutation-gate
+   * runtime enforcement: defaults-over-knobs for security-relevant
+   * surfaces.
+   */
+  permissive_filters?: boolean;
   [key: string]: unknown;
 }
 

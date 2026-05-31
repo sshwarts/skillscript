@@ -30,7 +30,14 @@ class FakeDataStore implements DataStore {
     ];
   }
   async manifest(): Promise<{ capabilities_version: string; manifest: Record<string, unknown> }> {
-    return { capabilities_version: "1", manifest: { kind: "fake-data-store" } };
+    // v0.14.1 — declare `supported_filters` so v0.14.1 strict-filters
+    // enforcement at the bridge boundary passes `domain_tags` through.
+    // Tests exercising other extras (e.g., `vault`) opt out per-call via
+    // `permissive_filters: true`.
+    return {
+      capabilities_version: "1",
+      manifest: { kind: "fake-data-store", supported_filters: ["domain_tags"] },
+    };
   }
 }
 
@@ -110,11 +117,18 @@ describe("v0.7.2 — DataStoreMcpConnector bridge", () => {
     expect(ms.lastQuery?.limit).toBe(10);
   });
 
-  it("passes extras through to query filters (domain_tags, vault, etc.)", async () => {
+  it("passes declared-supported extras through to query filters (domain_tags)", async () => {
     const ms = new FakeDataStore();
     const bridge = new DataStoreMcpConnector(ms);
-    await bridge.call("data_read", { query: "x", domain_tags: ["a", "b"], vault: "team" });
-    expect(ms.lastQuery).toMatchObject({ query: "x", domain_tags: ["a", "b"], vault: "team" });
+    await bridge.call("data_read", { query: "x", domain_tags: ["a", "b"] });
+    expect(ms.lastQuery).toMatchObject({ query: "x", domain_tags: ["a", "b"] });
+  });
+
+  it("v0.14.1 — undeclared extras pass through under permissive_filters: true", async () => {
+    const ms = new FakeDataStore();
+    const bridge = new DataStoreMcpConnector(ms);
+    await bridge.call("data_read", { query: "x", vault: "team", permissive_filters: true });
+    expect(ms.lastQuery).toMatchObject({ query: "x", vault: "team", permissive_filters: true });
   });
 
   it("throws on missing query", async () => {

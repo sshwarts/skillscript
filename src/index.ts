@@ -138,6 +138,8 @@ export {
   UnsafeShellDisabledError,
   UnresolvedVariableError,
   MissingSkillReferenceError,
+  UnconfirmedMutationError,
+  UnsupportedFilterError,
 } from "./errors.js";
 export type { LintDiagnostic, OpErrorMetadata } from "./errors.js";
 

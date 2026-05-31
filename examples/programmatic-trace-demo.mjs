@@ -34,7 +34,7 @@ const SKILL_SRC = `# Skill: heartbeat
 # Triggers: cron: */1 * * * *
 
 emit:
-    ! heartbeat at $(EVENT.fired_at_unix)
+    emit(text="heartbeat at $(EVENT.fired_at_unix)")
 
 default: emit
 `;

@@ -185,7 +185,20 @@ const CORE_PATHS = [
 // + sqlite-skill-store.ts each grew for normalized tag relation / REGEXP probe /
 // withTransaction helper / fetch_error surfacing — the connector-house-in-order
 // arc's quality-bar tightening continues paying down.
-const NARROW_MAX_LOC = 9550;
+// v0.14.1: nudged narrow ceiling 9550 → 9700 for the F1 mutation-gate
+// runtime enforcement arc. New `src/mutation-gate.ts` (~85 LOC, shared
+// classifier + auth predicate consumed by lint + runtime, single source
+// of truth so "discipline-only contracts are bugs" can't recur on this
+// surface). runtime.ts gained Layer A + Layer B enforcement (~30 LOC,
+// plus authState plumbing through execOps/execOp/execOpInner signatures
+// + recursive foreach/if/else calls). errors.ts adds UnconfirmedMutationError
+// (~20 LOC). lint.ts net-saved ~25 LOC by lifting the classifier +
+// predicate into the shared helper. Defaults-over-knobs +
+// defense-in-depth: lint stays advisory, runtime is load-bearing,
+// fail-closed default authState. Per Scott's "LOC ceiling is a signal
+// not a budget" rule — clear code wins over compression. File ceiling
+// (22) unchanged; CORE is at 18 files with plenty of slack.
+const NARROW_MAX_LOC = 9700;
 const NARROW_MAX_FILES = 22;
 const BROAD_INFO_LOC = 9500;
 const BROAD_INFO_FILES = 28;

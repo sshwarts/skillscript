@@ -1,5 +1,144 @@
 # Changelog
 
+## 0.14.1 — 2026-05-31 — Contract-vs-runtime parity: mutation gate + strict filters
+
+Cold-adopter Phase 1 v4 dogfood against v0.14.0 closed clean on substrate-portability
++ package-only sufficiency, but surfaced four findings on **contract-vs-runtime parity** —
+cases where the language reference / spec described a guarantee that only lint
+enforced, leaving callers who bypassed lint (`execute_skill({source})`) silently
+slipping through. v0.14.1 makes the runtime the load-bearing enforcement boundary;
+lint stays advisory.
+
+Per the "discipline-only contracts are bugs" invariant (banked this release as
+sibling to the substrate-portability architecture invariant): when the spec
+classifies an op or feature as requiring authorization/validation/sequencing,
+runtime enforcement is mandatory — every layer that knows the contract should
+enforce it.
+
+### Breaking-ish: mutation gate now throws at runtime
+
+**`$ data_write` / `file_write` / `$ <mutating-name-tool>` ops now throw
+`UnconfirmedMutationError` at the runtime boundary** unless one of three
+authorization signals is present:
+
+1. `# Autonomous: true` skill-header (cron/agent-fired skills)
+2. A preceding `??` / `ask(...)` in the same target (interactive confirmation)
+3. `approved="reason"` per-op kwarg (per-op intent marker)
+
+Pre-v0.14.1 these signals were lint-warned but runtime-permitted; lint-tier
+warnings don't block execution, and `execute_skill({source})` bypassed lint
+preflight entirely. v0.14.1 closes both bypass paths:
+
+- **Layer A (load-bearing)** — `execOps` checks each op before dispatch.
+- **Layer B (regression guard)** — `execOpInner` re-checks at the `$` /
+  `file_write` dispatch sites. Same predicate, fail-closed default `authState`.
+
+Migration: cron / agent-fired skills with mutation ops need `# Autonomous: true`.
+Bundled example skills updated; corpus authors set the header once at the top.
+
+Pattern-shape (mutation classes): `$ data_write` MCP dispatch, `$ <tool>` with
+mutating-name prefix (`write_`, `update_`, `delete_`, `archive_`, `prune_`,
+`deploy_`, etc.), `file_write(...)` runtime-intrinsic.
+
+### Breaking-ish: substrate-side strict filters on `$ data_read`
+
+**`DataStoreMcpConnector` now enforces every non-base filter key against the
+wrapped `DataStore.manifest().supported_filters`**, throwing
+`UnsupportedFilterError` for unknowns. Closes the silent-scope-leak class
+where pre-v0.14.1 substrates dropped unsupported filters (e.g., a skill
+passing `vault="team"` against a substrate without vault semantics got
+unfiltered results back, with no signal that the scoping was ignored).
+
+Per-call opt-out: `permissive_filters: true` on the query acknowledges
+"unknown keys are advisory; substrate may ignore them" — for cases where
+the author knows their substrate is permissive by design.
+
+Substrate implementor responsibility: declare every filter your `query()`
+actually honors in `manifest().supported_filters`. Omissions become
+"this filter is rejected at the bridge."
+
+### Docs
+
+- **`runtime_capabilities.shellExecution.description`** rewritten to lead with
+  canonical `shell(command="...")` syntax; legacy `@ <cmd>` / `@ unsafe <body>`
+  noted as deprecated-symbol-op aliases that parse identically.
+- **`scaffold/config.toml`** — stale `@@` reference replaced with canonical
+  `shell(command=..., unsafe=true)` form.
+- **README** MCP-surface section — `execute_skill` now distinguishes
+  `{skill_name}` mode (subject to v0.9.0 hash-token approval gate) vs `{source}`
+  mode (ad-hoc inline; never persisted; bypasses SkillStore + approval gate);
+  explicitly calls out that v0.14.1 mutation gate applies in both modes.
+- **`docs/adopter-playbook.md`** — substrate-neutral rewrite. New "What the
+  runtime promises connector implementors" section flat-lists the 5 typed
+  contract methods + explicit "what's NOT in the contracts" boundary (vaults,
+  namespaces, expiration, auth — all implementor concerns). Case 1 vs Case 2
+  table updated. Mutation-gate + strict-filters added to the "things the
+  playbook should be honest about" list.
+
+### Examples sweep — v0.14.1 contract compliance
+
+- **`examples/onboarding-scaffold/bootstrap.ts`** — wires `data_write` bridge
+  alongside `data_read` (matches bundled `src/bootstrap.ts` pattern; one
+  bridge instance, two connector names).
+- **`examples/onboarding-scaffold/file-data-store.ts`** — `manifest()` declares
+  `supported_filters: []` with comment explaining the substring scorer
+  doesn't filter on fields; teaches the v0.14.1 strict-default contract.
+- **`examples/connectors/DataStoreTemplate/`** — `manifest()` + `query()` docs
+  explain v0.14.1 strict-filters enforcement at the bridge and how
+  `supported_filters` is now load-bearing.
+- **`examples/custom-bootstrap.example.ts`** — commented wiring example mirrors
+  the bundled both-names pattern.
+- **`examples/skillscripts/`** — `feedback-sentiment-scan`, `service-health-watch`,
+  `classify-support-ticket` rewritten to v0.14.1 contract (`# Autonomous: true`;
+  canonical `$ data_write content=... tags=[...]`; envelope `${X.items}`
+  iteration; tokens recomputed). `cut-release-tag` shell-quote hygiene
+  warnings cleaned.
+- **`examples/programmatic-trace-demo.mjs`** + **`docs/sqlite-skill-store.md`** —
+  legacy `! <text>` shorthand replaced with canonical `emit(text="...")`.
+
+### New error classes (`src/errors.ts`)
+
+- `UnconfirmedMutationError extends OpError` — `opShape` ("data_write" /
+  "mutating_tool" / "file_write") + `detail` (tool name or path) +
+  `requiredSignals[]` + concrete one-line suggestion in remediation.
+- `UnsupportedFilterError extends OpError` — `unsupportedKeys[]` +
+  `supportedKeys[]` + `substrate` name; remediation names 3 paths
+  (drop / opt out / switch substrate).
+
+### Internal
+
+- New `src/mutation-gate.ts` (~85 LOC): `classifyMutation`,
+  `authorizationGranted`, `buildAuthorizationSuggestion`,
+  `MUTATING_TOOL_PATTERN`. Single source of truth — both lint and runtime
+  call into the same classifier.
+- New `src/connectors/filter-enforcement.ts` (~40 LOC):
+  `enforceSupportedFilters(filters, supportedKeys, substrateName)` helper +
+  base-shape-key allowlist.
+- `src/lint.ts` `UNCONFIRMED_MUTATION` rule refactored to call the shared
+  classifier (net -25 LOC).
+- `src/runtime.ts` `execOps` / `execOp` / `execOpInner` signatures plumb
+  `MutationAuthState`; recursive `foreach` / `if` / `else` calls pass the
+  same authState reference (sawConfirm propagates across nesting).
+- `src/connectors/data-store-mcp.ts` lazily caches `supported_filters` from
+  the wrapped substrate's manifest (one async call per bridge instance).
+- Narrow-core LOC ceiling bumped 9550 → 9700 per Scott's "ceiling is a
+  signal, not a budget" rule. File count (22) unchanged.
+
+### Tests
+
+- `tests/v0.14.1-mutation-gate.test.ts` — 8 cases: unauthorized throws + no
+  dispatch; `approved=` works; `# Autonomous: true` works; preceding `ask()`
+  authorizes (sawConfirm path); mutating-name shape throws + no dispatch;
+  file_write paths.
+- `tests/v0.14.1-strict-filters.test.ts` — 7 cases: unknown key throws +
+  no substrate call; error names keys; `permissive_filters: true` bypasses;
+  base keys never flagged; declared keys pass; empty manifest fails closed;
+  manifest fetched once / cached.
+- Test corpus migration: 4 test files (`file_write` / `$ data_write` fixtures)
+  got `# Autonomous: true` to keep passing under the new runtime gate.
+
+Suite: 1296 passing (+8 since v0.14.0).
+
 ## 0.14.0 — 2026-05-30 — Rename: `MemoryStore` → `DataStore` (breaking)
 
 Pre-adoption window means breaking changes are still cheap. `MemoryStore` was

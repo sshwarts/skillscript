@@ -1,4 +1,5 @@
 import { parse, tokenizeKeywordArgs, type ParsedSkill, type SkillOp } from "./parser.js";
+import { classifyMutation, authorizationGranted, type MutationAuthState } from "./mutation-gate.js";
 import { KNOWN_FILTERS } from "./filters.js";
 import type { StaticCapabilities, SkillStore } from "./connectors/types.js";
 import type { Registry } from "./connectors/registry.js";
@@ -1291,66 +1292,55 @@ const UNSAFE_SHELL_DISABLED: LintRule = {
 };
 
 /**
- * Tool-name patterns that strongly suggest mutating operations.
- * Conservative — false positives are tolerable for warnings; false
- * negatives are dangerous.
+ * Mutation-class op fired without author authorization. v0.14.1 refactored
+ * to share the classifier + authorization predicate with the runtime gate
+ * in `src/mutation-gate.ts` — single source of truth. Today lint surfaces
+ * as a warning (advisory); the runtime is the load-bearing enforcement
+ * boundary (throws `UnconfirmedMutationError`).
  *
- * v0.2.11 Bug 6: extended with archive_/prune_/deploy_/expire_/
- * consolidate_/purge_/reset_/rotate_/move_/rename_/drop_/truncate_/
- * upsert_/overwrite_/clear_/wipe_/finalize_ — Perry's wild-and-crazy
- * harness surfaced a cluster of mutating tools that the original
- * write/update/delete/etc. set didn't catch (`archive_old_threads`,
- * `prune_threads`, `deploy_release`, `dangerous-cleanup`'s `expire_*`).
+ * Mutation classes via `classifyMutation`: `$ tool` with mutating-name
+ * shape, `$ data_write` MCP dispatch, `file_write(...)` runtime intrinsic.
+ * Authorization paths via `authorizationGranted`: `# Autonomous: true`,
+ * preceding `??` / `ask()` in the same target, or `approved="reason"`
+ * per-op kwarg.
  */
-const MUTATING_TOOL_PATTERN = /^(?:write_|update_|delete_|remove_|set_|create_|insert_|put_|patch_|destroy_|archive_|prune_|deploy_|expire_|consolidate_|purge_|reset_|rotate_|move_|rename_|drop_|truncate_|upsert_|overwrite_|clear_|wipe_|finalize_).*/;
-
 const UNCONFIRMED_MUTATION: LintRule = {
   id: "unconfirmed-mutation",
   severity: "warning",
   description: "A mutation-class op runs without author authorization. Mutation classes: `$ tool` with mutating-name shape (write/update/delete/...); `$ data_write` MCP dispatch; `file_write(...)` function-call op. Silent when the skill declares `# Autonomous: true` (v0.4.2), when a preceding `??` / `ask(...)` confirmation gates the op, or (v0.7.0+) when the op carries `approved=\"reason\"` per-op authorization.",
   remediation: "Three ways to authorize: (1) add `# Autonomous: true` at the skill header for cron/agent-fired skills; (2) add a preceding `??` / `ask(prompt=\"...\")` confirmation op in the same target; (3) v0.7.0+: pass `approved=\"reason\"` kwarg on the mutation op itself (any non-empty string; presence is what matters, value not parsed semantically).",
   check: (ctx) => {
+    const skillAutonomous = ctx.parsed.autonomous === true;
     // v0.4.2 — `# Autonomous: true` skills are unattended by design;
-    // the user-confirmation pattern doesn't apply. Silent for the
-    // whole skill when the header is set.
-    if (ctx.parsed.autonomous === true) return [];
+    // the user-confirmation pattern doesn't apply. Silent for the whole
+    // skill when the header is set. Shared `authorizationGranted` honors
+    // this too; the early-return here avoids the per-op loop entirely.
+    if (skillAutonomous) return [];
     const findings: LintFinding[] = [];
     for (const [targetName, target] of ctx.parsed.targets) {
-      let sawConfirm = false;
+      const authState: MutationAuthState = { skillAutonomous, sawConfirm: false };
       for (const op of target.ops) {
         // v0.7.0+: ask(prompt=...) parses to kind "??" in the AST, so the
-        // existing check captures both legacy `??` and canonical `ask()`.
-        if (op.kind === "??") sawConfirm = true;
-        if (sawConfirm) continue;
-        // v0.7.0+: per-op `approved="reason"` kwarg authorizes individual ops
-        // without requiring # Autonomous: true skill-level or `??` step.
-        const isApproved = typeof op.approved === "string" && op.approved.length > 0;
-        if (isApproved) continue;
-        // Class 1: `$` MCP dispatch with mutating tool name.
-        if (op.kind === "$") {
-          const toolName = op.body.split(/\s+/)[0] ?? "";
-          // data_write is explicitly a mutation tool name — flag it even
-          // though it doesn't start with `write_` (the pattern's anchor).
-          const isDataWrite = toolName === "data_write" || /(?:^|_)data_write(?:_|$)/.test(toolName);
-          if (MUTATING_TOOL_PATTERN.test(toolName) || isDataWrite) {
-            findings.push({
-              rule: "unconfirmed-mutation",
-              severity: "warning",
-              message: `\`$\` op in target '${targetName}' invokes '${toolName}' (mutating shape) without authorization. Add \`approved="..."\` kwarg, precede with \`ask(...)\`, or declare \`# Autonomous: true\`.`,
-              block: targetName,
-              extras: { tool_name: toolName },
-            });
-          }
-        }
-        // Class 2: file_write runtime-intrinsic op (v0.7.0).
-        if (op.kind === "file_write") {
-          const path = op.fileParams?.path ?? "";
+        // same check captures both legacy `??` and canonical `ask()`.
+        if (op.kind === "??") authState.sawConfirm = true;
+        if (authorizationGranted(op, authState)) continue;
+        const classification = classifyMutation(op);
+        if (classification === null) continue;
+        if (classification.kind === "file_write") {
           findings.push({
             rule: "unconfirmed-mutation",
             severity: "warning",
-            message: `\`file_write(path="${path}")\` in target '${targetName}' is a mutation op without authorization. Add \`approved="..."\` kwarg, precede with \`ask(...)\`, or declare \`# Autonomous: true\`.`,
+            message: `\`file_write(path="${classification.detail}")\` in target '${targetName}' is a mutation op without authorization. Add \`approved="..."\` kwarg, precede with \`ask(...)\`, or declare \`# Autonomous: true\`.`,
             block: targetName,
-            extras: { op_kind: "file_write", path },
+            extras: { op_kind: "file_write", path: classification.detail },
+          });
+        } else {
+          findings.push({
+            rule: "unconfirmed-mutation",
+            severity: "warning",
+            message: `\`$\` op in target '${targetName}' invokes '${classification.detail}' (mutating shape) without authorization. Add \`approved="..."\` kwarg, precede with \`ask(...)\`, or declare \`# Autonomous: true\`.`,
+            block: targetName,
+            extras: { tool_name: classification.detail },
           });
         }
       }

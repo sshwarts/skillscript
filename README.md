@@ -376,7 +376,7 @@ The runtime exposes 16 tools over MCP (HTTP at `/rpc`) for cold-client authoring
 | Observability | `health_metrics` |
 | Discovery | `runtime_capabilities`, `help` |
 
-This is the "agent reaches MCP" path — an external agent (Claude, GPT, anything that speaks MCP) can author, validate, and deploy skills entirely over the wire. `help()` is the entry point — call with no arguments for a ~500-token quickstart, or with `{topic: "ops" | "frontmatter" | "examples" | "connectors" | "lint-codes"}` for deeper sections. `execute_skill` invokes any stored skill end-to-end against the runtime's connectors, with `mechanical: true` for dry-run preview.
+This is the "agent reaches MCP" path — an external agent (Claude, GPT, anything that speaks MCP) can author, validate, and deploy skills entirely over the wire. `help()` is the entry point — call with no arguments for a ~500-token quickstart, or with `{topic: "ops" | "frontmatter" | "examples" | "connectors" | "lint-codes"}` for deeper sections. `execute_skill` runs a skill end-to-end against the runtime's connectors in either of two modes: `{skill_name}` invokes a stored skill (subject to the v0.9.0 hash-token approval gate); `{source}` runs an ad-hoc inline body that's never persisted (one-off scripting without polluting the store). Both modes honor `mechanical: true` for dispatch-graph preview, and (v0.14.1) enforce the mutation gate at runtime so `$ data_write` / `file_write` without `# Autonomous: true` / `??` / `approved=...` throw `UnconfirmedMutationError` regardless of which mode invoked them.
 
 ## Examples
 

@@ -26,7 +26,7 @@ describe("v0.8.0 — $ data_write op (end-to-end through bridge)", () => {
     wired.registry.registerDataStore("primary", store);
     wired.registry.registerMcpConnector("data_write", new DataStoreMcpConnector(store));
 
-    const src = `# Skill: t\n# Status: Approved\nrun:\n    $ data_write content="durable handoff" -> R\n    emit(text="wrote id=\${R.id}")\ndefault: run\n`;
+    const src = `# Skill: t\n# Status: Approved\n# Autonomous: true\nrun:\n    $ data_write content="durable handoff" -> R\n    emit(text="wrote id=\${R.id}")\ndefault: run\n`;
     const compiled = await compile(src, { registry: wired.registry });
     const result = await execute(compiled.parsed, compiled.resolvedVariables, compiled.targetOrder, { registry: wired.registry });
 
@@ -49,7 +49,7 @@ describe("v0.8.0 — $ data_write op (end-to-end through bridge)", () => {
     wired.registry.registerDataStore("primary", store);
     wired.registry.registerMcpConnector("data_write", new DataStoreMcpConnector(store));
 
-    const src = `# Skill: t\n# Status: Approved\nrun:\n    $ data_write content="urgent alert" recipients=["oncall","backup"] tags=["incident","sev-1"] -> R\ndefault: run\n`;
+    const src = `# Skill: t\n# Status: Approved\n# Autonomous: true\nrun:\n    $ data_write content="urgent alert" recipients=["oncall","backup"] tags=["incident","sev-1"] -> R\ndefault: run\n`;
     const compiled = await compile(src, { registry: wired.registry });
     const result = await execute(compiled.parsed, compiled.resolvedVariables, compiled.targetOrder, { registry: wired.registry });
 
@@ -70,7 +70,7 @@ describe("v0.8.0 — $ data_write op (end-to-end through bridge)", () => {
     wired.registry.registerDataStore("primary", store);
     wired.registry.registerMcpConnector("data_write", new DataStoreMcpConnector(store));
 
-    const src = `# Skill: t\n# Status: Approved\nrun:\n    $ data_write content="" -> R\ndefault: run\n`;
+    const src = `# Skill: t\n# Status: Approved\n# Autonomous: true\nrun:\n    $ data_write content="" -> R\ndefault: run\n`;
     const compiled = await compile(src, { registry: wired.registry });
     const result = await execute(compiled.parsed, compiled.resolvedVariables, compiled.targetOrder, { registry: wired.registry });
 

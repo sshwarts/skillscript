@@ -26,6 +26,8 @@ resolution_order = ["filesystem", "packages"]
 # See docs/configuration.md.
 
 [runtime]
-# `@@` opt-in unsafe shell. Disabled by default. v1 spec gates this behind
-# explicit opt-in plus a tier-2 lint warning.
+# `shell(command="...", unsafe=true)` (legacy `@ unsafe <body>`) — opt-in
+# full-bash shell. Disabled by default. Spec gates this behind explicit
+# opt-in plus a tier-2 lint warning that fires every appearance. Set to
+# `true` only after auditing every unsafe-shell op in your skill corpus.
 enable_unsafe_shell = false

@@ -358,6 +358,78 @@ export class TypeMismatchError extends OpError {
 }
 
 /**
+ * v0.14.1 — A mutation-class op fired without author authorization. Closes
+ * the gap where lint's `unconfirmed-mutation` rule was the only enforcement
+ * surface — `execute_skill({source})` bypassed lint entirely, and lint-tier
+ * warnings don't block. Runtime is now the load-bearing gate; lint stays
+ * advisory.
+ *
+ * Mutation classes per shared classifier (`src/mutation-gate.ts`): `$ tool`
+ * with mutating-name shape (`write_...`, `update_...`, etc.); `$ data_write`
+ * MCP dispatch; `file_write(...)` runtime intrinsic. Authorization signals:
+ * `# Autonomous: true` skill header, preceding `??` / `ask()` in the same
+ * target, or `approved="reason"` per-op kwarg.
+ *
+ * Reference: discipline-only contracts are bugs (architecture invariant
+ * banked v0.14.1) — when the language reference classifies an op as
+ * requiring authorization, runtime enforcement is mandatory.
+ */
+export class UnconfirmedMutationError extends OpError {
+  constructor(
+    public readonly opShape: "data_write" | "mutating_tool" | "file_write",
+    public readonly detail: string,
+    public readonly requiredSignals: string[],
+    suggestion: string,
+    opKind: string,
+    target?: string,
+  ) {
+    const opDescription =
+      opShape === "data_write" ? `\`$ ${detail}\``
+      : opShape === "mutating_tool" ? `\`$ ${detail}\` (mutating-name shape)`
+      : `\`file_write(path="${detail}")\``;
+    const message =
+      `${opDescription} in target '${target ?? "?"}' is a mutation op without author authorization.`;
+    super(message, opKind, suggestion, target);
+    this.name = "UnconfirmedMutationError";
+  }
+}
+
+/**
+ * v0.14.1 — A `data_read` query carried filter keys the substrate doesn't
+ * declare in its `supported_filters` manifest. Closes the silent-scope-leak
+ * gap from the Phase 1 v4 cold-adopter dogfood: pre-v0.14.1, substrates
+ * silently dropped unknown filters, so authors who wrote `query=... vault=...`
+ * against a substrate that didn't honor `vault` got results that ignored the
+ * scoping. v0.14.1 default is strict — unknown keys throw at the bridge
+ * boundary; adopters opt out per-call with `permissive_filters: true`.
+ *
+ * Reference: discipline-only contracts are bugs (architecture invariant) —
+ * the manifest declares supported_filters; the bridge enforces. Defaults-
+ * over-knobs: protect by default, opt out explicitly.
+ */
+export class UnsupportedFilterError extends OpError {
+  constructor(
+    public readonly unsupportedKeys: string[],
+    public readonly supportedKeys: string[],
+    public readonly substrate: string,
+    target?: string,
+  ) {
+    const message =
+      `\`data_read\` query against ${substrate} carried unsupported filter key(s): ` +
+      `${unsupportedKeys.map((k) => `'${k}'`).join(", ")}. ` +
+      `Substrate declares supported_filters: [${supportedKeys.map((k) => `'${k}'`).join(", ") || "(none)"}].`;
+    const remediation =
+      `Either (a) drop the unsupported filter key(s) — the substrate would silently ignore them anyway; ` +
+      `(b) pass \`permissive_filters: true\` on the query to acknowledge that unknowns are advisory; ` +
+      `(c) switch to a substrate whose manifest declares the filter you need. ` +
+      `Strict-default closes the silent-scope-leak class where an unsupported filter ` +
+      `passes through and the caller assumes filtering happened.`;
+    super(message, "$", remediation, target);
+    this.name = "UnsupportedFilterError";
+  }
+}
+
+/**
  * Structured JSON shape for entries in `result.errors[]`. Surfaces in
  * dispatch trace records, CLI diagnostics, and dashboard error views.
  */

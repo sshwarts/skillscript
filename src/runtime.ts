@@ -18,8 +18,15 @@ import {
   UnresolvedVariableError,
   TypeMismatchError,
   MissingSkillReferenceError,
+  UnconfirmedMutationError,
   messageOf,
 } from "./errors.js";
+import {
+  classifyMutation,
+  authorizationGranted,
+  buildAuthorizationSuggestion,
+  type MutationAuthState,
+} from "./mutation-gate.js";
 import { TraceBuilder, shouldTraceFire } from "./trace.js";
 import type { TraceConfig, TraceStore } from "./trace.js";
 
@@ -318,15 +325,22 @@ export async function execute(
     let targetLastBound: string | null = null;
     let targetLastValue: unknown = undefined;
 
+    // v0.14.1 — fresh mutation-auth state per target. `skillAutonomous`
+    // is set from the parsed header; `sawConfirm` resets so a `??` in
+    // target T1 doesn't authorize mutations in T2 (correct scope).
+    const authState: MutationAuthState = {
+      skillAutonomous: parsed.autonomous === true,
+      sawConfirm: false,
+    };
     try {
-      const r = await execOps(target.ops, vars, emissions, fallbacks, ctx, targetName, parsed.timeout, absoluteTimeoutMs, traceBuilder);
+      const r = await execOps(target.ops, vars, emissions, fallbacks, ctx, targetName, parsed.timeout, absoluteTimeoutMs, traceBuilder, authState);
       targetLastBound = r.lastBoundVar;
       targetLastValue = r.lastBoundVar !== null ? vars.get(r.lastBoundVar) : r.lastValue;
     } catch (err) {
       errors.push(buildExecutionError(err, targetName));
       if (target.elseBlock !== undefined) {
         try {
-          const r = await execOps(target.elseBlock, vars, emissions, fallbacks, ctx, targetName, parsed.timeout, absoluteTimeoutMs, traceBuilder);
+          const r = await execOps(target.elseBlock, vars, emissions, fallbacks, ctx, targetName, parsed.timeout, absoluteTimeoutMs, traceBuilder, authState);
           targetLastBound = r.lastBoundVar;
           targetLastValue = r.lastBoundVar !== null ? vars.get(r.lastBoundVar) : r.lastValue;
         } catch (innerErr) {
@@ -477,11 +491,28 @@ async function execOps(
   skillTimeoutSec: number | string | null,
   absoluteTimeoutMs: number,
   traceBuilder: TraceBuilder | null,
+  authState: MutationAuthState,
 ): Promise<ExecOpsResult> {
   let lastBoundVar: string | null = null;
   let lastValue: unknown = undefined;
   for (const op of ops) {
-    const r = await execOp(op, vars, emissions, fallbacks, ctx, targetName, skillTimeoutSec, absoluteTimeoutMs, traceBuilder);
+    // v0.14.1 Layer A — load-bearing mutation gate. Flip `sawConfirm` for the
+    // current op iteration in lint-parity order (`??` flips before its own
+    // gate check) so a `??` op's own classification path stays consistent
+    // with lint. Non-mutation `??` skips the throw branch naturally.
+    if (op.kind === "??") authState.sawConfirm = true;
+    const mutKind = classifyMutation(op);
+    if (mutKind !== null && !authorizationGranted(op, authState)) {
+      throw new UnconfirmedMutationError(
+        mutKind.kind,
+        mutKind.detail,
+        ["# Autonomous: true header", "preceding ?? / ask() in same target", "approved=\"reason\" per-op kwarg"],
+        buildAuthorizationSuggestion(mutKind),
+        op.kind,
+        targetName,
+      );
+    }
+    const r = await execOp(op, vars, emissions, fallbacks, ctx, targetName, skillTimeoutSec, absoluteTimeoutMs, traceBuilder, authState);
     if (r.lastBoundVar !== null) {
       lastBoundVar = r.lastBoundVar;
       lastValue = r.lastValue;
@@ -502,11 +533,12 @@ async function execOp(
   skillTimeoutSec: number | string | null,
   absoluteTimeoutMs: number,
   traceBuilder: TraceBuilder | null,
+  authState: MutationAuthState,
 ): Promise<ExecOpsResult> {
   const startMs = traceBuilder !== null ? Date.now() : 0;
   let errored = false;
   try {
-    return await execOpInner(op, vars, emissions, fallbacks, ctx, targetName, skillTimeoutSec, absoluteTimeoutMs, traceBuilder);
+    return await execOpInner(op, vars, emissions, fallbacks, ctx, targetName, skillTimeoutSec, absoluteTimeoutMs, traceBuilder, authState);
   } catch (err) {
     errored = true;
     // Default-tag any escaping error with `op.kind`. Explicit makeOpError()
@@ -550,6 +582,7 @@ async function execOpInner(
   skillTimeoutSec: number | string | null,
   absoluteTimeoutMs: number,
   traceBuilder: TraceBuilder | null,
+  authState: MutationAuthState = { skillAutonomous: false, sawConfirm: false },
 ): Promise<ExecOpsResult> {
   switch (op.kind) {
     case "$set": {
@@ -754,6 +787,23 @@ async function execOpInner(
     case "file_write": {
       // v0.7.0 — runtime-intrinsic file write. Substitutes `${VAR}` /
       // `$(VAR)` in both path and content before writing.
+      // v0.14.1 Layer B — mutation gate regression guard. Same predicate
+      // as Layer A in `execOps`; defense-in-depth against any future
+      // caller that bypasses the dispatcher. Fail-closed default authState
+      // makes this throw if invoked outside the normal execOps path.
+      {
+        const mutKind = classifyMutation(op);
+        if (mutKind !== null && !authorizationGranted(op, authState)) {
+          throw new UnconfirmedMutationError(
+            mutKind.kind,
+            mutKind.detail,
+            ["# Autonomous: true header", "preceding ?? / ask() in same target", "approved=\"reason\" per-op kwarg"],
+            buildAuthorizationSuggestion(mutKind),
+            op.kind,
+            targetName,
+          );
+        }
+      }
       const rawPath = op.fileParams?.path ?? "";
       const rawContent = op.fileParams?.content ?? "";
       const path = substituteRuntime(rawPath, vars);
@@ -853,6 +903,27 @@ async function execOpInner(
       return { lastBoundVar: op.outputVar ?? flatKey, lastValue: ack };
     }
     case "$": {
+      // v0.14.1 Layer B — mutation gate regression guard. Re-checks at the
+      // `$` dispatch site for `data_write` + mutating-name shapes; same
+      // predicate as Layer A in `execOps`. Fail-closed default authState
+      // means a caller that bypasses execOps and calls execOpInner directly
+      // (or a future dispatch surface that forgets to plumb authState)
+      // throws instead of silently dispatching the mutation. Non-mutation
+      // `$` ops (`$ search_*`, `$ llm`, etc.) pass through cleanly because
+      // `classifyMutation` returns null.
+      {
+        const mutKind = classifyMutation(op);
+        if (mutKind !== null && !authorizationGranted(op, authState)) {
+          throw new UnconfirmedMutationError(
+            mutKind.kind,
+            mutKind.detail,
+            ["# Autonomous: true header", "preceding ?? / ask() in same target", "approved=\"reason\" per-op kwarg"],
+            buildAuthorizationSuggestion(mutKind),
+            op.kind,
+            targetName,
+          );
+        }
+      }
       const body = substituteRuntime(op.body, vars);
       const m = /^([A-Za-z_][\w:-]*)\s*([\s\S]*)$/.exec(body);
       if (m === null) {
@@ -1173,7 +1244,7 @@ async function execOpInner(
       let last: ExecOpsResult = { lastBoundVar: null, lastValue: undefined };
       for (const item of listVal) {
         vars.set(iterName, item);
-        last = await execOps(op.foreachBody!, vars, emissions, fallbacks, ctx, targetName, skillTimeoutSec, absoluteTimeoutMs, traceBuilder);
+        last = await execOps(op.foreachBody!, vars, emissions, fallbacks, ctx, targetName, skillTimeoutSec, absoluteTimeoutMs, traceBuilder, authState);
       }
       for (const k of Array.from(vars.keys())) {
         if (!before.has(k)) vars.delete(k);
@@ -1183,11 +1254,11 @@ async function execOpInner(
     case "if": {
       for (const branch of op.ifBranches!) {
         if (evalCondition(branch.cond, vars)) {
-          return execOps(branch.body, vars, emissions, fallbacks, ctx, targetName, skillTimeoutSec, absoluteTimeoutMs, traceBuilder);
+          return execOps(branch.body, vars, emissions, fallbacks, ctx, targetName, skillTimeoutSec, absoluteTimeoutMs, traceBuilder, authState);
         }
       }
       if (op.ifElseBody !== undefined) {
-        return execOps(op.ifElseBody, vars, emissions, fallbacks, ctx, targetName, skillTimeoutSec, absoluteTimeoutMs, traceBuilder);
+        return execOps(op.ifElseBody, vars, emissions, fallbacks, ctx, targetName, skillTimeoutSec, absoluteTimeoutMs, traceBuilder, authState);
       }
       return { lastBoundVar: null, lastValue: undefined };
     }
