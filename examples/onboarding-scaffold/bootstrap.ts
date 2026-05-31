@@ -1,4 +1,4 @@
-// Onboarding scaffold: complete bootstrap wiring file-backed memory +
+// Onboarding scaffold: complete bootstrap wiring file-backed data store +
 // OpenAI LLM + tmux-shell AgentConnector. v0.7.3.
 //
 // Copy this file into your deployment and modify substrate choices to
@@ -43,9 +43,9 @@ const registry = new Registry();
 const skillStore = new FilesystemSkillStore(config.skillsDir ?? `${HOME}/skills`);
 registry.registerSkillStore("primary", skillStore);
 
-// File-backed memory at $SKILLSCRIPT_HOME/memory.json
+// File-backed data store at $SKILLSCRIPT_HOME/data.json
 const dataStore = new FileDataStore({
-  filePath: config.dataDbPath ?? `${HOME}/memory.json`,
+  filePath: config.dataDbPath ?? `${HOME}/data.json`,
 });
 registry.registerDataStore("primary", dataStore);
 

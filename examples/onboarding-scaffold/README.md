@@ -1,4 +1,4 @@
-# Onboarding scaffold — file-backed memory + OpenAI + tmux-shell
+# Onboarding scaffold — file-backed data store + OpenAI + tmux-shell
 
 A complete adopter-deployment example demonstrating substrate-portable wiring for skillscript-runtime. **~200 LOC across three adapter files** plus bootstrap. Copy this directory and modify for your own deployment.
 
@@ -25,7 +25,7 @@ cd ~/my-skillscript-deployment
 # 3. Set up env
 export SKILLSCRIPT_HOME=$(pwd)
 export OPENAI_API_KEY=sk-...
-cp memory.example.json memory.json  # initial memory
+cp data.example.json data.json  # initial data store seed
 
 # 4. Init skillscript dir layout
 skillfile init --here
@@ -49,7 +49,7 @@ node --loader ts-node/esm bootstrap.ts
 | `tmux-shell-agent-connector.ts` | `AgentConnector` impl — tmux send-keys | ~75 |
 | `bootstrap.ts` | Wiring — Registry, bridges, scheduler, MCP server | ~75 |
 | `connectors.json` | Example adopter-MCP wiring (empty by default) | — |
-| `memory.example.json` | Seed memory file with three example records | — |
+| `data.example.json` | Seed data file with three example records | — |
 
 ## Two-instance posture
 
@@ -77,4 +77,3 @@ The skill bodies don't need to change. `$ llm prompt=...` keeps working; `$ data
 
 - **Adopter playbook** — `docs/adopter-playbook.md` walks through Case 1 vs Case 2 wiring patterns
 - **Custom bootstrap walkthrough** — `examples/custom-bootstrap.example.ts` shows registering custom McpConnector classes via `registerConnectorClass`
-- **v0.8.x roadmap** — `$ data_write` ships in v0.8.x bundled with the auth model. When that lands, extend `FileDataStore` with the corresponding `write()` method.

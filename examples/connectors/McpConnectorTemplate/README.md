@@ -139,7 +139,7 @@ The declarative path is the canonical adopter pattern for stdio-bridged remote M
 | Cardinality | Many instances per deployment | One singleton per slot |
 | Substrate config | Per-instance via top-level keys | `substrate` section short/object/custom |
 | Class extensibility | `registerConnectorClass()` for adopter-custom classes | Programmatic bootstrap (or `substrate.skill_store: {type: "custom", ...}` once async-bootstrap lands) |
-| Auto-wired bridges | `llm` + `memory` + `data_write` (LocalModel + DataStore exposed via bridge connectors) | n/a (these ARE the substrates being bridged) |
+| Auto-wired bridges | `llm` + `data_read` + `data_write` (LocalModel + DataStore exposed via bridge connectors) | n/a (these ARE the substrates being bridged) |
 
 McpConnector is fundamentally the "dispatch to external tools" surface — narrowest contract, broadest range of impls.
 

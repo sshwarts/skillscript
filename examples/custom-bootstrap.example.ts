@@ -86,7 +86,7 @@ registry.registerSkillStore("primary", skillStore);
 // Wire your own LocalModel, DataStore, AgentConnector here. For typed-
 // contract impls, this is the "case 1" wiring — substrate-portable.
 //   registry.registerLocalModel("default", new MyHostedLlmAdapter(...));
-//   registry.registerDataStore("primary", new MyMemoryAdapter(...));
+//   registry.registerDataStore("primary", new MyDataStoreAdapter(...));
 //   registry.registerAgentConnector("primary", new MyAgentHarnessAdapter(...));
 
 // Then wire bridges if you want the canonical `$ llm` / `$ data_read` surfaces:

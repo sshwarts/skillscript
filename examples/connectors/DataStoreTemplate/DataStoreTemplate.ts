@@ -130,11 +130,11 @@ export class DataStoreTemplate implements DataStore {
   }
 
   /**
-   * Persist a new memory entry. Return the substrate-assigned `id` +
+   * Persist a new data record. Return the substrate-assigned `id` +
    * `created_at` (unix seconds).
    *
    * `DataWrite` shape:
-   *   - `content`: string (required; the memory body)
+   *   - `content`: string (required; the record body)
    *   - `tags`: string[] (optional; routed to substrate's tag mechanism)
    *   - `recipients`: string[] (optional advisory — substrates with alerting
    *     machinery use this to route notifications, e.g., AMP's mailbox model)
@@ -144,12 +144,12 @@ export class DataStoreTemplate implements DataStore {
    */
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
   async write(_entry: DataWrite): Promise<DataWriteRecord> {
-    // TODO — persist the memory via your substrate.
+    // TODO — persist the record via your substrate.
     //   - Generate or accept an id (substrate-dependent)
     //   - Persist content + tags + metadata
     //   - Apply recipients hint if your substrate has alerting
     //   - Apply expires_at if your substrate has TTL
     //   - Return { id, created_at }
-    throw new Error("TODO: write() — persist memory; return { id, created_at }.");
+    throw new Error("TODO: write() — persist record; return { id, created_at }.");
   }
 }

@@ -2,7 +2,7 @@
 
 A skeleton `DataStore` implementation for adopters writing their own. Not runnable; every method throws a `TODO` error. Copy this directory, rename, fill in the substrate-specific work.
 
-Use this when you want skillscript memories backed by:
+Use this when you want skillscript data persistence backed by:
 - A vector database (Pinecone, Weaviate, Qdrant, Chroma)
 - A data store backing (memory broker like AMP, hosted memory API, vector DB, etc.)
 - A different SQL flavor (Postgres + pgvector, MySQL)
@@ -18,7 +18,7 @@ DataStore (choose which connector)
    └── Your fork from this template
 ```
 
-The runtime is substrate-agnostic. Memories don't know which backend they're stored against — the contract is the `DataStore` interface, and any class implementing it works.
+The runtime is substrate-agnostic. Data records don't know which backend they're stored against — the contract is the `DataStore` interface, and any class implementing it works.
 
 ## Forking workflow
 
@@ -72,8 +72,8 @@ The DataStore contract is narrower than SkillStore. Three methods + `staticCapab
 
 | Method | What it does | When called |
 |---|---|---|
-| `query(filters)` | Read memories by mode + filter; return `PortableData[]` | Every `$ data_read mode=... query=...` op |
-| `write(entry)` | Persist a new memory; return `{id, created_at}` | Every `$ data_write content=... -> R` op + `data_write` skill notify routes |
+| `query(filters)` | Read records by mode + filter; return `PortableData[]` | Every `$ data_read mode=... query=...` op |
+| `write(entry)` | Persist a new record; return `{id, created_at}` | Every `$ data_write content=... -> R` op + `data_write` skill notify routes |
 | `manifest()` | Capability snapshot for `runtime_capabilities` discovery | At startup + on-demand from MCP clients |
 
 Per the curated-subset framing in `src/connectors/types.ts`, `PortableData` has a 4-tier field model:
@@ -113,7 +113,7 @@ Honor what your substrate supports; ignore the rest. Document the supported set 
 
 The `DataWrite` shape:
 
-- **`content`** (required) — the memory body
+- **`content`** (required) — the record body
 - **`tags`** (optional) — routed to your substrate's tag mechanism
 - **`recipients`** (optional) — advisory hint; substrates with alerting (e.g., AMP's mailbox model) use it
 - **`expires_at`** (optional) — unix seconds; substrates with TTL honor it
@@ -121,7 +121,7 @@ The `DataWrite` shape:
 
 Return `{id, created_at}` — the substrate-assigned identifier + creation timestamp (unix seconds).
 
-If your substrate doesn't support writes (read-only memory like a search index over a static corpus), set `supports_writes: false` in `staticCapabilities()` and throw from `write()`. The runtime + lint will respect the flag.
+If your substrate doesn't support writes (read-only store like a search index over a static corpus), set `supports_writes: false` in `staticCapabilities()` and throw from `write()`. The runtime + lint will respect the flag.
 
 ## Wiring against the dashboard / MCP
 

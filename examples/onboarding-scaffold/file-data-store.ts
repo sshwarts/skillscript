@@ -22,11 +22,11 @@ import type {
 } from "skillscript-runtime/connectors";
 
 export interface FileDataStoreConfig {
-  /** Absolute path to the JSON file holding the memory array. */
+  /** Absolute path to the JSON file holding the data records. */
   filePath: string;
 }
 
-interface FileMemoryRecord extends PortableData {
+interface FileDataRecord extends PortableData {
   /** Optional substrate-specific fields go in `metadata`; everything top-level matches PortableData. */
 }
 
@@ -77,7 +77,7 @@ export class FileDataStore implements DataStore {
     const created_at = Math.floor(Date.now() / 1000);
     const firstLine = entry.content.split("\n")[0] ?? entry.content;
     const summary = firstLine.length > 200 ? firstLine.slice(0, 197) + "..." : firstLine;
-    const newRecord: FileMemoryRecord = {
+    const newRecord: FileDataRecord = {
       id,
       summary,
       detail: entry.content,
@@ -92,7 +92,7 @@ export class FileDataStore implements DataStore {
             },
           }
         : {}),
-    } as FileMemoryRecord;
+    } as FileDataRecord;
     records.push(newRecord);
     writeFileSync(this.config.filePath, JSON.stringify(records, null, 2), "utf8");
     return { id, created_at };
@@ -110,15 +110,15 @@ export class FileDataStore implements DataStore {
     };
   }
 
-  private loadFile(): FileMemoryRecord[] {
+  private loadFile(): FileDataRecord[] {
     if (!existsSync(this.config.filePath)) return [];
     try {
       const raw = readFileSync(this.config.filePath, "utf8");
       const parsed: unknown = JSON.parse(raw);
       if (!Array.isArray(parsed)) {
-        throw new Error(`FileDataStore: '${this.config.filePath}' top-level must be an array of memory records.`);
+        throw new Error(`FileDataStore: '${this.config.filePath}' top-level must be an array of data records.`);
       }
-      return parsed as FileMemoryRecord[];
+      return parsed as FileDataRecord[];
     } catch (err) {
       throw new Error(`FileDataStore: failed to read '${this.config.filePath}': ${(err as Error).message}`);
     }
