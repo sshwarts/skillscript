@@ -24,8 +24,8 @@ const REPO_ROOT = join(__dirname, "..");
 const PACKAGE_JSON = JSON.parse(readFileSync(join(REPO_ROOT, "package.json"), "utf8")) as Record<string, unknown>;
 
 describe("T7 — package.json polish", () => {
-  it("1. version is 0.14.0 (MemoryStore → DataStore rename — hard rename across contract + ops + identifiers + files; misleading nomenclature retired pre-adoption)", () => {
-    expect(PACKAGE_JSON["version"]).toBe("0.14.0");
+  it("1. version is 0.14.1 (contract-vs-runtime parity: mutation gate runtime enforcement + strict-filters substrate-side enforcement + docs/examples sweep)", () => {
+    expect(PACKAGE_JSON["version"]).toBe("0.14.1");
   });
 
   it("2. main + types + bin + engines.node ≥ 22.5 declared", () => {
