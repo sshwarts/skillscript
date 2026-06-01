@@ -2,6 +2,7 @@ import { createRequire } from "node:module";
 import { dirname } from "node:path";
 import { mkdirSync, existsSync } from "node:fs";
 import { randomUUID } from "node:crypto";
+import { suppressSqliteExperimentalWarning } from "../sqlite-warning-suppress.js";
 import type {
   DataStore,
   DataWrite,
@@ -39,6 +40,11 @@ interface DatabaseSync {
   close(): void;
 }
 function loadDatabaseSync(): DatabaseSyncCtor {
+  // v0.15.4 — suppress the node:sqlite ExperimentalWarning at the actual
+  // load site (covers programmatic adopters running their own bootstrap;
+  // v0.15.1's CLI-only filter missed that path). Idempotent — only the
+  // first call installs the filter.
+  suppressSqliteExperimentalWarning();
   return (requireNode("node:sqlite") as { DatabaseSync: DatabaseSyncCtor }).DatabaseSync;
 }
 

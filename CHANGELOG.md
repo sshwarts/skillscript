@@ -1,5 +1,91 @@
 # Changelog
 
+## 0.15.4 — 2026-06-01 — Phase 3 warm-adopter update DX polish
+
+Two findings + a docs cleanup bundled. None are runtime correctness bugs;
+both fixes surfaced when the warm adopter (Phase 2 graduate) updated from
+v0.15.0 → v0.15.3 to begin Phase 3 (custom DataStore against AMP).
+
+### `skill-store-roundtrip.skill.md` is now idempotent
+
+The `SkillStoreMcpConnector` bridge has carried an overwrite-required guard
+since v0.15.0 — `$ skill_write` against an existing skill name throws
+`"skill '<name>' already exists. Pass overwrite=true to replace."` unless
+the op opts in. The bundled `skill-store-roundtrip` demo never carried
+the kwarg, so it worked on first run against an empty store and failed
+on every subsequent run. Phase 1 cold agent ran it once; Phase 3 warm
+agent rerunning it after upgrade hit the failure mode.
+
+Fix: the demo's `$ skill_write` now carries `overwrite=true`. The body
+re-stamped (`v1:f0f5da75`); scaffold/skills copy synced. Three sequential
+runs against the bundled FilesystemSkillStore return the same transcript
+every time.
+
+This was a "probe-twice" gap on my side at v0.15.0 ship — the demo passed
+my one-run probe and the cold-agent one-run probe; neither caught the
+non-idempotency. Banked the discipline as feedback memory alongside the
+fix.
+
+### SQLite ExperimentalWarning suppression moves to load-site
+
+v0.15.1 filtered the warning at `src/cli.ts` — the CLI entry. Programmatic
+adopters running their own bootstrap (every Phase 2+ adopter) never hit
+that filter, so the warning re-surfaced on every `tsx amp-bootstrap.ts`.
+Phase 3 warm agent re-confirmed it during their update probe.
+
+Fix: new `src/sqlite-warning-suppress.ts` shared helper — idempotent (first
+call installs, subsequent calls no-op) and narrow (only the specific
+`node:sqlite` ExperimentalWarning is intercepted; all other warnings pass
+through to the default handler unchanged). Called from both
+`src/connectors/data-store.ts:loadDatabaseSync()` and
+`src/connectors/sqlite-skill-store.ts:loadDatabaseSync()` at the actual
+`requireNode("node:sqlite")` site, so the suppression fires regardless
+of whether the consumer is the CLI or a programmatic bootstrap.
+
+The v0.15.1 CLI-only suppression block is removed — load-site coverage
+is strictly broader.
+
+For consumers who want the warning visible (e.g., debugging which node
+version's sqlite is loading), `restoreSqliteWarning()` is exported from
+the same module — but no default path needs it.
+
+### Adopter-playbook timeless rewrite + Phase 3 prep
+
+While in the patch, bundled a docs sweep flagged during Phase 3 prep:
+the playbook had retrospective version-history pollution
+("was advisory in v0.14.0; v0.14.1 makes it enforceable", "Pre-v0.14.1...",
+"(v0.14.1)" parenthetical markers). Adopter docs describe present state;
+CHANGELOG owns history. Two existing bullets rewritten to be timeless,
+two new bullets added for DataStore-substrate context (in-skill write
+asymmetry between skill_write and data_write trust models; mutation gate
+fires upstream of the bridge), and two cross-references added to the
+§"Wire your substrates" section for adopters discovering security knobs
+(`allowed_tools` allowlist + `enable_unsafe_shell` discipline).
+
+Banked the playbook-is-timeless discipline as a feedback memory so the
+pollution pattern doesn't reappear next time someone edits adopter docs.
+
+### Files changed
+
+- `examples/skillscripts/skill-store-roundtrip.skill.md` — `overwrite=true` + re-stamped.
+- `scaffold/skills/skill-store-roundtrip.skill.md` — synced with examples/ version.
+- `src/sqlite-warning-suppress.ts` (NEW) — shared idempotent helper.
+- `src/connectors/data-store.ts` — calls suppressor before `requireNode("node:sqlite")`.
+- `src/connectors/sqlite-skill-store.ts` — same.
+- `src/cli.ts` — removed the v0.15.1 CLI-only suppression block (now redundant).
+- `docs/adopter-playbook.md` — version-pollution rewrites + 2 additions + 2 cross-references.
+- `package.json` — version 0.15.3 → 0.15.4.
+- `tests/dogfood-t7.test.ts` — version assertion.
+- `CHANGELOG.md` — this entry.
+
+### Cold-adopter dogfood arc state
+
+- Phase 1 findings (4): all closed in v0.15.1 + v0.15.2.
+- Phase 2 findings (4): all closed in v0.15.3.
+- Phase 3 update findings (2): closed in v0.15.4.
+
+Phase 3 (custom DataStore against AMP) starts cleanly against v0.15.4.
+
 ## 0.15.3 — 2026-06-01 — Phase 2 cold-adopter DX polish
 
 Four findings surfaced by the Phase 2 cold-adopter dogfood (custom

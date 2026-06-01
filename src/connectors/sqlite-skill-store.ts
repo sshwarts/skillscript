@@ -2,6 +2,7 @@ import { createRequire } from "node:module";
 import { dirname } from "node:path";
 import { mkdirSync, existsSync } from "node:fs";
 import { createHash } from "node:crypto";
+import { suppressSqliteExperimentalWarning } from "../sqlite-warning-suppress.js";
 import type {
   SkillStore,
   SkillSource,
@@ -45,6 +46,9 @@ interface DatabaseSync {
   close(): void;
 }
 function loadDatabaseSync(): DatabaseSyncCtor {
+  // v0.15.4 — see src/sqlite-warning-suppress.ts header. Same idempotent
+  // filter used by SqliteDataStore.
+  suppressSqliteExperimentalWarning();
   return (requireNode("node:sqlite") as { DatabaseSync: DatabaseSyncCtor }).DatabaseSync;
 }
 

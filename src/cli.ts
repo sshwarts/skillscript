@@ -37,26 +37,11 @@ const EXAMPLES_DIR = join(HOME_DIR, "examples");
 const PLUGINS_DIR = join(HOME_DIR, "plugins");
 const TRACE_DIR = join(HOME_DIR, "traces");
 
-// v0.15.1 — suppress the node:sqlite ExperimentalWarning at the CLI entry
-// point. SqliteDataStore + SqliteSkillStore are intentional substrate
-// choices; the warning fires on every CLI invocation that touches sqlite
-// (dashboard, serve, execute against substrate-resident skills) and reads
-// to cold adopters as "something's wrong with my install." Filtered at
-// `process.emitWarning` so it never reaches the default stderr handler.
-// CLI-only — programmatic library consumers see the warning unchanged so
-// they can decide their own logging discipline.
-const __originalEmitWarning = process.emitWarning.bind(process);
-process.emitWarning = function suppressSqliteExperimental(warning: string | Error, ...rest: unknown[]) {
-  const msg = warning instanceof Error ? warning.message : String(warning);
-  let type: string | undefined;
-  if (typeof rest[0] === "string") {
-    type = rest[0];
-  } else if (rest[0] !== null && typeof rest[0] === "object" && "type" in rest[0]) {
-    type = (rest[0] as { type?: string }).type;
-  }
-  if (type === "ExperimentalWarning" && /\bSQLite\b/i.test(msg)) return;
-  return (__originalEmitWarning as (warning: string | Error, ...rest: unknown[]) => void)(warning, ...rest);
-} as typeof process.emitWarning;
+// v0.15.4 — the node:sqlite ExperimentalWarning suppression that v0.15.1
+// installed here moved to the actual sqlite-load sites
+// (src/connectors/data-store.ts + src/connectors/sqlite-skill-store.ts)
+// so it covers both CLI consumers AND programmatic adopters running their
+// own bootstrap. See src/sqlite-warning-suppress.ts.
 
 interface CommandHelp {
   description: string;

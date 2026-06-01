@@ -24,8 +24,8 @@ const REPO_ROOT = join(__dirname, "..");
 const PACKAGE_JSON = JSON.parse(readFileSync(join(REPO_ROOT, "package.json"), "utf8")) as Record<string, unknown>;
 
 describe("T7 — package.json polish", () => {
-  it("1. version is 0.15.3 (Phase 2 cold-adopter DX polish: ./dashboard export + type:module flag + conformance namespace docs + deterministic data-store demo)", () => {
-    expect(PACKAGE_JSON["version"]).toBe("0.15.3");
+  it("1. version is 0.15.4 (Phase 3 warm-adopter update: idempotent skill-store demo + SQLite warning suppression at load-site)", () => {
+    expect(PACKAGE_JSON["version"]).toBe("0.15.4");
   });
 
   it("2. main + types + bin + engines.node ≥ 22.5 declared", () => {
