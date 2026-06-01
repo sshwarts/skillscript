@@ -1,5 +1,94 @@
 # Changelog
 
+## 0.15.1 — 2026-06-01 — Phase 1 cold-adopter DX polish
+
+Three small but high-DX fixes surfaced by the cold-adopter Phase 1 dogfood
+against shipped v0.15.0. None are runtime correctness bugs — every probe
+passed end-to-end. They're UX seams that read as "something's wrong with my
+install" to a cold adopter discovering the package for the first time.
+
+### `skillfile init` now seeds the three Phase 1 demos into `skills/`
+
+Pre-v0.15.1, `init` copied only `hello-world.skill.md` and only into
+`examples/`. Adopters wanting to dispatch via `execute_skill({name})` had
+to manually `cp` from `node_modules/skillscript-runtime/examples/skillscripts/`
+into `$SKILLSCRIPT_HOME/skills/`. Now `init` seeds all three Phase 1
+demos directly into `skills/`:
+
+- `hello-world.skill.md` — baseline runtime check, no substrate
+- `skill-store-roundtrip.skill.md` — Lisp-shape `$ skill_write` demo
+- `data-store-roundtrip.skill.md` — `$ data_write` + `$ data_read` round-trip
+
+All three ship pre-stamped (`# Status: Approved v1:<token>`). After
+`skillfile init`, `execute_skill({skill_name: "hello-world"})` works
+immediately — no manual seeding required.
+
+### `skillfile init` Next: hint points at the canonical MCP/dashboard path
+
+Pre-v0.15.1, `init` printed:
+
+```
+Next:
+  skillfile run examples/skillscripts/hello-world.skill.md
+```
+
+— a file-path execution that bypasses the SkillStore + the v0.9.0 hash-token
+approval gate. Cold adopters following the hint ended up evaluating a
+different code path than the canonical production flow. Now `init` prints:
+
+```
+Next:
+  skillfile dashboard --host 0.0.0.0 --port 7878
+  # Then dispatch a seeded demo via the MCP wire:
+  #   curl -s -X POST http://localhost:7878/rpc \
+  #     -d '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"execute_skill","arguments":{"skill_name":"hello-world"}}}' \
+  #     | jq -r '.result.content[0].text' | jq
+```
+
+Aligns the hint with the documented production workflow: dashboard launches
+the MCP server; in-skill dispatch goes through `execute_skill({skill_name})`.
+
+### `node:sqlite` ExperimentalWarning suppressed at the CLI entry
+
+`(node:XXXX) ExperimentalWarning: SQLite is an experimental feature ...`
+fired on every CLI invocation that touched sqlite (dashboard, serve,
+execute against substrate-resident skills). To a cold adopter it read as
+"something's wrong with my install." `SqliteDataStore` + `SqliteSkillStore`
+are intentional substrate choices; the warning was noise, not signal.
+
+Filtered at `process.emitWarning` at the CLI entry point — only the specific
+SQLite `ExperimentalWarning` is suppressed; all other warnings pass through
+to stderr unchanged. CLI-only — programmatic library consumers see the
+warning unchanged so they can choose their own logging discipline.
+
+### Tests
+
+- `tests/cli.test.ts` — two new cases verifying `init`'s post-v0.15.1 shape:
+  seeds three demos with valid Approved+token headers; Next: hint matches
+  the canonical `dashboard` + `execute_skill` pattern (and the old
+  `skillfile run examples/...` shape is regression-guarded against
+  reappearance).
+
+### Files changed
+
+- `src/cli.ts` — `cmdInit` seeds three demos into `skills/`; rewrites
+  `Next:` hint; adds `process.emitWarning` filter for the SQLite warning.
+- `scaffold/skills/{hello-world, skill-store-roundtrip, data-store-roundtrip}.skill.md`
+  (NEW) — pre-stamped scaffold payload mirroring `examples/skillscripts/`.
+- `scaffold/examples/` (REMOVED) — folded into `scaffold/skills/` since
+  init now seeds the runnable location, not the browsable one.
+- `tests/cli.test.ts` — two new test cases (init seeds + Next: hint).
+- `tests/dogfood-t7.test.ts` — version assertion bumped 0.15.0 → 0.15.1.
+- `package.json` — version 0.15.0 → 0.15.1.
+- `CHANGELOG.md` — this entry.
+
+### Cold-adopter Phase 1 collapses
+
+Post-v0.15.1, the Phase 1 cold-adopter briefing loses the manual `cp` step
+entirely. The flow becomes: `npm install` → `skillfile init` →
+`skillfile dashboard` → `execute_skill({name})`. Four commands, no manual
+file shuffling, no spurious experimental warnings.
+
 ## 0.15.0 — 2026-06-01 — SkillStore-as-bridge: in-skill `$ skill_write` + Draft-default trust boundary
 
 The "skills can write skills" Lisp-shape primitive now works from inside a

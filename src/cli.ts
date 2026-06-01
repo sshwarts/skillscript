@@ -37,6 +37,27 @@ const EXAMPLES_DIR = join(HOME_DIR, "examples");
 const PLUGINS_DIR = join(HOME_DIR, "plugins");
 const TRACE_DIR = join(HOME_DIR, "traces");
 
+// v0.15.1 — suppress the node:sqlite ExperimentalWarning at the CLI entry
+// point. SqliteDataStore + SqliteSkillStore are intentional substrate
+// choices; the warning fires on every CLI invocation that touches sqlite
+// (dashboard, serve, execute against substrate-resident skills) and reads
+// to cold adopters as "something's wrong with my install." Filtered at
+// `process.emitWarning` so it never reaches the default stderr handler.
+// CLI-only — programmatic library consumers see the warning unchanged so
+// they can decide their own logging discipline.
+const __originalEmitWarning = process.emitWarning.bind(process);
+process.emitWarning = function suppressSqliteExperimental(warning: string | Error, ...rest: unknown[]) {
+  const msg = warning instanceof Error ? warning.message : String(warning);
+  let type: string | undefined;
+  if (typeof rest[0] === "string") {
+    type = rest[0];
+  } else if (rest[0] !== null && typeof rest[0] === "object" && "type" in rest[0]) {
+    type = (rest[0] as { type?: string }).type;
+  }
+  if (type === "ExperimentalWarning" && /\bSQLite\b/i.test(msg)) return;
+  return (__originalEmitWarning as (warning: string | Error, ...rest: unknown[]) => void)(warning, ...rest);
+} as typeof process.emitWarning;
+
 interface CommandHelp {
   description: string;
   usage: string;
@@ -325,22 +346,35 @@ async function cmdInit(): Promise<number> {
 
   const scaffoldRoot = locateScaffoldRoot();
   await copyScaffoldFile(join(scaffoldRoot, "config.toml"), join(HOME_DIR, "config.toml"));
-  // v0.15.0 — scaffold copies the stamped `hello-world.skill.md` into the
-  // adopter's `examples/` tree. The same file lives in `examples/skillscripts/`
-  // (browsable demo) and in `scaffold/examples/` (init payload); both are
-  // identical so `cp` and `skillfile init` produce equivalent runnable skills.
-  await copyScaffoldFile(join(scaffoldRoot, "examples", "hello-world.skill.md"), join(EXAMPLES_DIR, "hello-world.skill.md"));
+  // v0.15.1 — seed the three Phase 1 demos directly into `skills/` (where the
+  // FilesystemSkillStore reads) so `execute_skill({skill_name: "hello-world"})`
+  // works immediately after init — no manual `cp` from node_modules required.
+  // All three ship pre-stamped (`# Status: Approved v1:<token>`). Adopters
+  // who want them as browsable references can also find them under
+  // `node_modules/skillscript-runtime/examples/skillscripts/`.
+  for (const demo of ["hello-world", "skill-store-roundtrip", "data-store-roundtrip"]) {
+    await copyScaffoldFile(
+      join(scaffoldRoot, "skills", `${demo}.skill.md`),
+      join(SKILLS_DIR, `${demo}.skill.md`),
+    );
+  }
   await copyScaffoldFile(join(scaffoldRoot, "connectors.json"), join(HOME_DIR, "connectors.json"));
 
   process.stdout.write(`Initialized ${HOME_DIR}
-  skills/       ${SKILLS_DIR}
-  examples/     ${EXAMPLES_DIR}
-  plugins/      ${PLUGINS_DIR}
-  config.toml   ${join(HOME_DIR, "config.toml")}
+  skills/         ${SKILLS_DIR}
+                  └─ hello-world, skill-store-roundtrip, data-store-roundtrip (Approved, ready to execute)
+  examples/       ${EXAMPLES_DIR}
+  plugins/        ${PLUGINS_DIR}
+  config.toml     ${join(HOME_DIR, "config.toml")}
   connectors.json ${join(HOME_DIR, "connectors.json")}
 
 Next:
-  skillfile run examples/skillscripts/hello-world.skill.md
+  skillfile dashboard --host 0.0.0.0 --port 7878
+  # Then dispatch a seeded demo via the MCP wire:
+  #   curl -s -X POST http://localhost:7878/rpc \\
+  #     -H "content-type: application/json" \\
+  #     -d '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"execute_skill","arguments":{"skill_name":"hello-world"}}}' \\
+  #     | jq -r '.result.content[0].text' | jq
 `);
   return 0;
 }

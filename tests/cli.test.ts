@@ -76,6 +76,34 @@ describe("skillfile CLI", () => {
     expect(r2.stdout).toMatch(/Hello, world!/);
   });
 
+  it("v0.15.1 — init seeds three bundled demos into skills/ (no manual cp required)", () => {
+    const home = mkdtempSync(resolve(tmpdir(), "skillscript-init-seed-"));
+    runCli(["init"], { SKILLSCRIPT_HOME: home });
+    const fs = require("node:fs") as typeof import("node:fs");
+    const path = require("node:path") as typeof import("node:path");
+    for (const demo of ["hello-world", "skill-store-roundtrip", "data-store-roundtrip"]) {
+      const seeded = path.join(home, "skills", `${demo}.skill.md`);
+      expect(fs.existsSync(seeded), `init should seed skills/${demo}.skill.md`).toBe(true);
+      const body = fs.readFileSync(seeded, "utf8");
+      // Bundled demos ship pre-stamped + Approved — runnable immediately.
+      expect(body, `${demo} must be Approved + token-stamped after init`).toMatch(/^# Status: Approved v1:[0-9a-f]+/m);
+    }
+  });
+
+  it("v0.15.1 — init Next: hint points at canonical `skillfile dashboard` + execute_skill path", () => {
+    const home = mkdtempSync(resolve(tmpdir(), "skillscript-init-hint-"));
+    const r = runCli(["init"], { SKILLSCRIPT_HOME: home });
+    expect(r.code).toBe(0);
+    expect(r.stdout).toMatch(/Next:/);
+    expect(r.stdout).toMatch(/skillfile dashboard/);
+    expect(r.stdout).toMatch(/execute_skill/);
+    // Regression — old hint pointed at `skillfile run examples/...` which
+    // uses file-path execution, bypassing the SkillStore + the v0.9.0 hash-
+    // token gate. Cold adopters following the hint ended up evaluating
+    // the wrong path. Old shape must not reappear.
+    expect(r.stdout).not.toMatch(/skillfile run examples\/skillscripts/);
+  });
+
   it("run resolves data-skill references via the SkillStore (regression: cmdRun was skipping inline)", () => {
     // Dogfood-driven: a hand-authored skill with `& cc-voice` reference
     // was failing to execute via `skillfile run` because cmdRun wasn't
