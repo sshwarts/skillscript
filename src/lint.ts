@@ -2513,7 +2513,8 @@ function collectAmpRefsFromOps(ops: SkillOp[]): CompositionRef[] {
     if (op.kind === "&" && op.ampParams !== undefined) emit(op.ampParams.skillName, "&");
     // v0.2.11 Bug 7: $ execute_skill is also a composition primitive.
     if (op.kind === "$" && /^execute_skill\b/.test(op.body)) {
-      const m = /\bskill_name\s*=\s*(?:"([^"]+)"|'([^']+)'|([A-Za-z_][\w-]*))/.exec(op.body);
+      // v0.15.2 — accept either `name` or `skill_name` (back-compat alias).
+      const m = /\b(?:skill_name|name)\s*=\s*(?:"([^"]+)"|'([^']+)'|([A-Za-z_][\w-]*))/.exec(op.body);
       if (m !== null) {
         const name = m[1] ?? m[2] ?? m[3];
         if (name !== undefined && name !== "") emit(name, "$ execute_skill");

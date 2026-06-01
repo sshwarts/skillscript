@@ -1,5 +1,73 @@
 # Changelog
 
+## 0.15.2 — 2026-06-01 — `execute_skill` kwarg alignment
+
+Closes the fourth and final finding from the v0.15.0 cold-adopter Phase 1
+dogfood: `execute_skill` was the only `skill_*` MCP tool taking
+`skill_name`; the other four (`skill_read`, `skill_metadata`, `skill_status`,
+`skill_write`) all take `name`. The outlier was historical — `execute_skill`
+needed `skill_name` to disambiguate from `source` in the inline-execute
+mode — but to a cold adopter hand-wiring JSON-RPC, the inconsistency was
+a papercut on every call.
+
+Per Perry signoff (thread `75abc8c0`): `name` is canonical going forward;
+`skill_name` is a silent back-compat alias. No tier-3 advisory, no
+deprecation warn. Three arguments for `name`-canonical:
+
+1. Less drift — 4 of 5 `skill_*` tools already use `name`. Aligning one
+   outlier is cheaper than migrating four.
+2. The `source` disambiguation argument doesn't generalize — other tools
+   don't have a sibling kwarg that could collide.
+3. Tool name carries context — `skill_read({name})` is unambiguous because
+   the *tool name* says skill; the kwarg need not repeat it.
+
+### Surface changes
+
+- `execute_skill` MCP tool accepts `name` as canonical; `skill_name` is
+  accepted as a silent alias. If both are supplied with different values,
+  the call is rejected as ambiguous. Matching values pass through.
+- `inputSchema` declares both kwargs, with the `skill_name` description
+  explicitly flagging it as a back-compat alias.
+- `execute_skill(...)` function-call grammar (in-skill, `src/parser.ts`)
+  accepts either `name=` or `skill_name=`. Parser-time ambiguity check
+  mirrors the MCP-wire path.
+- `dispatchExecuteSkillIntercept` (in-skill `$ execute_skill` dispatch,
+  `src/composition.ts`) accepts either kwarg.
+- Composition-reference lint extractor (`src/lint.ts`) recognizes either
+  kwarg form when collecting skill references for the
+  `unknown-skill-reference` rule.
+- `help-content.ts` canonical-shape headers updated to show `name=` as
+  the preferred form; worked examples below stay on `skill_name=` since
+  the alias works unchanged and per-example rewrites add no value.
+
+### Scope
+
+Tightly scoped to `skill_*` per Perry's framing. `data_*` and `file_*`
+tools have their own naming conventions; if the Phase 2 cold-adopter
+dogfood surfaces analogous warts in those families, file separately.
+Don't compound scope.
+
+### Tests
+
+`tests/v0.15.2-execute-skill-name-kwarg.test.ts` — 14 new cases covering
+MCP-wire dispatch (canonical, alias, identical-result equivalence,
+ambiguity rejection, disambiguation preservation, inputSchema shape) +
+function-call grammar (canonical works, alias works, conflict rejected
+at parse time) + lint extractor (kwarg recognized for both shapes,
+unknown-skill-reference fires correctly).
+
+### Files changed
+
+- `src/mcp-server.ts` — `executeSkill` handler + inputSchema.
+- `src/parser.ts` — function-call kwarg alias.
+- `src/composition.ts` — in-skill `$ execute_skill` dispatch.
+- `src/lint.ts` — composition-reference regex extended.
+- `src/help-content.ts` — canonical-shape headers updated.
+- `tests/v0.15.2-execute-skill-name-kwarg.test.ts` (NEW).
+- `tests/dogfood-t7.test.ts` — version assertion.
+- `package.json` — version 0.15.1 → 0.15.2.
+- `CHANGELOG.md` — this entry.
+
 ## 0.15.1 — 2026-06-01 — Phase 1 cold-adopter DX polish
 
 Three small but high-DX fixes surfaced by the cold-adopter Phase 1 dogfood

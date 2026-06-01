@@ -44,7 +44,7 @@ The three delivery channels are all first-class:
 | Class | Shape | Examples |
 |---|---|---|
 | **Mutation statements** | \`$verb VAR = value\` / \`$verb VAR <value>\` | \`$set NAME = "Scott"\`, \`$append LIST <item>\` |
-| **Runtime-intrinsic function-calls** | \`verb(kwarg=value, ...) [-> BINDING]\` | \`emit(text="...")\`, \`ask(prompt="...") -> R\`, \`inline(skill="...")\`, \`execute_skill(skill_name="...") -> R\`, \`shell(command="...") -> R\`, \`file_read(path="...") -> R\`, \`file_write(path="...", content="...")\` |
+| **Runtime-intrinsic function-calls** | \`verb(kwarg=value, ...) [-> BINDING]\` | \`emit(text="...")\`, \`ask(prompt="...") -> R\`, \`inline(skill="...")\`, \`execute_skill(name="...") -> R\`, \`shell(command="...") -> R\`, \`file_read(path="...") -> R\`, \`file_write(path="...", content="...")\` |
 | **External MCP dispatch** | \`$ <connector> kwarg=value, ... [-> BINDING]\` | \`$ youtrack_search query="..." -> R\`, \`$ llm prompt="..." -> R\`, \`$ data_read mode=fts query="..." -> R\` |
 
 The \`$\` prefix marks **state-affecting ops** (mutation OR external dispatch). Function-call shape marks **language-intrinsic ops the runtime knows directly**.
@@ -270,14 +270,16 @@ References a \`# Type: data\` skill; the compiler inlines its emitted text at co
 inline(skill="common-prelude")
 \`\`\`
 
-### \`execute_skill(skill_name="...", ...kwargs) -> R\` — runtime skill composition
+### \`execute_skill(name="...", ...kwargs) -> R\` — runtime skill composition
 
 Invokes another stored skill end-to-end against the runtime's connectors. Returns the full execution record (final vars, transcript, outputs). Access via \`\${R.final_vars.FIELD}\`, \`\${R.transcript}\`, etc.
 
 \`\`\`
-execute_skill(skill_name="extract-json-number", JSON_BLOB="\${RAW}", FIELD_PATH="total_count") -> RESULT
+execute_skill(name="extract-json-number", JSON_BLOB="\${RAW}", FIELD_PATH="total_count") -> RESULT
 emit(text="Extracted: \${RESULT.final_vars.VALUE|trim}")
 \`\`\`
+
+v0.15.2 — \`name\` is the canonical kwarg, aligning with \`skill_read({name})\` / \`skill_write({name})\` / \`skill_status({name})\`. \`skill_name\` is accepted as a silent back-compat alias; older corpora using the \`skill_name="..."\` shape continue to work unchanged.
 
 ## Class 3: External MCP dispatch
 
@@ -690,7 +692,7 @@ brief:
 - Provenance lets \`skillfile audit\` detect stale recompiles when a referenced data skill changes.
 - The data skill must be marked \`# Type: data\` (or live in a path the SkillStore recognizes as data); otherwise it's treated as procedural and won't inline.
 
-## 2. \`execute_skill(skill_name="<child>", ...kwargs) -> R\` — runtime invocation
+## 2. \`execute_skill(name="<child>", ...kwargs) -> R\` — runtime invocation
 
 The general composition form: the host calls another skill at runtime, capturing its full execution record. Same depth-counted chain (default 5) as the recursion guard.
 

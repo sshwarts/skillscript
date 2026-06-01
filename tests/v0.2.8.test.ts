@@ -189,8 +189,10 @@ describe("v0.2.8 — execute_skill MCP tool", () => {
   });
 
   it("empty skill_name rejects with clear error message", async () => {
+    // v0.15.2 — error message changed when `name` became canonical; the
+    // empty-name path now hits the "exactly one of `name` or `source`" check.
     const { mcpServer } = bootstrap({ skillsDir: join(home, "skills"), traceDir: join(home, "traces") });
-    await expect(callTool(mcpServer, "execute_skill", { skill_name: "" })).rejects.toThrow(/skill_name.*required/i);
+    await expect(callTool(mcpServer, "execute_skill", { skill_name: "" })).rejects.toThrow(/exactly one of `name` or `source`/i);
   });
 });
 

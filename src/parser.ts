@@ -1698,8 +1698,22 @@ export function parse(source: string): ParsedSkill {
           continue;
         }
         if (fnName === "execute_skill") {
-          const skillName = kwArgs["skill_name"] ?? "";
-          const rest = Object.entries(kwArgs).filter(([k]) => k !== "skill_name" && k !== "approved");
+          // v0.15.2 — `name` is canonical, `skill_name` is back-compat alias.
+          // Aligns the function-call kwarg with the MCP-wire kwarg + the
+          // other `skill_*` tools (`skill_read({name})`, `skill_write({name})`,
+          // etc.). Per Perry signoff thread 75abc8c0: silent alias, no
+          // advisory. If both kwargs present with different values, fail
+          // parse-time so the author picks one.
+          const nameKwarg = kwArgs["name"];
+          const skillNameKwarg = kwArgs["skill_name"];
+          if (nameKwarg !== undefined && skillNameKwarg !== undefined && nameKwarg !== skillNameKwarg) {
+            result.parseErrors.push(
+              `\`execute_skill(...)\` in target '${currentTarget.name}': ambiguous kwargs — \`name\` and \`skill_name\` are aliases; supply only one (or matching values).`,
+            );
+            continue;
+          }
+          const skillName = nameKwarg ?? skillNameKwarg ?? "";
+          const rest = Object.entries(kwArgs).filter(([k]) => k !== "name" && k !== "skill_name" && k !== "approved");
           const inner = rest.map(([k, v]) => /\s/.test(v) || v.startsWith("{") || v.startsWith("[") ? `${k}=${v}` : `${k}="${v}"`).join(" ");
           opBucket.push({
             kind: "$",

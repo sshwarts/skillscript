@@ -517,12 +517,13 @@ export class McpServer {
 
     this.registerTool({
       name: "execute_skill",
-      description: "Execute a skill end-to-end against the runtime's wired connectors. Two modes: (1) `skill_name` — execute a stored skill; runtime fetches from SkillStore and the v0.9.0 hash-token gate fires (Draft / tampered bodies rejected). (2) `source` — ad-hoc inline execution; the supplied body runs in memory and is discarded; bypasses SkillStore + approval gate (per thread 10746795). Use `skill_name` for production / autonomous dispatch; use `source` for one-off scripting where pollution-the-store would be wrong. Returns {skill_name, final_vars, transcript, outputs, errors, target_order}. `mechanical: true` previews dispatch without firing $/~/@/?? ops. Recursion-depth-guarded (default 10). Write operation.",
+      description: "Execute a skill end-to-end against the runtime's wired connectors. Two modes: (1) `name` — execute a stored skill; runtime fetches from SkillStore and the v0.9.0 hash-token gate fires (Draft / tampered bodies rejected). (2) `source` — ad-hoc inline execution; the supplied body runs in memory and is discarded; bypasses SkillStore + approval gate (per thread 10746795). Use `name` for production / autonomous dispatch; use `source` for one-off scripting where polluting the store would be wrong. Returns {skill_name, final_vars, transcript, outputs, errors, target_order}. `mechanical: true` previews dispatch without firing $/~/@/?? ops. Recursion-depth-guarded (default 10). Write operation. v0.15.2 — `skill_name` is accepted as a silent back-compat alias for `name`.",
       inputSchema: {
         type: "object",
         properties: {
-          skill_name: { type: "string", description: "Name of a skill stored in the SkillStore. Exactly one of skill_name / source is required." },
-          source: { type: "string", description: "Ad-hoc inline skill body. Runs in memory; never persisted; bypasses SkillStore + approval gate. Exactly one of skill_name / source is required." },
+          name: { type: "string", description: "Name of a skill stored in the SkillStore. Exactly one of `name` / `source` is required. (Alias: `skill_name` — accepted for back-compat with the pre-v0.15.2 surface.)" },
+          source: { type: "string", description: "Ad-hoc inline skill body. Runs in memory; never persisted; bypasses SkillStore + approval gate. Exactly one of `name` / `source` is required." },
+          skill_name: { type: "string", description: "Back-compat alias for `name`. Prefer `name` in new code." },
           inputs: {
             type: "object",
             additionalProperties: { type: "string" },
@@ -556,12 +557,27 @@ export class McpServer {
   }
 
   private async executeSkill(args: Record<string, unknown>): Promise<Record<string, unknown>> {
-    const skillName = args["skill_name"];
+    // v0.15.2 — `name` is the canonical kwarg; `skill_name` is a silent
+    // back-compat alias. Aligns the surface with the other skill_* tools
+    // (skill_read / skill_metadata / skill_status / skill_write all take
+    // `name`). Per Perry signoff (thread 75abc8c0): silent alias — no
+    // tier-3 advisory, no deprecation warn. If both are supplied with
+    // different values, that's ambiguous; reject so the caller picks one.
+    const nameKwarg = args["name"];
+    const skillNameKwarg = args["skill_name"];
+    const hasNameKwarg = typeof nameKwarg === "string" && nameKwarg !== "";
+    const hasSkillNameKwarg = typeof skillNameKwarg === "string" && skillNameKwarg !== "";
+    if (hasNameKwarg && hasSkillNameKwarg && nameKwarg !== skillNameKwarg) {
+      throw new Error(
+        "execute_skill: ambiguous kwargs — `name` and `skill_name` are aliases; supply only one (or matching values).",
+      );
+    }
+    const skillName = hasNameKwarg ? nameKwarg : skillNameKwarg;
     const sourceArg = args["source"];
     const hasName = typeof skillName === "string" && skillName !== "";
     const hasSource = typeof sourceArg === "string" && sourceArg !== "";
     if (hasName === hasSource) {
-      throw new Error("execute_skill: exactly one of `skill_name` or `source` is required.");
+      throw new Error("execute_skill: exactly one of `name` or `source` is required.");
     }
     const inputs = (args["inputs"] as Record<string, string> | undefined) ?? {};
     const mechanical = args["mechanical"] === true;

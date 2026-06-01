@@ -240,9 +240,21 @@ export async function dispatchExecuteSkillIntercept(
   targetName: string,
   ctx: ExecuteContext,
 ): Promise<ExecuteSkillResult> {
-  const childSkillName = typeof args["skill_name"] === "string" ? args["skill_name"] : "";
+  // v0.15.2 — accept either `name` (canonical) or `skill_name` (back-compat
+  // alias) as the kwarg. Aligns with the MCP-wire surface + the other
+  // `skill_*` tools. The function-call form (`execute_skill(name="...")`)
+  // is normalized to `skill_name=` by the parser, so this branch primarily
+  // serves the legacy direct-`$` form (`$ execute_skill name="..."`).
+  const nameKwarg = typeof args["name"] === "string" ? args["name"] : "";
+  const skillNameKwarg = typeof args["skill_name"] === "string" ? args["skill_name"] : "";
+  if (nameKwarg !== "" && skillNameKwarg !== "" && nameKwarg !== skillNameKwarg) {
+    throw new Error(
+      `\`$ execute_skill\` in target '${targetName}': ambiguous kwargs — \`name\` and \`skill_name\` are aliases; supply only one (or matching values).`,
+    );
+  }
+  const childSkillName = nameKwarg !== "" ? nameKwarg : skillNameKwarg;
   if (childSkillName === "") {
-    throw new Error(`\`$ execute_skill\` op missing required \`skill_name\` arg (target '${targetName}').`);
+    throw new Error(`\`$ execute_skill\` op missing required \`name\` (or \`skill_name\`) arg (target '${targetName}').`);
   }
   const childInputs = extractChildInputs(args);
   return executeSkillByName(childSkillName, childInputs, {
