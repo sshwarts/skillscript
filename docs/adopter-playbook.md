@@ -129,6 +129,14 @@ skillfile init --here
 
 This creates `~/.skillscript/` with `skills/`, `traces/`, an empty `connectors.json`, and a `config.toml` stub.
 
+**If you're writing a custom bootstrap (not just using the bundled CLI):** the package is ESM-only. `npm init -y` produces a CJS `package.json` by default, which will fail your first bootstrap run with top-level-await / ESM-import errors. Switch your adopter project to ESM before authoring bootstrap code:
+
+```bash
+npm pkg set type=module
+```
+
+(Phase 2 cold-adopter dogfood, 2026-06-01: first improvisation an adopter hit was this exact gap — surfaced after a `bootstrap.ts` failed at module load. One-sentence flag saves the trip.)
+
 ### 2. Decide on substrate wiring
 
 For each of the four substrates (data store, LLM, agent harness, MCP tools), decide Case 1 or Case 2. The onboarding scaffold (`examples/onboarding-scaffold/`) is Case 1 end-to-end against a file-backed data store + OpenAI + tmux.

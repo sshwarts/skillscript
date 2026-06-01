@@ -60,6 +60,10 @@ cp -r examples/connectors/DataStoreTemplate examples/connectors/MyDataStore
 
    The conformance suite verifies your impl honors the contract: method presence, return-type shape, capability flag self-consistency. Passes → runtime treats your impl interchangeably with `SqliteDataStore`.
 
+   ### Running conformance against a shared persistent substrate
+
+   Same discipline as the `SkillStoreTemplate` README's section of the same name: the suite's `build()` callback is invoked **per fixture**, and the first stateful test expects `query()` on an empty store to return `[]`. For shared persistent substrates (hosted vector DBs, multi-tenant Postgres, anything where state survives across `build()` calls), your `build()` must namespace each fixture into an isolatable + wipeable subspace (tag marker, per-test schema, per-test prefix) and clear before returning the instance. The conformance suite doesn't (and can't) know what isolation your substrate supports.
+
 ## Reference implementation
 
 When in doubt about semantics, read the bundled impl:

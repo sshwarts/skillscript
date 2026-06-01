@@ -60,6 +60,20 @@ cp -r examples/connectors/SkillStoreTemplate examples/connectors/MyDatabaseSkill
 
    The conformance suite verifies your impl honors the contract: method presence, return-type shape, error-class throw conditions, capability flag self-consistency. If it passes, the runtime treats your impl interchangeably with the bundled defaults.
 
+   ### Running conformance against a shared persistent substrate
+
+   The suite's `build()` callback is invoked **per fixture** — every test rebuilds. The first stateful assertion expects `query()` on an empty store to return `[]`. For bundled-default substrates that's trivial (fresh tmpdir + new instance), but for shared persistent substrates (AMP, Postgres, MongoDB, hosted memory APIs — anything where state survives across `build()` calls), a naive `build()` that returns a wrapper over the live store fails immediately because state from prior tests leaks in.
+
+   The fix: your `build()` callback should namespace each fixture into an **isolatable + wipeable subspace** and wipe before returning the instance. Common patterns:
+
+   - **Tag-marker isolation.** Each fixture gets a unique marker tag (`fixture-${randomUUID()}`); your impl filters every operation by that tag; teardown removes everything carrying the tag.
+   - **Per-test database/schema.** Open a fresh schema/database per fixture; drop on teardown.
+   - **Per-test prefix.** Prefix every key/name with a fixture-unique string; teardown deletes by prefix.
+
+   The shared-substrate handling is your impl's responsibility — the conformance suite doesn't (and can't) know what isolation your substrate supports. If your impl can't isolate, your conformance pass is unreliable.
+
+   Phase 2 cold-adopter dogfood (2026-06-01): adopter built `AmpSkillStore` against AMP's shared skills vault, used a marker-domain-tag namespace per fixture + wiped before/after. 20/20 conformance.
+
 ## Reference implementations
 
 When in doubt about semantics, read the bundled impls:

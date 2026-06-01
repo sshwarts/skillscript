@@ -1,5 +1,95 @@
 # Changelog
 
+## 0.15.3 — 2026-06-01 — Phase 2 cold-adopter DX polish
+
+Four findings surfaced by the Phase 2 cold-adopter dogfood (custom
+`AmpSkillStore` fork against the AMP skills vault). None are runtime
+correctness bugs — the adopter completed Phase 2 with 20/20 conformance
+and all three Phase 1 demos green against their AMP-backed substrate.
+These are the DX seams an adopter improvised around to get there.
+
+### `./dashboard` added to package exports
+
+Pre-v0.15.3 the adopter-playbook + `examples/custom-bootstrap.example.ts`
+both directed adopters to mount `DashboardServer` on top of the bootstrap
+result, but `import "skillscript-runtime/dashboard/server.js"` failed with
+`ERR_PACKAGE_PATH_NOT_EXPORTED` — the subpath wasn't in the exports map.
+The Phase 2 adopter improvised around it via a deep-path hack
+(`./node_modules/skillscript-runtime/dist/dashboard/server.js`); v0.15.3
+makes the documented path actually resolve. `package.json` exports gains:
+
+```
+"./dashboard": {
+  "types": "./dist/dashboard/server.d.ts",
+  "import": "./dist/dashboard/server.js"
+}
+```
+
+Existing deep-path imports continue to work but are no longer required.
+dogfood-t7 case #3 updated from "10 public surface entries" → 11.
+
+### `adopter-playbook.md` flags `type: "module"` setup requirement
+
+The package is ESM-only. `npm init -y` (which the Phase 1 canonical
+workflow uses) produces a CJS `package.json` by default, which fails the
+first custom-bootstrap run with top-level-await / ESM-import errors.
+Phase 2 adopter hit this immediately. v0.15.3 adds a one-paragraph flag
+to the playbook's setup section directing adopters to run
+`npm pkg set type=module` before authoring bootstrap code.
+
+### SkillStoreTemplate + DataStoreTemplate READMEs document conformance
+namespacing for shared persistent substrates
+
+The conformance suite's `build()` callback is invoked per fixture, and
+the first stateful assertion expects `query()` on an empty store to
+return `[]`. For shared persistent substrates (AMP, Postgres, MongoDB —
+anything where state survives across `build()` calls), a naive `build()`
+that wraps the live store fails immediately because prior fixtures'
+state leaks in. The Phase 2 adopter caught this from reading the
+assertions directly (not the README), namespaced into a marker-domain-tag
+subspace per fixture + wiped before/after, and reached 20/20.
+
+v0.15.3 adds a "Running conformance against a shared persistent
+substrate" section to both template READMEs explaining the discipline
+explicitly: tag-marker isolation, per-test database/schema, per-test
+prefix. The conformance suite can't (and shouldn't) know what isolation
+your substrate supports — that's the impl's responsibility.
+
+### `data-store-roundtrip.skill.md` uses per-run marker for deterministic count
+
+Pre-v0.15.3 the demo's transcript implied a fixed "read back 1 items"
+count, but accumulated SqliteDataStore state across runs returned >= 1
+items as soon as the FTS query matched prior records. The Phase 2 adopter
+caught it (their probe showed "read back 2 items" — still a valid
+round-trip but misleading transcript).
+
+Fix: bind a per-run marker at runtime via `$set MARKER = "probe-${NOW}"`,
+embed it in the written record's content, and FTS-query for the same
+marker. The read count is now exactly 1 regardless of prior runs. Three
+sequential probes after the fix all return "read back 1 items" — the
+demo is now deterministic.
+
+### Files changed
+
+- `package.json` — `./dashboard` exports entry + version 0.15.2 → 0.15.3.
+- `docs/adopter-playbook.md` — `type: "module"` setup flag.
+- `examples/connectors/SkillStoreTemplate/README.md` — conformance namespacing section.
+- `examples/connectors/DataStoreTemplate/README.md` — parallel conformance namespacing section.
+- `examples/skillscripts/data-store-roundtrip.skill.md` — per-run marker + re-stamped.
+- `scaffold/skills/data-store-roundtrip.skill.md` — synced with examples/ version.
+- `tests/dogfood-t7.test.ts` — version assertion + exports map count (10 → 11).
+- `CHANGELOG.md` — this entry.
+
+### Cold-adopter dogfood arc state
+
+- Phase 1 findings (4): all closed in v0.15.1 + v0.15.2.
+- Phase 2 findings (4): all closed in v0.15.3.
+
+The dogfood has now validated both the canonical install path (Phase 1)
+and the custom typed-contract substrate fork path (Phase 2) via a real
+adopter walking each end-to-end. Phase 3 (if any) decides between custom
+DataStore, custom AgentConnector, or closing the arc.
+
 ## 0.15.2 — 2026-06-01 — `execute_skill` kwarg alignment
 
 Closes the fourth and final finding from the v0.15.0 cold-adopter Phase 1

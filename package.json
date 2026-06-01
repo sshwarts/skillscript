@@ -1,6 +1,6 @@
 {
   "name": "skillscript-runtime",
-  "version": "0.15.2",
+  "version": "0.15.3",
   "description": "Runtime, compiler, lint, CLI, and dashboard for Skillscript — a small declarative language for authoring agent workflows.",
   "license": "MIT",
   "author": "Scott Shwarts <scotts@pobox.com>",
@@ -47,6 +47,10 @@
     "./mcp-server": {
       "types": "./dist/mcp-server.d.ts",
       "import": "./dist/mcp-server.js"
+    },
+    "./dashboard": {
+      "types": "./dist/dashboard/server.d.ts",
+      "import": "./dist/dashboard/server.js"
     },
     "./testing": {
       "types": "./dist/testing/index.d.ts",

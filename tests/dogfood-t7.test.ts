@@ -24,8 +24,8 @@ const REPO_ROOT = join(__dirname, "..");
 const PACKAGE_JSON = JSON.parse(readFileSync(join(REPO_ROOT, "package.json"), "utf8")) as Record<string, unknown>;
 
 describe("T7 — package.json polish", () => {
-  it("1. version is 0.15.2 (execute_skill kwarg alignment: name canonical, skill_name back-compat alias)", () => {
-    expect(PACKAGE_JSON["version"]).toBe("0.15.2");
+  it("1. version is 0.15.3 (Phase 2 cold-adopter DX polish: ./dashboard export + type:module flag + conformance namespace docs + deterministic data-store demo)", () => {
+    expect(PACKAGE_JSON["version"]).toBe("0.15.3");
   });
 
   it("2. main + types + bin + engines.node ≥ 22.5 declared", () => {
@@ -37,11 +37,11 @@ describe("T7 — package.json polish", () => {
     expect(engines["node"]).toMatch(/^>=22/);
   });
 
-  it("3. exports map covers all 10 public surface entries", () => {
+  it("3. exports map covers all 11 public surface entries (v0.15.3 added ./dashboard for adopter DashboardServer mount)", () => {
     const exp = PACKAGE_JSON["exports"] as Record<string, unknown>;
     const expectedKeys = [
       ".", "./connectors", "./errors", "./runtime", "./trace",
-      "./metrics", "./scheduler", "./mcp-server", "./testing", "./package.json",
+      "./metrics", "./scheduler", "./mcp-server", "./dashboard", "./testing", "./package.json",
     ];
     for (const k of expectedKeys) expect(exp[k], `missing exports['${k}']`).toBeDefined();
   });
