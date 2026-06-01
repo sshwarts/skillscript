@@ -9,7 +9,7 @@ Worked examples + fork-me templates for adopter-written connectors. The bundled 
 | `SkillStore` | `FilesystemSkillStore`, `SqliteSkillStore` (in `src/connectors/`) | — | **[SkillStoreTemplate/](./SkillStoreTemplate/)** |
 | `DataStore` | `SqliteDataStore` (in `src/connectors/`) | — | **[DataStoreTemplate/](./DataStoreTemplate/)** |
 | `LocalModel` | `OllamaLocalModel` (in `src/connectors/`; opt-in via substrate config) | — | **[LocalModelTemplate/](./LocalModelTemplate/)** |
-| `McpConnector` | `RemoteMcpConnector`, `CallbackMcpConnector`, `LocalModelMcpConnector`, `DataStoreMcpConnector` (in `src/connectors/`) | — | **[McpConnectorTemplate/](./McpConnectorTemplate/)** |
+| `McpConnector` | `RemoteMcpConnector`, `CallbackMcpConnector`, `LocalModelMcpConnector`, `DataStoreMcpConnector`, `SkillStoreMcpConnector` (in `src/connectors/`) | — | **[McpConnectorTemplate/](./McpConnectorTemplate/)** |
 | `AgentConnector` | `NoOpAgentConnector` (in `src/connectors/`) | **[HttpWebhookAgentConnector/](./HttpWebhookAgentConnector/)** | — |
 
 **Bundled defaults** are runnable out of the box — wired through `connectors.json` substrate config or programmatic bootstrap.

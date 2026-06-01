@@ -20,12 +20,13 @@ import {
 import { Scheduler } from "skillscript-runtime/scheduler";
 import { FilesystemTraceStore } from "skillscript-runtime/trace";
 import { McpServer } from "skillscript-runtime/mcp-server";
-// Note: LocalModelMcpConnector + DataStoreMcpConnector are bridge classes
-// already exported from skillscript-runtime/connectors. They wrap any
-// typed-contract impl as an MCP-dispatchable connector.
+// Note: LocalModelMcpConnector + DataStoreMcpConnector + SkillStoreMcpConnector
+// are bridge classes already exported from skillscript-runtime/connectors.
+// They wrap any typed-contract impl as an MCP-dispatchable connector.
 import {
   LocalModelMcpConnector,
   DataStoreMcpConnector,
+  SkillStoreMcpConnector,
 } from "skillscript-runtime/connectors";
 
 import { FileDataStore } from "./file-data-store.js";
@@ -63,15 +64,25 @@ const agentConnector = new TmuxShellAgentConnector({
 });
 registry.registerAgentConnector("primary", agentConnector);
 
-// Step 3: wire bridges so `$ llm` / `$ data_read` / `$ data_write` dispatch
-// through the adopter substrates above (case 1 typed-contract wiring —
-// portable). The DataStore bridge handles BOTH read and write via toolName
-// discrimination; register the same instance under both connector names so
-// bare-form name-match resolution picks the right route.
+// Step 3: wire bridges so canonical in-skill `$ llm` / `$ data_read` /
+// `$ data_write` / `$ skill_read` / `$ skill_write` dispatch through the
+// adopter substrates above (case 1 typed-contract wiring — portable). Each
+// bridge handles its multi-verb surface via toolName discrimination;
+// register the same instance under each connector name so bare-form
+// name-match resolution picks the right route.
 registry.registerMcpConnector("llm", new LocalModelMcpConnector(openai));
 const dataBridge = new DataStoreMcpConnector(dataStore);
 registry.registerMcpConnector("data_read", dataBridge);
 registry.registerMcpConnector("data_write", dataBridge);
+// v0.15.0 — SkillStore-as-bridge. Makes `$ skill_write` / `$ skill_read`
+// dispatchable from inside an executing skill (Lisp-shape: skills program
+// skills). In-skill writes are forced to `# Status: Draft` at the bridge
+// layer per the v0.15.0 trust boundary — see `src/connectors/skill-store-mcp.ts`
+// header for the threat-model rationale. Outside-MCP `skill_write` (via the
+// wire surface) keeps its existing "body declares status" behavior.
+const skillBridge = new SkillStoreMcpConnector(skillStore);
+registry.registerMcpConnector("skill_read", skillBridge);
+registry.registerMcpConnector("skill_write", skillBridge);
 
 // Step 4: wire connectors.json instances (adopter-defined MCP servers).
 for (const c of connectors) {

@@ -24,8 +24,8 @@ const REPO_ROOT = join(__dirname, "..");
 const PACKAGE_JSON = JSON.parse(readFileSync(join(REPO_ROOT, "package.json"), "utf8")) as Record<string, unknown>;
 
 describe("T7 — package.json polish", () => {
-  it("1. version is 0.14.1 (contract-vs-runtime parity: mutation gate runtime enforcement + strict-filters substrate-side enforcement + docs/examples sweep)", () => {
-    expect(PACKAGE_JSON["version"]).toBe("0.14.1");
+  it("1. version is 0.15.0 (SkillStore-as-bridge: in-skill skill_write + Draft-default trust boundary + widened mutation gate)", () => {
+    expect(PACKAGE_JSON["version"]).toBe("0.15.0");
   });
 
   it("2. main + types + bin + engines.node ≥ 22.5 declared", () => {
@@ -75,13 +75,13 @@ describe("T7 — distributed code surface", () => {
     expect(out.trim(), `found AMP identifiers: ${out}`).toBe("");
   });
 
-  it("7. narrow-core LOC ceiling holds (< 9700 / 22 files; ..., v0.7.0 → 7150, v0.7.1 → 7250, v0.7.2 → 7550, v0.8.0 → 8200, v0.9.4 → 8300, v0.9.6 → 8550, v0.9.8 → 8650, v0.10 → 9300, v0.13 → 9550, v0.14.1 → 9700)", () => {
+  it("7. narrow-core LOC ceiling holds (< 9900 / 23 files; ..., v0.7.0 → 7150, v0.7.1 → 7250, v0.7.2 → 7550, v0.8.0 → 8200, v0.9.4 → 8300, v0.9.6 → 8550, v0.9.8 → 8650, v0.10 → 9300, v0.13 → 9550, v0.14.1 → 9700, v0.15.0 → 9900)", () => {
     const out = execSync("node scripts/loc-ceiling.mjs", { cwd: REPO_ROOT, encoding: "utf8" });
     const match = /CORE\s+(\d+) LOC across (\d+) files/.exec(out);
     expect(match).not.toBeNull();
     const [, locStr, filesStr] = match!;
-    expect(Number(locStr)).toBeLessThan(9700);
-    expect(Number(filesStr)).toBeLessThan(22);
+    expect(Number(locStr)).toBeLessThan(9900);
+    expect(Number(filesStr)).toBeLessThan(23);
   });
 
   it("8. connectors barrel re-exports types + Registry + bundled impls", () => {
@@ -95,6 +95,8 @@ describe("T7 — distributed code surface", () => {
     expect(barrel).toMatch(/OllamaLocalModel/);
     expect(barrel).toMatch(/SqliteDataStore/);
     expect(barrel).toMatch(/CallbackMcpConnector/);
+    // v0.15.0 — SkillStore-as-bridge.
+    expect(barrel).toMatch(/SkillStoreMcpConnector/);
   });
 });
 
@@ -163,7 +165,9 @@ describe("T7 — examples directory", () => {
     expect(count).toBeGreaterThanOrEqual(6);
     expect(existsSync(join(examplesDir, "README.md"))).toBe(true);
     expect(existsSync(join(examplesDir, "programmatic-trace-demo.mjs"))).toBe(true);
-    expect(existsSync(join(skillscriptsDir, "hello.skill.md"))).toBe(true);
+    expect(existsSync(join(skillscriptsDir, "hello-world.skill.md"))).toBe(true);
+    expect(existsSync(join(skillscriptsDir, "skill-store-roundtrip.skill.md"))).toBe(true);
+    expect(existsSync(join(skillscriptsDir, "data-store-roundtrip.skill.md"))).toBe(true);
   });
 
   it("13. all .skill.md examples lint clean", () => {
@@ -172,6 +176,31 @@ describe("T7 — examples directory", () => {
     for (const f of files) {
       // Tier-1 errors break compile; lint returns 0 iff there are no errors.
       execSync(`node ${join(REPO_ROOT, "dist/cli.js")} lint ${f}`, { encoding: "utf8" });
+    }
+  });
+
+  it("14. every bundled .skill.md has a valid `# Status: Approved v1:<token>` stamp matching its body (v0.15.0 structural guard)", async () => {
+    // v0.15.0 — bundled skills ship pre-stamped (so adopters can `cp` them
+    // into `$SKILLSCRIPT_HOME/skills/` and execute_skill({name}) immediately
+    // without a skill_write round-trip). Token = computeApprovalToken(body, "v1")
+    // = CRC32 over body-minus-status-line. If anyone edits a body without
+    // re-running `node scripts/stamp-bundled-skills.mjs`, this guard catches
+    // the drift on every `pnpm test`. Run the script to fix; do NOT modify
+    // the token by hand. Sibling structural-guard to #1 (hardcoded version)
+    // and #7 (LOC ceiling).
+    const { computeApprovalToken, extractStatusFromBody } = await import("../src/approval.js");
+    const skillscriptsDir = join(REPO_ROOT, "examples", "skillscripts");
+    const files = execSync(`ls ${skillscriptsDir}/*.skill.md`, { encoding: "utf8" }).trim().split("\n");
+    for (const f of files) {
+      const body = readFileSync(f, "utf8");
+      const extracted = extractStatusFromBody(body);
+      expect(extracted, `bundled skill ${f} missing # Status: header`).not.toBeNull();
+      // Bundled skills must ship Approved + stamped. Draft / Disabled
+      // entries are author-internal state, not shippable.
+      expect(extracted!.status, `bundled skill ${f} must be Approved (got ${extracted!.status})`).toBe("Approved");
+      expect(extracted!.approvalToken, `bundled skill ${f} must carry a v1:<token> stamp`).not.toBeNull();
+      const { version, token } = computeApprovalToken(body, "v1");
+      expect(extracted!.approvalToken, `bundled skill ${f} stamp drift — run \`node scripts/stamp-bundled-skills.mjs\``).toBe(`${version}:${token}`);
     }
   });
 });

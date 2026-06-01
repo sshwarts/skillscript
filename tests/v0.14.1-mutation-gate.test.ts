@@ -168,6 +168,89 @@ describe("v0.14.1 — mutation gate runtime enforcement: file_write", () => {
   });
 });
 
+describe("v0.15.0 — mutation gate widened: resource_action shapes", () => {
+  // v0.15.0 — MUTATING_TOOL_PATTERN broadened from prefix-anchored to
+  // underscore-boundary-anchored. Closes the discipline-only gap where
+  // `skill_write` / `memory_write` / `skill_update_status` slipped past
+  // the prefix pattern and only `data_write` got an explicit special-case.
+  // These unit cases verify the classifier behavior directly; the bridge
+  // dispatch path is covered by tests/v0.15.0-skill-store-bridge.test.ts.
+
+  it("classifies `$ skill_write` as mutating_tool", async () => {
+    const { classifyMutation } = await import("../src/mutation-gate.js");
+    const op = { kind: "$" as const, body: "skill_write name=\"hi\" source=\"...\"", target: "run" };
+    const c = classifyMutation(op as never);
+    expect(c).not.toBeNull();
+    expect(c!.kind).toBe("mutating_tool");
+    expect(c!.detail).toBe("skill_write");
+  });
+
+  it("classifies `$ skill_delete` as mutating_tool", async () => {
+    const { classifyMutation } = await import("../src/mutation-gate.js");
+    const op = { kind: "$" as const, body: "skill_delete name=\"hi\"", target: "run" };
+    const c = classifyMutation(op as never);
+    expect(c!.kind).toBe("mutating_tool");
+    expect(c!.detail).toBe("skill_delete");
+  });
+
+  it("classifies `$ memory_write` as mutating_tool", async () => {
+    const { classifyMutation } = await import("../src/mutation-gate.js");
+    const op = { kind: "$" as const, body: "memory_write content=\"...\"", target: "run" };
+    const c = classifyMutation(op as never);
+    expect(c!.kind).toBe("mutating_tool");
+  });
+
+  it("classifies `$ skill_update_status` as mutating_tool (interior _update_ boundary)", async () => {
+    const { classifyMutation } = await import("../src/mutation-gate.js");
+    const op = { kind: "$" as const, body: "skill_update_status name=\"hi\" status=\"Approved\"", target: "run" };
+    const c = classifyMutation(op as never);
+    expect(c!.kind).toBe("mutating_tool");
+  });
+
+  it("still classifies `$ data_write` with its explicit kind for back-compat", async () => {
+    const { classifyMutation } = await import("../src/mutation-gate.js");
+    const op = { kind: "$" as const, body: "data_write content=\"...\"", target: "run" };
+    const c = classifyMutation(op as never);
+    expect(c!.kind).toBe("data_write");
+  });
+
+  it("still classifies prefix-shape `$ write_record` as mutating_tool", async () => {
+    const { classifyMutation } = await import("../src/mutation-gate.js");
+    const op = { kind: "$" as const, body: "write_record id=\"1\"", target: "run" };
+    const c = classifyMutation(op as never);
+    expect(c!.kind).toBe("mutating_tool");
+  });
+
+  it("does NOT classify `$ data_read` (read is not a mutation verb)", async () => {
+    const { classifyMutation } = await import("../src/mutation-gate.js");
+    const op = { kind: "$" as const, body: "data_read mode=\"fts\" query=\"x\"", target: "run" };
+    expect(classifyMutation(op as never)).toBeNull();
+  });
+
+  it("does NOT classify `$ skill_read`", async () => {
+    const { classifyMutation } = await import("../src/mutation-gate.js");
+    const op = { kind: "$" as const, body: "skill_read name=\"x\"", target: "run" };
+    expect(classifyMutation(op as never)).toBeNull();
+  });
+
+  it("does NOT classify `$ data_writer` (no underscore/end boundary after verb)", async () => {
+    const { classifyMutation } = await import("../src/mutation-gate.js");
+    // Edge case: `data_writer` contains the substring `write` but not as
+    // a delimited token. Pattern requires `(?:_|$)` after the verb.
+    const op = { kind: "$" as const, body: "data_writer noop=\"true\"", target: "run" };
+    expect(classifyMutation(op as never)).toBeNull();
+  });
+
+  it("does NOT classify `$ create_d_at_field` (verb 'create' not bounded by `_` or `$`)", async () => {
+    // Sanity: `created_at` and similar identifier-ish names with trailing
+    // letters after the verb (e.g. "created") should NOT classify, even
+    // when the verb appears as a substring.
+    const { classifyMutation } = await import("../src/mutation-gate.js");
+    const op = { kind: "$" as const, body: "created_at value=\"now\"", target: "run" };
+    expect(classifyMutation(op as never)).toBeNull();
+  });
+});
+
 describe("v0.14.1 — mutation gate Layer B regression guard", () => {
   it("fail-closed default authState — calling execOpInner-ish bypass throws", async () => {
     // This is a sanity check that the Layer B `case "$"` re-check inside

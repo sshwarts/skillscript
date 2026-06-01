@@ -18,6 +18,13 @@
  *   - `DataStoreMcpConnector` — bridges a registered DataStore as
  *     `$ data_read mode=...` MCP dispatch. Auto-wired when DataStore substrate
  *     is configured.
+ *   - `SkillStoreMcpConnector` (v0.15.0) — bridges a registered SkillStore as
+ *     `$ skill_write` / `$ skill_read` MCP dispatch. Makes the Lisp-shape
+ *     primitive (skills program skills) work from inside an executing skill.
+ *     Auto-wired against `substrate.skill_store`. In-skill writes are forced
+ *     to `# Status: Draft` at the bridge per the v0.15.0 trust boundary —
+ *     see `src/connectors/skill-store-mcp.ts` header for the threat-model
+ *     rationale.
  *
  * Fork from this template when none of those fit — e.g.:
  *   - Direct HTTP MCP (JSON-RPC over HTTP, no child process)

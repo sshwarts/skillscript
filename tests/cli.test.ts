@@ -40,27 +40,27 @@ describe("skillfile CLI", () => {
     expect(r.stdout).toMatch(/--input KEY=value/);
   });
 
-  it("runs hello.skill end-to-end with bundled example", () => {
-    const r = runCli(["execute", "examples/skillscripts/hello.skill.md"]);
+  it("runs hello-world.skill end-to-end with bundled example", () => {
+    const r = runCli(["execute", "examples/skillscripts/hello-world.skill.md"]);
     expect(r.code).toBe(0);
     expect(r.stdout).toMatch(/Hello, world!/);
   });
 
   it("threads --input overrides", () => {
-    const r = runCli(["execute", "examples/skillscripts/hello.skill.md", "--input", "WHO=Scott"]);
+    const r = runCli(["execute", "examples/skillscripts/hello-world.skill.md", "--input", "WHO=Scott"]);
     expect(r.code).toBe(0);
     expect(r.stdout).toMatch(/Hello, Scott!/);
   });
 
   it("compile emits the rendered artifact", () => {
-    const r = runCli(["compile", "examples/skillscripts/hello.skill.md"]);
+    const r = runCli(["compile", "examples/skillscripts/hello-world.skill.md"]);
     expect(r.code).toBe(0);
-    expect(r.stdout).toMatch(/# Skill: hello/);
+    expect(r.stdout).toMatch(/# Skill: hello-world/);
     expect(r.stdout).toMatch(/Tell the user: Hello, world!/);
   });
 
   it("lint reports no findings on the bundled example", () => {
-    const r = runCli(["lint", "examples/skillscripts/hello.skill.md"]);
+    const r = runCli(["lint", "examples/skillscripts/hello-world.skill.md"]);
     expect(r.code).toBe(0);
     expect(r.stdout).toMatch(/OK: no findings/);
   });
@@ -70,8 +70,8 @@ describe("skillfile CLI", () => {
     const r = runCli(["init"], { SKILLSCRIPT_HOME: home });
     expect(r.code).toBe(0);
     expect(r.stdout).toMatch(/Initialized/);
-    // hello.skill should be discoverable after init.
-    const r2 = runCli(["execute", "examples/skillscripts/hello.skill.md"], { SKILLSCRIPT_HOME: home });
+    // hello-world.skill should be discoverable after init.
+    const r2 = runCli(["execute", "examples/skillscripts/hello-world.skill.md"], { SKILLSCRIPT_HOME: home });
     expect(r2.code).toBe(0);
     expect(r2.stdout).toMatch(/Hello, world!/);
   });
@@ -133,12 +133,12 @@ default: b
   it("sign + verify round-trip on the bundled example", () => {
     const home = mkdtempSync(resolve(tmpdir(), "skillscript-test-"));
     runCli(["init"], { SKILLSCRIPT_HOME: home });
-    const signOut = runCli(["sign", "examples/skillscripts/hello.skill.md"], { SKILLSCRIPT_HOME: home });
+    const signOut = runCli(["sign", "examples/skillscripts/hello-world.skill.md"], { SKILLSCRIPT_HOME: home });
     expect(signOut.code).toBe(0);
     const sig = JSON.parse(signOut.stdout) as { content_hash: string; algorithm: string };
     expect(sig.algorithm).toBe("sha256");
     expect(sig.content_hash).toMatch(/^[a-f0-9]{64}$/);
-    const verifyOut = runCli(["verify", "examples/skillscripts/hello.skill.md", sig.content_hash], { SKILLSCRIPT_HOME: home });
+    const verifyOut = runCli(["verify", "examples/skillscripts/hello-world.skill.md", sig.content_hash], { SKILLSCRIPT_HOME: home });
     expect(verifyOut.code).toBe(0);
     expect(verifyOut.stdout).toMatch(/"verified": true/);
   });
@@ -146,7 +146,7 @@ default: b
   it("verify fails (exit 1) on tampered signature", () => {
     const home = mkdtempSync(resolve(tmpdir(), "skillscript-test-"));
     runCli(["init"], { SKILLSCRIPT_HOME: home });
-    const r = runCli(["verify", "examples/skillscripts/hello.skill.md", "deadbeef".repeat(8)], { SKILLSCRIPT_HOME: home });
+    const r = runCli(["verify", "examples/skillscripts/hello-world.skill.md", "deadbeef".repeat(8)], { SKILLSCRIPT_HOME: home });
     expect(r.code).toBe(1);
     expect(r.stdout).toMatch(/"verified": false/);
   });

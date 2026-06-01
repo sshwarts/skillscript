@@ -89,17 +89,28 @@ registry.registerSkillStore("primary", skillStore);
 //   registry.registerDataStore("primary", new MyDataStoreAdapter(...));
 //   registry.registerAgentConnector("primary", new MyAgentHarnessAdapter(...));
 
-// Then wire bridges if you want the canonical `$ llm` / `$ data_read` /
-// `$ data_write` surfaces. The DataStore bridge handles BOTH read and
-// write via toolName discrimination; register the same instance under both
-// connector names so bare-form name-match resolution picks the right route.
-//   import { LocalModelMcpConnector, DataStoreMcpConnector } from "skillscript-runtime";
+// Then wire bridges if you want the canonical in-skill `$ llm` /
+// `$ data_read` / `$ data_write` / `$ skill_read` / `$ skill_write`
+// surfaces. Each bridge handles its multi-verb tool surface via toolName
+// discrimination; register the same instance under each connector name so
+// bare-form name-match resolution picks the right route.
+//   import { LocalModelMcpConnector, DataStoreMcpConnector, SkillStoreMcpConnector } from "skillscript-runtime";
 //   registry.registerMcpConnector("llm", new LocalModelMcpConnector(registry.getLocalModel("default")));
 //   const ms = registry.listDataStores().find((e) => e.name === "primary");
 //   if (ms !== undefined) {
 //     const dataBridge = new DataStoreMcpConnector(ms.instance);
 //     registry.registerMcpConnector("data_read", dataBridge);
 //     registry.registerMcpConnector("data_write", dataBridge);
+//   }
+//   // v0.15.0 — SkillStore-as-bridge. Makes `$ skill_write` / `$ skill_read`
+//   // dispatchable from inside an executing skill (Lisp-shape: skills program
+//   // skills). In-skill writes are Draft-forced at the bridge layer; outside-MCP
+//   // skill_write keeps the existing "body declares status" behavior.
+//   const ss = registry.listSkillStores().find((e) => e.name === "primary");
+//   if (ss !== undefined) {
+//     const skillBridge = new SkillStoreMcpConnector(ss.instance);
+//     registry.registerMcpConnector("skill_read", skillBridge);
+//     registry.registerMcpConnector("skill_write", skillBridge);
 //   }
 
 // Wire any connectors.json instances.

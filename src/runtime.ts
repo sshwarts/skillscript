@@ -1,7 +1,7 @@
 import type { ParsedSkill, SkillOp, OutputDecl } from "./parser.js";
 import type { DeliveryMeta, DeliveryReceipt } from "./connectors/agent.js";
 import { randomUUID } from "node:crypto";
-import { tokenizeKeywordArgs, processSetValue } from "./parser.js";
+import { tokenizeKeywordArgs, processSetValue, interpretDoubleQuotedEscapes } from "./parser.js";
 import { applyFilter, parseFilterChain } from "./filters.js";
 import { dispatchExecuteSkillIntercept } from "./composition.js";
 import type { Registry } from "./connectors/registry.js";
@@ -1512,11 +1512,28 @@ function parseToolArgs(argsStr: string): Record<string, unknown> {
  */
 function coerceKwargValue(raw: string): unknown {
   const trimmed = raw.replace(/\s+$/, "");
-  // Quoted → strip, return as string (no further coercion).
+  // v0.15.0 — triple-quote `"""..."""` multi-line literal. Strip the
+  // outer triples + interpret \n/\t/\\/\" escapes inside. Mirrors
+  // processSetValue's triple-quote path (parser.ts:669). Authors use
+  // this for multi-line bodies passed as kwarg values (e.g.
+  // `$ skill_write source="""# Skill: child\nrun: ..."""`).
+  if (trimmed.length >= 6 && trimmed.startsWith('"""') && trimmed.endsWith('"""')) {
+    return interpretDoubleQuotedEscapes(trimmed.slice(3, -3));
+  }
   if (trimmed.length >= 2) {
     const first = trimmed[0]!;
     const last = trimmed[trimmed.length - 1]!;
-    if ((first === '"' && last === '"') || (first === "'" && last === "'")) {
+    if (first === '"' && last === '"') {
+      // v0.15.0 — interpret \n / \t / \\ / \" escapes (matches
+      // processSetValue's behavior for $set + function-call kwargs).
+      // Closes the discipline-only-contract gap where $ op kwarg values
+      // were the only string-bearing surface not running escape
+      // interpretation — surfaced by the skill-store-roundtrip demo
+      // probe (cold-adopter dogfood, 2026-06-01).
+      return interpretDoubleQuotedEscapes(trimmed.slice(1, -1));
+    }
+    if (first === "'" && last === "'") {
+      // Single-quoted: literal pass-through (parallel to processSetValue).
       return trimmed.slice(1, -1);
     }
   }

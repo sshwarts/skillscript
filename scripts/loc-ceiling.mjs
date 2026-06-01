@@ -195,11 +195,23 @@ const CORE_PATHS = [
 // (~20 LOC). lint.ts net-saved ~25 LOC by lifting the classifier +
 // predicate into the shared helper. Defaults-over-knobs +
 // defense-in-depth: lint stays advisory, runtime is load-bearing,
-// fail-closed default authState. Per Scott's "LOC ceiling is a signal
-// not a budget" rule — clear code wins over compression. File ceiling
-// (22) unchanged; CORE is at 18 files with plenty of slack.
-const NARROW_MAX_LOC = 9700;
-const NARROW_MAX_FILES = 22;
+// fail-closed default authState.
+// v0.15.0: nudged narrow ceiling 9700 → 9900 (and file count 22 → 23)
+// for the SkillStore-as-bridge arc. New `connectors/skill-store-mcp.ts`
+// (~95 LOC, parallel to data-store-mcp.ts; exposes skill_write + skill_read
+// as in-skill dispatchable tools so the Lisp-shape primitive — skills
+// program skills — works from inside a running skill). Mutation gate
+// pattern widened from prefix-anchored to underscore-boundary-anchored
+// (no LOC delta, structural simplification; subsumes the explicit
+// data_write special-case). bootstrap.ts auto-wires the bridge under
+// skill_read + skill_write (3 LOC). In-skill writes are forced to
+// `# Status: Draft` at the bridge (forceDraftStatus helper, ~15 LOC) per
+// the Perry-thread `f2a85892` trust-model decision: different threat
+// model from data_write (executable artifact = unbounded blast radius;
+// data row = bounded). Per Scott's "LOC ceiling is a signal not a budget"
+// rule — clear code wins over compression.
+const NARROW_MAX_LOC = 9900;
+const NARROW_MAX_FILES = 23;
 const BROAD_INFO_LOC = 9500;
 const BROAD_INFO_FILES = 28;
 

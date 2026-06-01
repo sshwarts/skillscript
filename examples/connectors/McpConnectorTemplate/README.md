@@ -9,7 +9,8 @@ A skeleton `McpConnector` implementation for adopters writing their own. Not run
 | `RemoteMcpConnector` | Stdio bridging to remote MCP servers (`npx mcp-remote ...`). YouTrack, GitHub, Linear, most adopter MCP wiring goes through this. JSON-configurable via `connectors.json`. |
 | `CallbackMcpConnector` | Wraps a JS function. Test rigs + embedder-wired transports where the dispatch is local code. |
 | `LocalModelMcpConnector` | Bridges a registered `LocalModel` as `$ llm prompt=...`. Auto-wired when `substrate.local_model` is set. |
-| `DataStoreMcpConnector` | Bridges a registered `DataStore` as `$ data_read mode=...`. Auto-wired when `substrate.data_store` is set. |
+| `DataStoreMcpConnector` | Bridges a registered `DataStore` as `$ data_read mode=...` + `$ data_write content=...`. Auto-wired when `substrate.data_store` is set. |
+| `SkillStoreMcpConnector` (v0.15.0) | Bridges a registered `SkillStore` as in-skill `$ skill_write` + `$ skill_read` dispatch (Lisp-shape: skills program skills). Auto-wired against `substrate.skill_store`. In-skill writes are forced to `# Status: Draft` at the bridge per the v0.15.0 trust boundary. |
 
 **Fork this template only when none of those fit** — e.g.:
 
@@ -139,7 +140,7 @@ The declarative path is the canonical adopter pattern for stdio-bridged remote M
 | Cardinality | Many instances per deployment | One singleton per slot |
 | Substrate config | Per-instance via top-level keys | `substrate` section short/object/custom |
 | Class extensibility | `registerConnectorClass()` for adopter-custom classes | Programmatic bootstrap (or `substrate.skill_store: {type: "custom", ...}` once async-bootstrap lands) |
-| Auto-wired bridges | `llm` + `data_read` + `data_write` (LocalModel + DataStore exposed via bridge connectors) | n/a (these ARE the substrates being bridged) |
+| Auto-wired bridges | `llm` + `data_read` + `data_write` + `skill_read` + `skill_write` (v0.15.0 — LocalModel + DataStore + SkillStore exposed via bridge connectors) | n/a (these ARE the substrates being bridged) |
 
 McpConnector is fundamentally the "dispatch to external tools" surface — narrowest contract, broadest range of impls.
 

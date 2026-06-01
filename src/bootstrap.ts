@@ -32,6 +32,7 @@ import { SqliteDataStore } from "./connectors/data-store.js";
 import { OllamaLocalModel } from "./connectors/local-model.js";
 import { LocalModelMcpConnector } from "./connectors/local-model-mcp.js";
 import { DataStoreMcpConnector } from "./connectors/data-store-mcp.js";
+import { SkillStoreMcpConnector } from "./connectors/skill-store-mcp.js";
 import { loadConnectorsConfig, detectGitignoreRisk, type SubstrateConfig, type SubstrateChoice } from "./connectors/config.js";
 import { FilesystemTraceStore } from "./trace.js";
 import { Scheduler, type ResolvableTriggerSource, type TriggerRegistration } from "./scheduler.js";
@@ -213,6 +214,16 @@ export function defaultRegistry(opts: DefaultRegistryOpts): { registry: Registry
     registry.registerMcpConnector("data_read", bridge);
     registry.registerMcpConnector("data_write", bridge);
   }
+
+  // v0.15.0 — SkillStore-as-bridge. Same instance registered under both
+  // names so `$ skill_write` / `$ skill_read` from inside an executing skill
+  // route here. Closes the substrate-symmetry gap where DataStore was
+  // in-skill dispatchable but SkillStore was wire-only. In-skill writes are
+  // forced to `# Status: Draft` per the bridge's threat-model boundary; see
+  // src/connectors/skill-store-mcp.ts header.
+  const skillBridge = new SkillStoreMcpConnector(skillStore);
+  registry.registerMcpConnector("skill_read", skillBridge);
+  registry.registerMcpConnector("skill_write", skillBridge);
 
   return { registry, skillStore };
 }

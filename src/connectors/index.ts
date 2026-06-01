@@ -84,6 +84,10 @@ export { NoOpAgentConnector } from "./agent-noop.js";
 // dispatch surfaces.
 export { LocalModelMcpConnector } from "./local-model-mcp.js";
 export { DataStoreMcpConnector } from "./data-store-mcp.js";
+// v0.15.0 — SkillStore-as-bridge. Makes `$ skill_write` / `$ skill_read` /
+// `$ skill_delete` work as in-skill dispatch. Closes substrate-symmetry
+// asymmetry with DataStoreMcpConnector. See src/connectors/skill-store-mcp.ts.
+export { SkillStoreMcpConnector } from "./skill-store-mcp.js";
 
 // v0.7.3 — adopter-extensible connector class registry. Adopters with a
 // custom `McpConnector` class that's JSON-instantiable via `connectors.json`

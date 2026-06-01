@@ -1,5 +1,5 @@
 # Skill: morning-brief
-# Status: Approved v1:037c18af
+# Status: Approved v1:091ae2ae
 # Description: Compose a daily morning brief from calendar, mailbox, and overnight data writes when the cron trigger fires at 7am. Delivers via the agent: lifecycle hook to the receiving agent, who decides whether to surface to Slack / Discord / etc.
 # Vars: AGENT, BRIEF_HORIZON_HOURS=24
 # Triggers: cron: 0 7 * * *

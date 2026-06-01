@@ -205,18 +205,50 @@ export function evaluateApprovalGate(body: string): ApprovalVerification {
  * runnable fixture body programmatically. The function recomputes the
  * token over the body MINUS its `# Status:` line so the stamp is
  * idempotent regardless of the body's current header state.
+ *
+ * v0.15.0 — only replaces a `# Status:` line in the HEADER BLOCK (lines
+ * from start until the first blank line or first non-`#`-comment line).
+ * Pre-v0.15.0 the unbounded `/^# Status:/m` regex matched any line in
+ * the body — including `# Status:` text inside string literals (e.g.
+ * a parent skill that writes a child via `$ skill_write source="...# Status: Approved..."`).
+ * Bug surfaced by the skill-store-roundtrip demo (cold-adopter probe,
+ * 2026-06-01): the stamper mutated the inner string content + skipped
+ * stamping the parent.
  */
 export function stampApprovalToken(body: string, version?: string): string {
   const v = version ?? PREFERRED_VERSION;
   const token = computeApprovalToken(body, v);
   const line = `# Status: Approved ${token.version}:${token.token}`;
-  if (/^\s*#\s*Status\s*:/m.test(body)) {
-    return body.replace(/^\s*#\s*Status\s*:.*$/m, line);
+  const headerStatusLine = findHeaderStatusLine(body);
+  if (headerStatusLine !== null) {
+    const lines = body.split("\n");
+    lines[headerStatusLine] = line;
+    return lines.join("\n");
   }
   if (/^#\s*Skill\s*:/m.test(body)) {
     return body.replace(/^(#\s*Skill\s*:.*?)$/m, `$1\n${line}`);
   }
   return `${line}\n${body}`;
+}
+
+/**
+ * Find the line index of the `# Status:` header in the body's HEADER
+ * BLOCK, or null if none exists. The header block is the contiguous
+ * `#`-comment lines at the top of the body, terminated by the first
+ * blank line or the first non-`#`-prefixed line. Skill-content inside
+ * string literals (e.g. `source="""# Status: ..."""`) lives below the
+ * header block, so this scan stops short and leaves it untouched.
+ */
+function findHeaderStatusLine(body: string): number | null {
+  const lines = body.split("\n");
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i]!;
+    const trimmed = line.trim();
+    // Blank line or non-`#`-comment terminates the header block.
+    if (trimmed === "" || !trimmed.startsWith("#")) return null;
+    if (/^#\s*Status\s*:/.test(trimmed)) return i;
+  }
+  return null;
 }
 
 // ─── v1: CRC32 reference impl ─────────────────────────────────────────────────

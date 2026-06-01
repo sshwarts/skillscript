@@ -1,5 +1,184 @@
 # Changelog
 
+## 0.15.0 — 2026-06-01 — SkillStore-as-bridge: in-skill `$ skill_write` + Draft-default trust boundary
+
+The "skills can write skills" Lisp-shape primitive now works from inside a
+running skill — not just on the outside MCP wire. v0.15.0 wires the SkillStore
+as an `McpConnector` so `$ skill_write` and `$ skill_read` are dispatchable
+from in-skill code, closing the substrate-symmetry asymmetry where `$ data_write`
+worked in-skill (via `DataStoreMcpConnector` bootstrap wiring) but SkillStore
+mutators required outside-MCP dispatch.
+
+Pairs with two structural fixes from the same arc: the mutation gate now
+catches resource_action names structurally (no more explicit `data_write`
+special-case), and three bundled Phase 1+ demo skills ship pre-stamped with
+valid approval tokens — `cp` from `node_modules/skillscript-runtime/examples/skillscripts/`
+into `$SKILLSCRIPT_HOME/skills/` and `execute_skill({name})` runs immediately.
+
+### New: `SkillStoreMcpConnector` bridge — `$ skill_write` works in-skill
+
+Parallel structure to `DataStoreMcpConnector`. Bootstrap auto-registers the
+bridge under `skill_read` and `skill_write` so bare-form dispatch from inside
+an executing skill resolves to the substrate:
+
+```
+# Skill: parent
+# Status: Approved v1:...
+# Autonomous: true
+run:
+    $ skill_write name="generated-child" source="..." -> W
+    $ skill_read name="generated-child" -> R
+    emit(text="wrote ${W.name}; read ${R.source|length} bytes")
+default: run
+```
+
+Use case: agent factories, template materialization, dynamic skill libraries —
+the "skill that writes a classic Anthropic skill to the SkillStore" pattern
+becomes a usable in-skill primitive.
+
+### Trust boundary: in-skill writes force `# Status: Draft`
+
+In-skill `$ skill_write` overrides any `# Status: Approved` declaration in
+the written body, stamping `# Status: Draft` instead. To make the written
+skill runnable, an authorized agent (human via dashboard, or MCP-direct)
+reviews and promotes via the outside-MCP `skill_status` tool.
+
+Different threat model from `$ data_write`: a bad `data_write` lands one
+bad row (bounded blast radius); a bad `skill_write` lands an executable
+artifact that fires arbitrarily many times in arbitrary contexts (unbounded).
+The Draft-default gate prevents an Autonomous parent that calls
+`~ qwen prompt="generate a skill"` and writes the LLM output from creating
+immediately-runnable skills with zero human review.
+
+The Lisp-shape primitive (skill-writes-skill) is preserved. Only
+immediate-loop execution (parent writes child, child runs same fire) is
+gated. Outside-MCP `skill_write` (cold-author agents authoring directly)
+keeps its existing "body declares status, auto-stamp via store" behavior.
+
+### Bridge surface (v0.15.0): write + read only
+
+- `$ skill_write name="..." source="..." [overwrite=true] -> R` — Draft-only override applied here.
+- `$ skill_read name="..." [version="..."] -> R` — returns body, status, version.
+
+Deferred to a later release with threat-model context attached:
+- `skill_delete` — destructive; no use case articulated yet.
+- `skill_update_status` — the gate-bypassing op (Draft → Approved). Allowing
+  it in-skill would let an Autonomous parent both write Draft AND promote
+  Approved in the same fire, defeating the Draft-default trust boundary.
+
+### Mutation gate widened — structural fix, not enumeration
+
+`MUTATING_TOOL_PATTERN` changed from prefix-anchored (`/^(?:write_|update_|...)/ `)
+to underscore-boundary-anchored (`/(?:^|_)(?:write|update|...)(?:_|$)/`).
+
+Resource_action shapes (`skill_write`, `skill_delete`, `memory_write`,
+`skill_update_status`) now classify uniformly with action_resource shapes
+(`write_file`, `update_status`). The pattern subsumes the v0.14.1 explicit
+`data_write` special-case; `data_write` keeps its kind tag for back-compat
+in error copy but no longer needs name-specific recognition.
+
+Closes the discipline-only-contract gap structurally — the gate doesn't
+care how a new mutating tool is named, as long as its name carries a
+recognized verb token. False-positive guards: `data_writer` (no boundary
+after verb), `created_at` (no boundary after verb), `data_read` (no verb
+in token list) all correctly pass through.
+
+### New: three pre-stamped bundled Phase 1+ demo skills
+
+`examples/skillscripts/`:
+
+- `hello-world.skill.md` — no substrate, baseline runtime check. `# Vars: WHO=world` demonstrates `--input` threading. Supersedes `hello.skill.md`.
+- `skill-store-roundtrip.skill.md` — writes a child skill via `$ skill_write`, reads it back via `$ skill_read`, exercises the Lisp-shape primitive. Body explicitly comments the Draft-default gate.
+- `data-store-roundtrip.skill.md` — `$ data_write` + `$ data_read` FTS round-trip.
+
+All three ship with valid `# Status: Approved v1:<token>` stamps. Adopters
+`cp` them into `$SKILLSCRIPT_HOME/skills/` and `execute_skill({name})` works
+out of the box — no `skill_write` round-trip needed for Phase 1 dogfood.
+
+### New: token-stamp integrity CI guard
+
+`tests/dogfood-t7.test.ts` case #14 — for every `examples/skillscripts/*.skill.md`,
+recompute `computeApprovalToken(body, "v1")` and assert it matches the stamp
+in the file. Catches body-edit-without-restamp drift on every `pnpm test`.
+Fix path: `node scripts/stamp-bundled-skills.mjs` (idempotent; only writes
+when the body actually changed). Sibling structural-guard pattern to the
+hardcoded version assertion (case #1) and the LOC ceiling test (case #7).
+
+### Breaking: `hello.skill.md` → `hello-world.skill.md`
+
+The legacy `examples/skillscripts/hello.skill.md` (Draft, no approval
+stamp) is replaced by `hello-world.skill.md` (Approved, stamped). The
+scaffold copy (`scaffold/examples/hello-world.skill.md`) is what
+`skillfile init` copies into `$SKILLSCRIPT_HOME/examples/`. Adopters
+referencing the old path need to update.
+
+### Docs
+
+- `examples/README.md` — restructured to highlight the three Phase 1+
+  demos. The "Connector requirements" table flags the new no-deps
+  baseline (`hello-world.skill.md`).
+- `src/cli.ts` per-command `--help` examples updated to point at the
+  new filename.
+
+### Files changed
+
+- New: `src/connectors/skill-store-mcp.ts` (~95 LOC; bridge + `forceDraftStatus`).
+- New: `examples/skillscripts/{hello-world, skill-store-roundtrip, data-store-roundtrip}.skill.md`.
+- New: `scaffold/examples/hello-world.skill.md`.
+- New: `scripts/stamp-bundled-skills.mjs` (idempotent stamper, run on body edits).
+- New: `tests/v0.15.0-skill-store-bridge.test.ts` (16 cases).
+- Removed: `examples/skillscripts/hello.skill.md`, `.provenance.json`, `scaffold/examples/hello.skill.md`.
+- Updated: `src/mutation-gate.ts` (pattern widened), `src/connectors/index.ts` (bridge re-export), `src/connectors/config.ts` (bridge in KNOWN_CONNECTOR_CLASSES), `src/bootstrap.ts` (bridge auto-wire), `src/cli.ts` (hello-world references), `tests/v0.14.1-mutation-gate.test.ts` (10 new cases for widened pattern), `tests/dogfood-t7.test.ts` (version + LOC ceiling + file count + token-stamp guard + bundled-skills existsSync).
+
+### Why v0.15.0 not v0.14.2
+
+New dispatch surface (SkillStore as in-skill bridge) — minor bump, not patch.
+Per the pre-adoption rule (no external users yet, no published install base),
+the bump is cheap; matching the version to the size of the claim avoids
+underclaiming.
+
+### Parser hardening — `\"` escape + `interpretDoubleQuotedEscapes` consistency
+
+Cold-adopter probe of `skill-store-roundtrip` surfaced three discipline-only
+gaps in the string-escape surface — closed in v0.15.0:
+
+1. **`tokenizeKeywordArgs` + `extractParenBody` didn't honor `\"` inside quoted
+   strings.** `$ skill_write source="...emit(text=\"hi\")..."` truncated at
+   the first internal `\"`. Both quote-state machines now recognize `\"`,
+   `\'`, `\\` as escapes inside their corresponding quote pair.
+2. **`coerceKwargValue` (runtime $ op kwarg path) stripped quotes but didn't
+   interpret escapes** — inconsistent with `processSetValue` (used for `$set`
+   + function-call kwargs since v0.7.2). Now calls the shared
+   `interpretDoubleQuotedEscapes` for double-quoted values, preserves
+   single-quoted as literal, handles triple-quote `"""..."""` multi-line
+   literals. `$ skill_write source="...\n..."` lands real newlines.
+3. **`stampApprovalToken` regex matched any `# Status:` line in the body** —
+   including ones inside string literals. When a parent skill body contained
+   `source="...# Status: Approved..."` and lacked its own outer Status header,
+   the stamper mutated the inner string content. Now only considers
+   `# Status:` lines inside the HEADER BLOCK (lines from start until first
+   blank line or first non-`#`-comment line).
+
+`interpretDoubleQuotedEscapes` is now exported from `parser.ts` (previously
+internal) so runtime + future call sites can share the implementation.
+
+### Architecture invariants reinforced
+
+- **Discipline-only contracts are bugs** — the prefix-only pattern + explicit
+  `data_write` special-case combo was the recurring shape. Underscore-boundary
+  pattern + drop-the-special-case is the structural fix. The parser-hardening
+  pass is the same lens applied to string-escape interpretation: `processSetValue`
+  did it for some kwarg contexts, `coerceKwargValue` didn't for `$` op
+  kwargs — silent-inconsistency surface eliminated.
+- **Capability granularity follows threat model, not implementation convenience** —
+  banked from Perry's `f2a85892` thread reply. data_write's bounded blast
+  radius vs skill_write's unbounded blast radius is the lens that drove the
+  Draft-default boundary. Symmetric-for-symmetry's-sake would have been the bug.
+- **Build/probe before claiming done** — banking the lesson that running
+  `pnpm test` alone wasn't enough; the in-skill `$ skill_write` demo only
+  surfaced as broken when actually executed via CLI. Test fixtures wrote
+  short bodies that didn't trigger the tokenization edge cases.
+
 ## 0.14.1 — 2026-05-31 — Contract-vs-runtime parity: mutation gate + strict filters
 
 Cold-adopter Phase 1 v4 dogfood against v0.14.0 closed clean on substrate-portability

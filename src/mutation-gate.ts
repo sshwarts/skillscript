@@ -19,16 +19,22 @@ import type { SkillOp } from "./parser.js";
 
 /**
  * Mutating-tool name shapes that trigger mutation classification when used
- * with a bare `$ tool` dispatch. The pattern is a curated allowlist of
- * conventional mutation-verb prefixes — `write_`, `update_`, `delete_`,
- * etc. — extended over time as the wild-and-crazy harness surfaces new
- * mutation clusters (`archive_`, `prune_`, `deploy_`, `expire_`, ...).
+ * with a bare `$ tool` dispatch. v0.15.0 broadens the pattern from prefix-
+ * anchored (`/^(?:write_|update_|...)/ `) to underscore-boundary-anchored,
+ * so resource_action names (skill_write, skill_delete, memory_write,
+ * skill_update_status) classify uniformly with action_resource names
+ * (write_file, update_status). Verbs are matched as underscore-delimited
+ * tokens — `data_writer` is NOT a mutation (no boundary after "write"),
+ * but `data_write`, `write_file`, and `pre_write_audit` all are.
  *
- * Substrate-specific mutating tools whose names don't match the prefix
- * list aren't auto-classified; authors can still declare intent via
+ * Closes the discipline-only-contract gap where the prefix pattern silently
+ * passed `skill_write` while explicit special-casing caught `data_write`.
+ *
+ * Substrate-specific mutating tools whose names don't fit any verb token
+ * still aren't auto-classified; authors can declare intent via
  * `approved="reason"` per-op kwarg or `# Autonomous: true` skill header.
  */
-export const MUTATING_TOOL_PATTERN = /^(?:write_|update_|delete_|remove_|set_|create_|insert_|put_|patch_|destroy_|archive_|prune_|deploy_|expire_|consolidate_|purge_|reset_|rotate_|move_|rename_|drop_|truncate_|upsert_|overwrite_|clear_|wipe_|finalize_).*/;
+export const MUTATING_TOOL_PATTERN = /(?:^|_)(?:write|update|delete|remove|set|create|insert|put|patch|destroy|archive|prune|deploy|expire|consolidate|purge|reset|rotate|move|rename|drop|truncate|upsert|overwrite|clear|wipe|finalize)(?:_|$)/;
 
 export type MutationKind = "data_write" | "mutating_tool" | "file_write";
 
@@ -46,10 +52,12 @@ export interface MutationClassification {
 export function classifyMutation(op: SkillOp): MutationClassification | null {
   if (op.kind === "$") {
     const toolName = op.body.split(/\s+/)[0] ?? "";
-    // `data_write` is explicitly a mutation tool name — flag it even though
-    // it doesn't start with `write_` (the canonical prefix anchor). The
-    // dotted-name match (`<connector>.data_write`) is also caught so
-    // qualified dispatch through a named bridge instance is gated identically.
+    // v0.15.0 — the broadened `MUTATING_TOOL_PATTERN` now subsumes the
+    // earlier explicit `data_write` special-case (verbs match at any
+    // underscore boundary). `data_write` keeps its own `kind` for
+    // back-compat in `buildAuthorizationSuggestion` error copy; everything
+    // else (skill_write, write_file, memory_delete, ...) flows through
+    // the pattern path as `kind: "mutating_tool"`.
     const isDataWrite = toolName === "data_write" || /(?:^|_)data_write(?:_|$)/.test(toolName);
     if (isDataWrite) return { kind: "data_write", detail: toolName };
     if (MUTATING_TOOL_PATTERN.test(toolName)) return { kind: "mutating_tool", detail: toolName };

@@ -28,6 +28,7 @@ import { CallbackMcpConnector } from "./mcp.js";
 import { RemoteMcpConnector } from "./mcp-remote.js";
 import { LocalModelMcpConnector } from "./local-model-mcp.js";
 import { DataStoreMcpConnector } from "./data-store-mcp.js";
+import { SkillStoreMcpConnector } from "./skill-store-mcp.js";
 import type { McpConnector, McpConnectorClass } from "./types.js";
 
 /**
@@ -103,6 +104,9 @@ export const KNOWN_CONNECTOR_CLASSES: ReadonlyMap<string, ConnectorClassEntry> =
   // under the same instance name.
   ["LocalModelMcpConnector", { ctor: LocalModelMcpConnector }],
   ["DataStoreMcpConnector", { ctor: DataStoreMcpConnector }],
+  // v0.15.0 — SkillStore-as-bridge. Like DataStoreMcpConnector, wraps a
+  // substrate instance and exposes its mutators as in-skill dispatch.
+  ["SkillStoreMcpConnector", { ctor: SkillStoreMcpConnector }],
 ]);
 
 // v0.7.3 — adopter-registered connector classes. Mutable, separate from

@@ -688,8 +688,13 @@ export function processSetValue(raw: string): string {
  * `\"` → literal quote. Other `\X` sequences pass through verbatim
  * (no over-eager interpretation; future v0.8+ may add `\r` / `\0` /
  * etc. if cold-author demand surfaces).
+ *
+ * v0.15.0 — exported so runtime's `coerceKwargValue` can apply the same
+ * interpretation to `$` op kwarg values. Pre-v0.15.0 this only ran via
+ * `processSetValue` ($set + function-call kwargs), leaving `$ skill_write
+ * source="..."` with literal `\n` / `\"` bytes in the value.
  */
-function interpretDoubleQuotedEscapes(s: string): string {
+export function interpretDoubleQuotedEscapes(s: string): string {
   return s.replace(/\\(["\\nt])/g, (match, ch: string) => {
     switch (ch) {
       case '"': return '"';
@@ -727,6 +732,21 @@ export function tokenizeKeywordArgs(input: string): string[] {
     }
     if (inQuote) {
       current += ch;
+      // v0.15.0 — recognize `\"`, `\'`, `\\` as escapes inside a quoted
+      // string. Without this, `text="he said \"hi\""` closes the value at
+      // the first `\"` and the trailing `hi\""` lands as separate tokens
+      // (or worse, silent truncation when feeding to a $ dispatch op).
+      // Mirrors processSetValue's interpretDoubleQuotedEscapes for the
+      // outer-tokenization layer; the value still gets fed to escape
+      // interpretation downstream (processSetValue / coerceKwargValue).
+      if (ch === "\\" && i + 1 < input.length) {
+        const next = input[i + 1]!;
+        if (next === inQuote || next === "\\") {
+          current += next;
+          i++;
+          continue;
+        }
+      }
       if (ch === inQuote) inQuote = null;
       continue;
     }
@@ -776,6 +796,17 @@ function extractParenBody(text: string, openIdx: number): { body: string; endIdx
       continue;
     }
     if (inQuote !== null) {
+      // v0.15.0 — recognize `\"`, `\'`, `\\` as escapes inside a quoted
+      // string (parallel to tokenizeKeywordArgs). Without this,
+      // `emit(text="he said \"hi\"")` mis-closes the inner quote and the
+      // paren-balance walker treats `)` as content.
+      if (ch === "\\" && i + 1 < text.length) {
+        const next = text[i + 1]!;
+        if (next === inQuote || next === "\\") {
+          i++;
+          continue;
+        }
+      }
       if (ch === inQuote) inQuote = null;
       continue;
     }

@@ -26,6 +26,32 @@
  * you register via the registry, so once your fork passes the conformance
  * suite the entire skillscript surface (skill_write / skill_list /
  * execute_skill / etc.) reads + writes against your substrate.
+ *
+ * **v0.15.0 — `SkillStoreMcpConnector` bridge auto-wires against your impl.**
+ * The runtime's `defaultRegistry` wraps your registered SkillStore in a
+ * `SkillStoreMcpConnector` instance and registers it under the connector
+ * names `skill_read` + `skill_write`, so `$ skill_read` / `$ skill_write` from
+ * inside an executing skill dispatches through your `load()` / `store()`
+ * methods. This is the Lisp-shape primitive — skills can program skills —
+ * and works against any `SkillStore` impl that passes the conformance suite.
+ *
+ * Your impl doesn't need to do anything special to participate. Two things
+ * worth knowing:
+ *   - **In-skill writes arrive Draft-stamped.** The bridge layer applies a
+ *     `# Status: Draft` override to the body before calling your `store()`.
+ *     This is the v0.15.0 trust boundary — autonomously-generated skill
+ *     bodies (e.g., `~ qwen prompt="generate a skill"` → `$ skill_write`)
+ *     shouldn't bypass human review by landing Approved + immediately
+ *     executable. See `src/connectors/skill-store-mcp.ts` header for the
+ *     threat-model rationale. Outside-MCP `skill_write` (cold-author agents
+ *     authoring directly via the wire surface) keeps the existing "body
+ *     declares status, you auto-stamp via store()" path — that's the path
+ *     your `store()` honor-the-body-Status logic addresses.
+ *   - **Substrate-level lint runs at `store()` entry.** If you mirror
+ *     `FilesystemSkillStore` / `SqliteSkillStore`, you'll run tier-1 lint
+ *     on the body before persisting + throw `LintFailureError` on rejection.
+ *     The bridge propagates that error through `$ skill_write` so authors
+ *     see lint-rejection-on-write, not silent persistence of malformed bodies.
  */
 
 import type {
