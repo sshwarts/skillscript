@@ -193,12 +193,26 @@ export class SqliteDataStore implements DataStore {
     // relation. Exact match (was JS substring scan; semantic change). Reduces
     // a linear-time JS filter to an indexed lookup; ranking still by FTS
     // score (tags don't influence relevance, just inclusion).
+    //
+    // v0.15.5 — accept both `domain_tags: "tag"` (single string, exact match)
+    // and `domain_tags: ["a", "b", ...]` (string array, any-of match). The
+    // typed contract documents both shapes in DataStoreTemplate/README.md
+    // ("array match (any-of)"); pre-v0.15.5 the impl only honored the
+    // string shape and silently dropped arrays — discipline-only contract.
     const tagFilter = filters["domain_tags"];
     const params: Record<string, unknown> = { $q: sanitized, $limit: limit };
     let tagJoin = "";
     if (typeof tagFilter === "string" && tagFilter !== "") {
       tagJoin = "AND EXISTS (SELECT 1 FROM memory_tags mt WHERE mt.memory_id = m.id AND mt.tag = $tag)";
       params["$tag"] = tagFilter;
+    } else if (Array.isArray(tagFilter) && tagFilter.length > 0 && tagFilter.every((t) => typeof t === "string" && t !== "")) {
+      // Any-of (OR) match — record needs at least one of the listed tags.
+      // Parameter-binding the array via dynamically-generated $tag_0, $tag_1,
+      // ... placeholders so SQLite-prepared-statement caching stays effective
+      // per-arity. (Better-sqlite3 / node:sqlite don't support array-bind directly.)
+      const placeholders = tagFilter.map((_, i) => `$tag_${i}`).join(", ");
+      tagJoin = `AND EXISTS (SELECT 1 FROM memory_tags mt WHERE mt.memory_id = m.id AND mt.tag IN (${placeholders}))`;
+      tagFilter.forEach((t, i) => { params[`$tag_${i}`] = t; });
     }
     const rows = this.db.prepare(
       `SELECT m.id, m.summary, m.detail, m.tags, m.created_at, m.metadata, bm25(memories_fts) AS score
@@ -244,7 +258,10 @@ export class SqliteDataStore implements DataStore {
     // Detail = full content. Summary = preview. Consistent with v0.7.x query() shape.
     const metadata: Record<string, unknown> = { ...(entry.metadata ?? {}) };
     if (entry.recipients !== undefined) metadata["recipients"] = entry.recipients;
-    if (entry.expires_at !== undefined) metadata["expires_at"] = entry.expires_at;
+    // v0.15.5 — `null` means "durable forever" (the portable opt-in verb
+    // for substrates with default TTL). SqliteDataStore is durable by
+    // default, so `null` is a no-op here — skip storing it.
+    if (entry.expires_at !== undefined && entry.expires_at !== null) metadata["expires_at"] = entry.expires_at;
     this.upsert({
       id,
       summary,

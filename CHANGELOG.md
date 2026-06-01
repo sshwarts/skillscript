@@ -1,5 +1,180 @@
 # Changelog
 
+## 0.15.5 — 2026-06-01 — Phase 4 typed-contract gaps + two Phase 3 carry-overs
+
+Three Phase-4 findings + one substrate-side bug uncovered along the way,
+plus two Phase-3-era findings Perry surfaced after the v0.15.4 ship.
+None are runtime correctness bugs in the Phase 4 set — the warm adopter
+completed Phase 4 with full conformance and all probes green. The two
+carry-overs ARE bugs (one runtime, one DX). Bundling them avoids a
+release cycle.
+
+The Phase 4 attribution skews substrate-ward — typed contract held, the
+documented `bootstrap({dataStore})` path worked, conformance passed
+unmodified. Phase 4 mostly stress-tested where the contract is silent
+rather than where it's wrong; v0.15.5 fills the silences. The Phase 3
+carry-overs are the discipline-only-contract pattern recurring (5th
+instance of that class — see `enableUnsafeShell` below).
+
+### `DataWrite.expires_at: number | null` — portable durable-forever opt-in
+
+Pre-v0.15.5, `DataWrite.expires_at: number` forced every write to specify
+a timestamp. Substrates with default TTL (AMP memory vaults, Redis with
+default expiry, hosted memory APIs) had no portable contract verb to
+express "durable forever" — each adopter had to invent a substrate-
+specific durability path. The warm adopter papered over it via AMP's
+`decay_model: "none"` + `pinned: true` flags inside their AmpDataStore,
+but that's AMP-specific knowledge that doesn't transfer.
+
+Type is now `number | null`:
+- Unix timestamp → finite expiry (substrate-specific honor / sweep)
+- `null` → "durable forever" — substrates with default sweep map this to
+  their pin / no-decay flag; substrates that are already durable-by-default
+  (the bundled `SqliteDataStore`) treat it as a no-op.
+- Omitted → defer to the substrate's default lifecycle policy.
+
+Back-compat preserved: existing skill bodies that set numeric timestamps
+or omit the field continue to work unchanged. The `null` opt-in is new.
+
+### `data-store-roundtrip` softens to `N ≥ 1` (substrate-portable across FTS variance)
+
+The v0.15.3 + v0.15.4 demo's description asserted "read back 1 items"
+based on an FTS query against a per-run unique marker embedded in
+content. Worked for `SqliteDataStore`'s strict FTS; broke for AMP's
+token-OR FTS where the marker's tokens (`probe`, year, month, etc.)
+matched prior runs' records too. The contract is silent on FTS matching
+strictness — both substrate behaviors are conformant — so the demo's
+exact-count claim baked in a hidden capability assumption.
+
+Fix: the demo body keeps the v0.15.3 shape (marker in content + FTS
+query) but the **assertion softens** to `N ≥ 1 items returned`. Works
+across any FTS-supporting substrate without imposing a hidden strictness
+requirement. The portable strict-count pattern (`domain_tags=[...]`
+filter) is documented in the playbook for adopters who need deterministic
+exact-count reads — but not required by the bundled smoke test.
+
+The demo body re-stamped (`v1:fb106073`); scaffold/skills copy synced.
+Description rewritten to make the FTS-variance reality explicit and
+point to the playbook's strict-count pattern.
+
+Per Perry's `cf5ad0d7` thread: "the substrate-portability claim is
+better served by demos that work uniformly than by demos that demand a
+specific FTS semantic that varies across implementations." Bundled demos
+are install-validation; the canonical pattern guides live in docs.
+
+### `SqliteDataStore.query()` honors `domain_tags: string[]` (was silently dropped)
+
+While fixing the demo, surfaced a real substrate-side bug. The bundled
+`SqliteDataStore.query()` only handled `domain_tags` when the filter
+value was a single string; passing an array silently dropped the filter
+and returned unfiltered results. The contract docs
+(`DataStoreTemplate/README.md`) document arrays as "any-of (OR) match" —
+discipline-only-contract that bit the demo and would have bitten any
+adopter passing arrays.
+
+Fix: `domain_tags` accepts both shapes now:
+- `domain_tags: "tag"` — single-tag exact match (existing behavior)
+- `domain_tags: ["a", "b", ...]` — any-of (OR) match across the listed tags
+- `domain_tags: []` — empty array = no filter applied (avoids the trap
+  where a generated empty list silently zeroes results)
+
+Implemented via dynamically-bound `IN ($tag_0, $tag_1, ...)` placeholders
+so SQLite-prepared-statement caching stays effective per-arity. 9 new
+test cases cover the matrix (string, array, empty-array, single-element-
+array, non-matching, FTS+tag combined narrowing).
+
+### Adopter-playbook gains FTS-strictness + durable-forever notes
+
+Two new bullets in the §"Notable things..." section, both timeless:
+
+- "FTS matching strictness varies by substrate" — articulates that the
+  contract names the modes but doesn't pin down semantics within each.
+  Portable read patterns use `domain_tags` filtering for deterministic
+  count assertions; FTS is the mode wrapper with substrate-loose
+  semantics.
+- "Durable-forever opt-in via `expires_at: null`" — documents the new
+  portable verb + the substrate impl responsibility (pin / no-decay map
+  on TTL-default substrates; no-op on durable-default substrates).
+
+### Files changed
+
+- `src/connectors/types.ts` — `DataWrite.expires_at: number | null`.
+- `src/connectors/data-store.ts` — `expires_at: null` no-op for SqliteDataStore; `domain_tags: string[]` honored via dynamic-IN placeholders.
+- `src/mcp-server.ts` — `enableUnsafeShell` threaded into execute_skill ExecuteContext.
+- `src/lint.ts` — new `vars-space-separated` tier-2 rule.
+- `examples/skillscripts/data-store-roundtrip.skill.md` — description rewritten to soften the count assertion (`N ≥ 1`) and point at the playbook's tag-filter pattern for adopters needing strict counts; body keeps the v0.15.3 marker-in-content FTS-query shape. Re-stamped.
+- `scaffold/skills/data-store-roundtrip.skill.md` — synced.
+- `tests/v0.15.5-domain-tags-array.test.ts` (NEW) — 9 cases covering substrate fix + new `null` path.
+- `tests/v0.15.5-enable-unsafe-shell-ctx.test.ts` (NEW) — 3-case regression for the ctx-threading bug.
+- `tests/v0.15.5-vars-space-separated-lint.test.ts` (NEW) — 10 cases covering positive + negative shapes for the lint rule.
+- `docs/adopter-playbook.md` — FTS-strictness + durable-forever bullets.
+- `package.json` — version 0.15.4 → 0.15.5.
+- `tests/dogfood-t7.test.ts` — version assertion.
+- `CHANGELOG.md` — this entry.
+
+### Phase 3 carry-over (1): `enableUnsafeShell` threaded into `execute_skill` ctx
+
+Perry's thread `adf47c0b` — runtime bug surfaced by the warm adopter
+during Phase 3 weather-skill authoring. `mcp-server.ts` built the
+execute_skill `ExecuteContext` with `{registry, mechanical, recursionDepth}`
+but never read `enableUnsafeShell` from `McpServerDeps`. Net effect: an
+adopter who configured the runtime with `enableUnsafeShell: true` had:
+
+- lint passes ✓
+- compile passes ✓
+- `runtime_capabilities` reported `unsafeShellEnabled: true` ✓
+- but `execute_skill` execution path refused `shell(..., unsafe=true)` ✗
+
+The contract surface declared discipline; the dispatch path didn't honor
+it. **5th instance of the discipline-only-contracts class** — sibling to
+v0.13.7 `skill_status`, v0.14.0 `strict_filters`, v0.14.x mutation gate,
+v0.15.0 `skill_write` declared-but-unwired. One-line ctx fix in
+`mcp-server.ts:executeSkill` (now spreads `enableUnsafeShell` when set in
+deps), plus a three-case regression test
+(`tests/v0.15.5-enable-unsafe-shell-ctx.test.ts`) covering:
+
+- `enableUnsafeShell: true` → `shell(unsafe=true)` via execute_skill succeeds
+- `enableUnsafeShell: false` → refuses with `UnsafeShellDisabledError`
+- `enableUnsafeShell` unset → refuses (default-false posture preserved)
+
+Per Perry's thread, a v0.16.x structural follow-on is worth considering:
+a contract-test fixture that forces every config flag in
+`runtime_capabilities` to have a matching execution-path probe test.
+Would catch this whole class pre-merge. Filed but not landed here —
+v0.15.5 closes the specific surface; the fixture pattern is its own scope.
+
+### Phase 3 carry-over (2): `vars-space-separated` lint
+
+Perry's thread `1b9d83a7` — warm adopter space-separated their
+`# Vars:` declarations (`# Vars: A=1 B=2`), parser silently dropped `B`
+(parser only splits on commas), downstream `$(B)` references fired
+`undeclared-var` pointing at the symptom not the cause. One debugging
+cycle wasted to discover the rule.
+
+New tier-2 lint `vars-space-separated`: detects when a var's default
+value contains whitespace followed by an `IDENT=` shape (in non-quoted
+regions), emits a warning naming the suspect missing comma. Heuristic
+respects quote-boundaries — `# Vars: NAME="Bob Jones"` doesn't false-fire
+because the whitespace is inside the quoted region.
+
+Ten test cases in `tests/v0.15.5-vars-space-separated-lint.test.ts` cover
+the positive cases (`A=1 B=2`, three-space-separated, quoted-whitespace
+mixed with comma-separated) and the negative cases (canonical comma form,
+quoted internal whitespace, value with space but no follow-on `=`, URL
+with `://`, etc.).
+
+### Cold-adopter dogfood arc maturity progression
+
+Phase 1 found bugs in the install path (broken examples, missing exports,
+demo non-runnability). Phase 2 found seams in the typed-contract fork
+path (conformance namespacing, ESM setup). Phase 3 found friction in
+update / repeat-run paths (idempotency, warning suppression). Phase 4
+found **silences in the contract itself** (expires_at type didn't have a
+durability verb; FTS strictness was undefined). Different class of
+finding, different remediation cost. The framework is approaching "what's
+missing from the spec" rather than "what's wrong with the spec" —
+maturity signal worth banking.
+
 ## 0.15.4 — 2026-06-01 — Phase 3 warm-adopter update DX polish
 
 Two findings + a docs cleanup bundled. None are runtime correctness bugs;

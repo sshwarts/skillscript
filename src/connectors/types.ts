@@ -440,8 +440,18 @@ export interface DataWrite {
   content: string;
   tags?: string[];
   recipients?: string[];
-  /** Unix seconds. */
-  expires_at?: number;
+  /**
+   * Unix seconds for a finite expiry, or `null` to opt into "durable forever"
+   * explicitly. Omit (or set `undefined`) to defer to the substrate's
+   * default lifecycle policy (which may be durable, may have decay/TTL —
+   * substrate-specific). Substrates with default TTL semantics (AMP memory
+   * vaults, Redis with default expiry, hosted memory APIs) should treat
+   * `null` as the portable verb for "exempt this write from substrate-level
+   * sweep" — e.g., map to the substrate's pin / no-decay flag. Substrates
+   * that are durable by default (SqliteDataStore) can treat `null` as a
+   * no-op since the same outcome already holds.
+   */
+  expires_at?: number | null;
   metadata?: Record<string, unknown>;
 }
 

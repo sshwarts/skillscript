@@ -588,10 +588,19 @@ export class McpServer {
     if (this.deps.registry === undefined) {
       throw new Error("execute_skill: runtime registry not configured (McpServerDeps.registry missing).");
     }
+    // v0.15.5 — thread `enableUnsafeShell` into the dispatch ctx. Pre-v0.15.5
+    // the flag was honored at the lint + compile + runtime_capabilities
+    // surfaces, but the `execute_skill` MCP-tool dispatch never read it
+    // when constructing its ExecuteContext, so `shell(..., unsafe=true)` ops
+    // were always refused via execute_skill regardless of how the runtime
+    // was configured. The 5th instance of the discipline-only-contracts
+    // class (sibling: skill_status v0.13.7, strict_filters v0.14.0,
+    // mutation gate v0.14.x, skill_write declared-but-unwired v0.15.0).
     const ctx = {
       registry: this.deps.registry,
       mechanical,
       recursionDepth: 0,
+      ...(this.deps.enableUnsafeShell !== undefined ? { enableUnsafeShell: this.deps.enableUnsafeShell } : {}),
     } satisfies import("./runtime.js").ExecuteContext;
 
     try {

@@ -1509,6 +1509,47 @@ const COLON_KWARG_SYNTAX: LintRule = {
   },
 };
 
+// v0.15.5 — Perry's 1b9d83a7 finding. The parser splits `# Vars:` lines on
+// comma; whitespace is NOT a separator. A line like `# Vars: A=1 B=2` parses
+// as a single var `A` with default value `1 B=2` — silently dropping `B`.
+// Downstream, `$(B)` references fire `undeclared-var` pointing at the
+// symptom (the missing var), not the cause (the missing comma). This rule
+// surfaces the cause when the suspect pattern shows up in any declared var's
+// default value.
+//
+// Heuristic: scan the default value's non-quoted regions for whitespace
+// followed by `IDENT=`. That's the smoking gun for "space-separated where
+// the author intended comma-separated."
+const VARS_SPACE_SEPARATED: LintRule = {
+  id: "vars-space-separated",
+  severity: "warning",
+  description: "A `# Vars:` declaration's default value looks like it contains a space-separated additional declaration (e.g. `# Vars: A=1 B=2`). The parser requires comma-separated declarations; the second 'var' was absorbed into the first var's default, leaving the second name undeclared.",
+  remediation: "Use commas to separate declarations: `# Vars: A=1, B=2`. If the whitespace is intentional (a default value containing a space), wrap the value in quotes: `# Vars: NAME=\"Bob Jones\"`.",
+  check: (ctx) => {
+    const findings: LintFinding[] = [];
+    for (const v of ctx.parsed.vars) {
+      if (v.default === undefined) continue;
+      // Strip quoted regions so a legitimate quoted value with internal
+      // whitespace + equals (e.g. `EXPR="a = b"`) doesn't trip the heuristic.
+      const stripped = v.default
+        .replace(/"[^"]*"/g, '""')
+        .replace(/'[^']*'/g, "''");
+      // Pattern: whitespace followed by IDENT followed by `=`. If found, the
+      // tail of the default has the shape of another kwarg declaration.
+      const m = /\s+([A-Za-z_]\w*)\s*=/.exec(stripped);
+      if (m === null) continue;
+      const suspectName = m[1]!;
+      findings.push({
+        rule: "vars-space-separated",
+        severity: "warning",
+        message: `\`# Vars: ${v.name}=${v.default}\` — the substring \` ${suspectName}=\` looks like a space-separated additional declaration. \`# Vars:\` requires comma-separated declarations; did you mean \`# Vars: ${v.name}=..., ${suspectName}=...\`? '${suspectName}' is undeclared because the parser absorbed it into ${v.name}'s default value.`,
+        extras: { vars_var: v.name, vars_suspect: suspectName },
+      });
+    }
+    return findings;
+  },
+};
+
 const DUPLICATE_SKILL_NAME: LintRule = {
   id: "duplicate-skill-name",
   severity: "info",
@@ -2471,6 +2512,7 @@ const RULES: LintRule[] = [
   // v0.9.2 — promoted from tier-3 info to tier-1 error (P0.9 in c9c667d2)
   NO_DEFAULT_TARGET,
   COLON_KWARG_SYNTAX,
+  VARS_SPACE_SEPARATED,
   // Tier-3 (info)
   DUPLICATE_SKILL_NAME,
   PLUGIN_COLLISION,
