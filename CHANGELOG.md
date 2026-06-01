@@ -1,5 +1,79 @@
 # Changelog
 
+## 0.15.6 — 2026-06-01 — Pre-v0.16 doc prep: MCP-over-HTTP transport articulation
+
+Doc-only patch preparing the ground for v0.16's bundled `HttpMcpConnector`
+class. No code change; three documentation surfaces updated to acknowledge
+MCP-over-HTTP (Streamable HTTP + SSE) as a first-class transport option
+alongside the stdio path that `RemoteMcpConnector` covers today.
+
+Per Perry sign-off on the v0.16.0 charter (thread `0b35bd70`): two-stage
+ship is right — doc fix has value today, don't fold into v0.16.0.
+
+### `docs/adopter-playbook.md` §Case 2
+
+Pre-v0.15.6, the section implied `RemoteMcpConnector` (stdio) was THE
+MCP path. Rewritten to articulate transport as a separate concern from
+the wire protocol: stdio (`RemoteMcpConnector` for community servers
+like YouTrack, GitHub, Linear) vs. HTTP (Anthropic's hosted MCP, AMP,
+spec-compliant HTTP servers). For HTTP, two sub-paths with their
+tradeoffs: stdio-bridge via `mcp-remote --sse` (works today, adds
+subprocess) vs. direct HTTP connector class (lower overhead, requires
+implementation).
+
+### `examples/onboarding-scaffold/connectors.json`
+
+New comment on the `_example_remote_mcp` entry: explicitly notes that
+the same `mcp-remote --sse` pattern bridges Streamable HTTP MCP servers
+(Anthropic hosted MCP, AMP, etc.) — discoverability fix so adopters
+scanning the example see the wider applicability.
+
+### `examples/connectors/McpConnectorTemplate/README.md`
+
+Updated "Fork this template only when none of those fit" list:
+- Direct HTTP MCP retained as a forkable case for now, with a forward
+  note that a bundled `HttpMcpConnector` is on the near-term roadmap
+  (timeless framing — readers on the version that ships HttpMcpConnector
+  will see it bundled; readers pre-that-version see the fork path)
+- Added explicit guidance for HTTP MCP servers: stdio-bridge path is
+  the simplest today; check for bundled `HttpMcpConnector` before
+  forking
+
+### Phase 4 dogfood reframing (banked as project memory)
+
+Bundling `HttpMcpConnector` in v0.16.0 collapses the Phase 4 cold-adopter
+dogfood from implementation-validation (fork template + implement
+HTTP-MCP from scratch) to configuration-validation (declare an instance
+in `connectors.json` pointing at the endpoint). Still worth doing as a
+matrix-validation lane — AmpSkillStore + AmpDataStore + bundled
+HttpMcpConnector configured against AMP + skills exercising the full
+toolbox, end-to-end — but cheaper. Banked as
+`project_phase4_dogfood_reframe` for future phase planning.
+
+Perry's structural framing: v0.16 charter = "structural discipline" —
+`HttpMcpConnector` + the `runtime_capabilities` contract-test fixture
+(from thread `adf47c0b`) both prevent the discipline-only-contracts
+class. Defer language features to v0.17. Tight charter, clean narrative.
+
+### Files changed
+
+- `docs/adopter-playbook.md` — §Case 2 rewritten with the two-path HTTP
+  MCP framing.
+- `examples/onboarding-scaffold/connectors.json` — new comment on HTTP
+  MCP transport applicability.
+- `examples/connectors/McpConnectorTemplate/README.md` — updated fork-
+  this-template guidance; HTTP MCP retains the forkable case with the
+  forward note about bundled HttpMcpConnector.
+- `package.json` — version 0.15.5 → 0.15.6.
+- `tests/dogfood-t7.test.ts` — version assertion.
+- `CHANGELOG.md` — this entry.
+
+### Next
+
+v0.16.0 — `HttpMcpConnector` (bundled, substrate-neutral) +
+`runtime_capabilities` contract-test fixture. Source material for the
+connector: Phase 2 cold-adopter dogfood's wire-layer code, generalized.
+
 ## 0.15.5 — 2026-06-01 — Phase 4 typed-contract gaps + two Phase 3 carry-overs
 
 Three Phase-4 findings + one substrate-side bug uncovered along the way,

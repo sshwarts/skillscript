@@ -14,13 +14,15 @@ A skeleton `McpConnector` implementation for adopters writing their own. Not run
 
 **Fork this template only when none of those fit** — e.g.:
 
-- Direct HTTP MCP (JSON-RPC over HTTP, no child process)
+- Direct HTTP MCP (JSON-RPC over HTTP, no child process) — for now; check the bundled `McpConnector` classes before forking, as a bundled `HttpMcpConnector` is on the near-term roadmap
 - WebSocket MCP
 - In-process MCP (call methods directly without IPC)
 - Custom transport that doesn't match stdio framing
 - Cross-thread / worker-pool dispatch
 
-If you're trying to wire a remote MCP server like YouTrack or GitHub, **you want `RemoteMcpConnector` in `connectors.json`**, not this template. See `connectors.json.example` for the wiring pattern.
+If you're trying to wire a remote stdio MCP server like YouTrack or GitHub, **you want `RemoteMcpConnector` in `connectors.json`**, not this template. See `connectors.json.example` for the wiring pattern.
+
+If you're trying to wire a Streamable HTTP MCP server (AMP, Anthropic's hosted MCP, etc.), the simplest path today is `RemoteMcpConnector` + `npx mcp-remote https://... --sse` (bridges HTTPS-SSE into stdio via a node subprocess). For lower overhead (no subprocess layer) check whether a bundled `HttpMcpConnector` is available in your installed runtime version — if so, declare an instance in `connectors.json` rather than forking this template.
 
 ## Forking workflow
 

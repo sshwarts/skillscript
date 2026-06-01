@@ -83,22 +83,33 @@ This same skill body runs unchanged against your substrate, against SQLite-FTS (
 
 ### Case 2 — MCP-tools wiring (substrate-locked)
 
-Your substrate exposes itself as MCP tools (via a local MCP server or remote one). You wire it as an `McpConnector` (typically `RemoteMcpConnector` for spawned MCP processes) and skills reference its tools by name with substrate-specific kwargs.
+Your substrate exposes itself as MCP tools (via a local MCP server or remote one). You wire it as an `McpConnector` and skills reference its tools by name with substrate-specific kwargs.
 
-```typescript
-// connectors.json:
-{
-  "my_store": {
-    "class": "RemoteMcpConnector",
-    "config": {
-      "command": "my-store-mcp-server",
-      "args": ["--db", "/var/store"]
+**MCP transport — two paths.** The protocol's wire layer is the same; the transport differs:
+
+- **Stdio MCP** (most common for community servers — YouTrack, GitHub, Linear, etc.): the MCP server is a binary you spawn as a child process and communicate with via stdin/stdout. Wired via `RemoteMcpConnector`:
+
+  ```json
+  {
+    "my_store": {
+      "class": "RemoteMcpConnector",
+      "config": {
+        "command": "my-store-mcp-server",
+        "args": ["--db", "/var/store"]
+      }
     }
   }
-}
-```
+  ```
 
-**In skills:**
+- **HTTP MCP / Streamable HTTP** (Anthropic's hosted MCP, AMP, increasingly common for hosted services): the MCP server speaks JSON-RPC over HTTP with Server-Sent Events for the stream channel. Two ways to wire it:
+
+  - **(a) Stdio bridge** — `RemoteMcpConnector` + `npx mcp-remote https://... --sse` runs a node child process that bridges HTTPS-SSE into stdio for the runtime to consume. Works today; adds the bridge subprocess.
+  - **(b) Direct HTTP connector** — wire your own `McpConnector` class against the HTTP transport (no subprocess). See `examples/connectors/McpConnectorTemplate/` for the fork template.
+
+Pick (a) for quick wiring against a remote HTTP MCP server with no implementation effort; pick (b) when subprocess overhead matters or you want direct control over connection lifecycle.
+
+**In skills**, regardless of transport:
+
 ```
 $ my_store.search query="customer feedback" region="eu-west" cluster="prod" -> CONTEXT
 ```
