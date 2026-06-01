@@ -72,7 +72,26 @@ export function applyFilter(value: string, filter: string): string {
     case "shell":
       return `'${value.replace(/'/g, "'\\''")}'`;
     case "json":
-      return JSON.stringify(value);
+      // v0.15.7 — idempotent. `applyFilter` receives all values as strings
+      // (substituteRuntime pre-serializes structured values upstream of the
+      // filter chain), so `|json` on a structured-pre-stringified value was
+      // double-encoding — turning `'{"id":"abc"}'` into `'"{\\"id\\":\\"abc\\"}"'`.
+      // Try JSON.parse first: if the input parses cleanly, it's already a
+      // valid JSON representation — pass through. If it doesn't parse, treat
+      // as a plain string and stringify once (the v0.3.x behavior, preserved
+      // for the non-JSON path).
+      //
+      // Edge cases that pass through (previously would have been re-quoted):
+      //   `"null"` / `"true"` / `"42"` — JSON-parseable, treated as already-JSON.
+      // The rare author who literally wanted to JSON-escape the string "null"
+      // (producing `"\"null\""`) hits a behavior change; documented in the
+      // CHANGELOG. The common case — emit({text: "saw ${OBJ|json}"}) — is fixed.
+      try {
+        JSON.parse(value);
+        return value;
+      } catch {
+        return JSON.stringify(value);
+      }
     case "trim":
       return value.trim();
     case "fallback":

@@ -1,5 +1,79 @@
 # Changelog
 
+## 0.15.7 — 2026-06-01 — `|json` filter idempotent on already-JSON strings
+
+One-rule fix in `src/filters.ts`. Phase 6 cold-adopter finding surfaced
+that `|json` double-encodes structured values: a skill body like
+`emit(text="result: ${R|json}")` where `R` is bound from a `$ amp.<tool>`
+dispatch produced `"\"{\\\"id\\\":\\\"abc\\\"}\""` (escaped twice)
+instead of `'{"id":"abc"}'` (cleanly serialized once).
+
+Root cause is structural. `applyFilter(value: string, filter: string)`
+receives all values as strings — `substituteRuntime` serializes
+structured JS values upstream of the filter chain. So `|json` was
+operating on a string that was already a valid JSON representation,
+and `JSON.stringify` re-quoted it.
+
+### Fix
+
+`|json` now tries `JSON.parse` first. If the input parses cleanly,
+pass through (already valid JSON). If parse throws, stringify once
+(preserves the v0.3.x behavior for plain-string inputs).
+
+```ts
+case "json":
+  try { JSON.parse(value); return value; }
+  catch { return JSON.stringify(value); }
+```
+
+### Behavior matrix
+
+| Input | v0.15.6 → | v0.15.7 → |
+|---|---|---|
+| `'{"id":"abc"}'` (already JSON) | `'"{\\"id\\":\\"abc\\"}"'` (double-encoded) | `'{"id":"abc"}'` (pass through) |
+| `'[1,2,3]'` (already JSON array) | re-encoded | pass through |
+| `'hello world'` (plain string) | `'"hello world"'` | `'"hello world"'` (unchanged) |
+| `'he said "hi"'` (needs escaping) | `'"he said \\"hi\\""'` | `'"he said \\"hi\\""'` (unchanged) |
+| `'null'` / `'true'` / `'42'` (scalar JSON literals) | `'"null"'` / `'"true"'` / `'"42"'` (re-quoted) | `'null'` / `'true'` / `'42'` (pass through) |
+
+The common case — `${OBJ|json}` after `$ <tool> -> OBJ` — is fixed. The
+edge case where an author literally wanted to JSON-encode the string
+`"null"` (producing `"\"null\""`) hits a behavior change; documented
+here but probably never the actual intent.
+
+### Tests
+
+`tests/v0.15.7-json-filter-idempotent.test.ts` — 18 cases covering the
+matrix: structured-pre-stringified inputs (object/array/nested/empty/
+escaped-quotes), plain-string inputs (simple/multi-word/internal-quotes/
+newlines/empty), scalar JSON literals (null/true/false/numerics/quoted),
+and regression cases ensuring non-JSON-shape strings still stringify.
+
+### Phase 6 finding history
+
+The originally-reported "read vs write asymmetry" was retracted by the
+warm adopter after deeper investigation — root cause was test
+contamination plus this `|json` double-encoding artifact, not actual
+asymmetric binding in the connector or runtime layers. The
+`HttpMcpConnector` path is clean: read and write tool results both
+bind as structured objects per `unwrapToolResult` (runtime.ts:1617);
+`$ amp.<tool> -> R` then `${R.field}` is the canonical pattern.
+
+This finding validates that the v0.16.0 bundled `HttpMcpConnector`
+doesn't need response-shape normalization for cross-tool-type
+symmetry — the wire layer already handles MCP responses uniformly. The
+v0.16 charter scope shrinks slightly; the structural-discipline framing
+stays the same (HttpMcpConnector + `runtime_capabilities` contract-test
+fixture).
+
+### Files changed
+
+- `src/filters.ts` — `|json` case rewritten with try-parse-first.
+- `tests/v0.15.7-json-filter-idempotent.test.ts` (NEW) — 18 cases.
+- `package.json` — version 0.15.6 → 0.15.7.
+- `tests/dogfood-t7.test.ts` — version assertion.
+- `CHANGELOG.md` — this entry.
+
 ## 0.15.6 — 2026-06-01 — Pre-v0.16 doc prep: MCP-over-HTTP transport articulation
 
 Doc-only patch preparing the ground for v0.16's bundled `HttpMcpConnector`
