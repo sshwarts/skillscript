@@ -1,5 +1,5 @@
 # Skill: ok
 t:
-    ! hello
-    @ ls -la
+    emit(text="hello")
+    shell(command="ls -la")
 default: t

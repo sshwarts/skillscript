@@ -23,7 +23,7 @@ let wired: BootstrapResult;
 beforeAll(async () => {
   const home = mkdtempSync(join(tmpdir(), "v031-"));
   wired = bootstrap({ skillsDir: join(home, "skills"), traceDir: join(home, "traces") });
-  await wired.skillStore.store("known-child", "# Skill: known-child\n# Status: Approved\nrun:\n    ! child says hi\ndefault: run\n");
+  await wired.skillStore.store("known-child", "# Skill: known-child\n# Status: Approved\nrun:\n    emit(text=\"child says hi\")\ndefault: run\n");
 });
 
 describe("v0.3.1 — unknown-skill-reference demoted to tier-2", () => {
@@ -49,7 +49,7 @@ describe("v0.3.1 — unknown-skill-reference demoted to tier-2", () => {
 
 describe("v0.3.1 — unknown-template-reference demoted to tier-2", () => {
   it("# Templates: <missing> fires WARNING (was error)", async () => {
-    const src = "# Skill: t\n# Status: Approved\n# Templates: missing-template\n# Output: agent: agent\nm:\n    ! hi\ndefault: m\n";
+    const src = "# Skill: t\n# Status: Approved\n# Templates: missing-template\n# Output: agent: agent\nm:\n    emit(text=\"hi\")\ndefault: m\n";
     const r = await lint(src, { skillStore: wired.skillStore });
     const f = r.findings.find((x) => x.rule === "unknown-template-reference");
     expect(f).toBeDefined();
@@ -57,7 +57,7 @@ describe("v0.3.1 — unknown-template-reference demoted to tier-2", () => {
   });
 
   it("compile succeeds with missing template", async () => {
-    const src = "# Skill: t\n# Status: Approved\n# Templates: missing-template\n# Output: agent: agent\nm:\n    ! hi\ndefault: m\n";
+    const src = "# Skill: t\n# Status: Approved\n# Templates: missing-template\n# Output: agent: agent\nm:\n    emit(text=\"hi\")\ndefault: m\n";
     await expect(compile(src, { skillStore: wired.skillStore })).resolves.toBeDefined();
   });
 });
@@ -88,7 +88,7 @@ describe("v0.3.1 — deferred-skill-reference advisory (REMOVED in v0.9.4.1)", (
 
 describe("v0.3.1 — runtime MissingSkillReferenceError on still-unresolved refs", () => {
   it("execute throws MissingSkillReferenceError when $ execute_skill target is still missing", async () => {
-    const src = "# Skill: parent\n# Status: Approved\norch:\n    $ execute_skill skill_name=child-missing -> OUT\n    ! after\ndefault: orch\n";
+    const src = "# Skill: parent\n# Status: Approved\norch:\n    $ execute_skill skill_name=child-missing -> OUT\n    emit(text=\"after\")\ndefault: orch\n";
     const r = await compile(src, { skillStore: wired.skillStore });
     const result = await execute(r.parsed, {}, r.targetOrder, { registry: wired.registry });
     expect(result.errors).toHaveLength(1);
@@ -96,23 +96,23 @@ describe("v0.3.1 — runtime MissingSkillReferenceError on still-unresolved refs
   });
 
   it("`& <missing>` reaching runtime throws MissingSkillReferenceError (with structured class)", async () => {
-    const src = "# Skill: t\n# Status: Approved\nt:\n    & voice-guide-missing\ndefault: t\n";
+    const src = "# Skill: t\n# Status: Approved\nt:\n    inline(skill=\"voice-guide-missing\")\ndefault: t\n";
     const compiled = await compile(src, { skipLintPreflight: true });
     const result = await execute(compiled.parsed, {}, compiled.targetOrder, { registry: wired.registry });
     expect(result.errors).toHaveLength(1);
     expect(result.errors[0]!.class).toBe("MissingSkillReferenceError");
-    expect(result.errors[0]!.opKind).toBe("&");
+    expect(result.errors[0]!.opKind).toBe("inline");
   });
 });
 
 describe("v0.3.1 — `# OnError:` validation stays tier-1 (stronger contract)", () => {
   it("# OnError: <missing> still blocks compile", async () => {
-    const src = "# Skill: t\n# Status: Approved\n# OnError: missing-fallback-skill\nrun:\n    ! body\ndefault: run\n";
+    const src = "# Skill: t\n# Status: Approved\n# OnError: missing-fallback-skill\nrun:\n    emit(text=\"body\")\ndefault: run\n";
     await expect(compile(src, { skillStore: wired.skillStore })).rejects.toThrow(/missing-fallback-skill|fallback/i);
   });
 
   it("# OnError: <existing> is fine", async () => {
-    const src = "# Skill: t\n# Status: Approved\n# OnError: known-child\nrun:\n    ! body\ndefault: run\n";
+    const src = "# Skill: t\n# Status: Approved\n# OnError: known-child\nrun:\n    emit(text=\"body\")\ndefault: run\n";
     await expect(compile(src, { skillStore: wired.skillStore })).resolves.toBeDefined();
   });
 });
@@ -143,7 +143,7 @@ describe("v0.3.1 — disabled-skill-reference stays tier-1 (stronger contract)",
   it("disabled skill reference is still an error, not a warning", async () => {
     const home2 = mkdtempSync(join(tmpdir(), "v031-disabled-"));
     const wired2 = bootstrap({ skillsDir: join(home2, "skills"), traceDir: join(home2, "traces") });
-    await wired2.skillStore.store("disabled-child", "# Skill: disabled-child\n# Status: Disabled\nrun:\n    ! body\ndefault: run\n");
+    await wired2.skillStore.store("disabled-child", "# Skill: disabled-child\n# Status: Disabled\nrun:\n    emit(text=\"body\")\ndefault: run\n");
     const src = "# Skill: t\n# Status: Approved\norch:\n    $ execute_skill skill_name=disabled-child -> OUT\ndefault: orch\n";
     const r = await lint(src, { skillStore: wired2.skillStore });
     const f = r.findings.find((x) => x.rule === "disabled-skill-reference");

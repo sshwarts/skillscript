@@ -1,4 +1,4 @@
 # Skill: bad
 foreach:
-    ! hi
+    emit(text="hi")
 default: foreach

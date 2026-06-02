@@ -2,5 +2,5 @@
 # Vars: while=foo
 
 t:
-    ! hi
+    emit(text="hi")
 default: t

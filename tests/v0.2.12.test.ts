@@ -19,14 +19,14 @@ import type { BootstrapResult } from "../src/bootstrap.js";
 
 describe("v0.2.12 Bug 15 (HIGH) — blank line in nested else: must not truncate", () => {
   it("Perry's minimum repro: nested if/else after a blank line inside outer else: compiles cleanly", async () => {
-    const src = "# Skill: t\n# Status: Approved\n# Vars: RAW=healthy\ngo:\n    if $(RAW) == \"ERR\":\n        ! failed\n    else:\n        ~ prompt=\"x\" model=qwen -> STATUS\n\n        if $(STATUS|trim) == \"healthy\":\n            ! healthy\n        else:\n            ! not healthy\ndefault: go\n";
+    const src = "# Skill: t\n# Status: Approved\n# Vars: RAW=healthy\ngo:\n    if $(RAW) == \"ERR\":\n        emit(text=\"failed\")\n    else:\n        $ llm prompt=\"x\" model=qwen -> STATUS\n\n        if $(STATUS|trim) == \"healthy\":\n            emit(text=\"healthy\")\n        else:\n            emit(text=\"not healthy\")\ndefault: go\n";
     const r = await compile(src);
     expect(r.output).toMatch(/healthy/);
     expect(r.output).toMatch(/not healthy/);
   });
 
   it("blank line between target body and target-level `else:` no longer breaks attach", async () => {
-    const src = "# Skill: t\n# Status: Approved\nfoo:\n    ! body\n\nelse:\n    ! handler\ndefault: foo\n";
+    const src = "# Skill: t\n# Status: Approved\nfoo:\n    emit(text=\"body\")\n\nelse:\n    emit(text=\"handler\")\ndefault: foo\n";
     const r = parse(src);
     expect(r.parseErrors).toEqual([]);
   });
@@ -34,7 +34,7 @@ describe("v0.2.12 Bug 15 (HIGH) — blank line in nested else: must not truncate
 
 describe("v0.2.12 Bug 16 — # Vars: URL values don't fragment on https:", () => {
   it("ENDPOINTS=https://a.com,https://b.com binds as one value", () => {
-    const src = "# Skill: t\n# Status: Approved\n# Vars: ENDPOINTS=https://a.com,https://b.com, UNITS=metric\nm:\n    ! hi\ndefault: m\n";
+    const src = "# Skill: t\n# Status: Approved\n# Vars: ENDPOINTS=https://a.com,https://b.com, UNITS=metric\nm:\n    emit(text=\"hi\")\ndefault: m\n";
     const r = parse(src);
     expect(r.parseErrors).toEqual([]);
     expect(r.vars).toEqual([
@@ -49,11 +49,11 @@ describe("v0.2.12 Bug 17 — # Templates: refs are lint-validated", () => {
   beforeAll(async () => {
     const home = mkdtempSync(join(tmpdir(), "v0212-bug17-"));
     wired = bootstrap({ skillsDir: join(home, "skills"), traceDir: join(home, "traces") });
-    await wired.skillStore.store("known-template", "# Skill: known-template\n# Status: Approved\nrun:\n    ! template body\ndefault: run\n");
+    await wired.skillStore.store("known-template", "# Skill: known-template\n# Status: Approved\nrun:\n    emit(text=\"template body\")\ndefault: run\n");
   });
 
   it("fires unknown-template-reference for missing template", async () => {
-    const src = "# Skill: t\n# Status: Approved\n# Templates: missing-template\n# Output: agent: agent\nm:\n    ! hi\ndefault: m\n";
+    const src = "# Skill: t\n# Status: Approved\n# Templates: missing-template\n# Output: agent: agent\nm:\n    emit(text=\"hi\")\ndefault: m\n";
     const r = await lint(src, { skillStore: wired.skillStore });
     const f = r.findings.find((x) => x.rule === "unknown-template-reference");
     expect(f).toBeDefined();
@@ -61,7 +61,7 @@ describe("v0.2.12 Bug 17 — # Templates: refs are lint-validated", () => {
   });
 
   it("clean when template exists", async () => {
-    const src = "# Skill: t\n# Status: Approved\n# Templates: known-template\n# Output: agent: agent\nm:\n    ! hi\ndefault: m\n";
+    const src = "# Skill: t\n# Status: Approved\n# Templates: known-template\n# Output: agent: agent\nm:\n    emit(text=\"hi\")\ndefault: m\n";
     const r = await lint(src, { skillStore: wired.skillStore });
     expect(r.findings.find((x) => x.rule === "unknown-template-reference")).toBeUndefined();
   });
@@ -69,7 +69,7 @@ describe("v0.2.12 Bug 17 — # Templates: refs are lint-validated", () => {
 
 describe("v0.2.12 Bug 18 — `>` op limit=$(VAR) substitutes at render", () => {
   it("limit=$(MAX) renders as the resolved value", async () => {
-    const src = "# Skill: t\n# Status: Approved\n# Vars: MAX=5\nq:\n    > mode=topical query=\"hi\" limit=$(MAX) -> HITS\ndefault: q\n";
+    const src = "# Skill: t\n# Status: Approved\n# Vars: MAX=5\nq:\n    $ data_read mode=topical query=\"hi\" limit=$(MAX) -> HITS\ndefault: q\n";
     const r = await compile(src);
     expect(r.output).toMatch(/limit=5/);
     expect(r.output).not.toMatch(/limit=\$\(MAX\)/);
@@ -110,7 +110,7 @@ describe("v0.2.12 Bug 21 — lint-codes help includes unsafe-shell-disabled", ()
 
 describe("v0.2.12 Bug 22 — # Requires: fallback strips surrounding quotes", () => {
   it("(fallback: \"stranger\") binds WHO = stranger (no quotes)", async () => {
-    const src = "# Skill: t\n# Status: Approved\n# Requires: user-var:NAME -> WHO (fallback: \"stranger\")\ng:\n    ! Hello, $(WHO)!\ndefault: g\n";
+    const src = "# Skill: t\n# Status: Approved\n# Requires: user-var:NAME -> WHO (fallback: \"stranger\")\ng:\n    emit(text=\"Hello, $(WHO)!\")\ndefault: g\n";
     const r = await compile(src);
     expect(r.resolvedVariables["WHO"]).toBe("stranger");
     expect(r.output).toMatch(/Hello, stranger!/);
@@ -125,7 +125,7 @@ describe("v0.2.12 Bug 23 — mechanical-mode `~` op uses Proxy placeholder for f
   });
 
   it("$(HI.outputs.text) on a `~`-bound var resolves in mechanical mode", async () => {
-    const src = "# Skill: t\n# Status: Approved\nfetch:\n    ~ prompt=\"x\" model=qwen -> HI\nrender: fetch\n    ! Got: $(HI.outputs.text)\ndefault: render\n";
+    const src = "# Skill: t\n# Status: Approved\nfetch:\n    $ llm prompt=\"x\" model=qwen -> HI\nrender: fetch\n    emit(text=\"Got: $(HI.outputs.text)\")\ndefault: render\n";
     const r = await compile(src, { skillStore: wired.skillStore });
     const result = await execute(r.parsed, {}, r.targetOrder, { registry: wired.registry, mechanical: true });
     expect(result.errors).toEqual([]);
@@ -153,22 +153,6 @@ describe("v0.2.12 Bug 25 — indexed field access documented", () => {
     const r = helpResponse("frontmatter", "0.2.12") as { content: string };
     expect(r.content).toMatch(/\$\(LIST\.0\)/);
     expect(r.content).toMatch(/\$\(LIST\.0\.id\)/);
-  });
-});
-
-describe("v0.2.12 Bug 26 — unknown-retrieval-arg lint", () => {
-  it("fires on hallucinated kwarg (`since=`)", async () => {
-    const src = "# Skill: t\n# Status: Approved\nq:\n    > mode=topical query=\"x\" limit=5 since=1h -> HITS\ndefault: q\n";
-    const r = await lint(src);
-    const f = r.findings.find((x) => x.rule === "unknown-retrieval-arg");
-    expect(f).toBeDefined();
-    expect(f!.message).toMatch(/since/);
-  });
-
-  it("does NOT fire on documented kwargs alone", async () => {
-    const src = "# Skill: t\n# Status: Approved\nq:\n    > mode=topical query=\"x\" limit=5 -> HITS\ndefault: q\n";
-    const r = await lint(src);
-    expect(r.findings.find((x) => x.rule === "unknown-retrieval-arg")).toBeUndefined();
   });
 });
 

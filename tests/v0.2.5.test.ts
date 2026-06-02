@@ -31,13 +31,13 @@ describe("v0.2.5 — parser accepts new comparison conditions", () => {
     ["$(A|trim) > $(B|trim)", true],
     ["$(COUNT|length) >= \"3\"", true],
   ])("parses `%s` as a valid condition", (cond) => {
-    const src = `# Skill: x\n# Status: Approved\nt:\n    if ${cond}:\n        ! match\ndefault: t\n`;
+    const src = `# Skill: x\n# Status: Approved\nt:\n    if ${cond}:\n        emit(text="match")\ndefault: t\n`;
     const parsed = parse(src);
     expect(parsed.parseErrors).toEqual([]);
   });
 
   it("rejects a malformed comparison", () => {
-    const src = `# Skill: x\n# Status: Approved\nt:\n    if 5 < 10:\n        ! match\ndefault: t\n`;
+    const src = `# Skill: x\n# Status: Approved\nt:\n    if 5 < 10:\n        emit(text="match")\ndefault: t\n`;
     const parsed = parse(src);
     expect(parsed.parseErrors.length).toBeGreaterThan(0);
   });
@@ -140,9 +140,9 @@ describe("v0.2.5 — end-to-end: skill with comparison conditions compiles + run
       "",
       "evaluate:",
       "    if $(DELTA) >= $(THRESHOLD):",
-      "        ! ALERT: $(DELTA) breached $(THRESHOLD)",
+      "        emit(text=\"ALERT: $(DELTA) breached $(THRESHOLD)\")",
       "    else:",
-      "        ! ok",
+      "        emit(text=\"ok\")",
       "",
       "default: evaluate",
       "",
@@ -160,9 +160,9 @@ describe("v0.2.5 — end-to-end: skill with comparison conditions compiles + run
       "",
       "check:",
       "    if $(ITEMS|length) > \"0\":",
-      "        ! processing $(ITEMS|length) items",
+      "        emit(text=\"processing $(ITEMS|length) items\")",
       "    else:",
-      "        ! queue empty",
+      "        emit(text=\"queue empty\")",
       "",
       "default: check",
       "",

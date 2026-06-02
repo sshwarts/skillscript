@@ -23,7 +23,7 @@ import { parse } from "../src/parser.js";
 
 describe("v0.2.2 — Bug A: # Triggers comma-split with cron expressions", () => {
   it("cron expression with comma-list minutes parses as ONE trigger", () => {
-    const src = "# Skill: stock-watch\n# Status: Approved\n# Triggers: cron: 30,45 9 * * 1-5\nt:\n    ! hi\ndefault: t\n";
+    const src = "# Skill: stock-watch\n# Status: Approved\n# Triggers: cron: 30,45 9 * * 1-5\nt:\n    emit(text=\"hi\")\ndefault: t\n";
     const parsed = parse(src);
     expect(parsed.parseErrors).toEqual([]);
     expect(parsed.triggers).toHaveLength(1);
@@ -31,7 +31,7 @@ describe("v0.2.2 — Bug A: # Triggers comma-split with cron expressions", () =>
   });
 
   it("multiple cron rules on one line separated by source-keyword boundary", () => {
-    const src = "# Skill: stock-watch\n# Status: Approved\n# Triggers: cron: 30,45 9 * * 1-5, cron: 0,15,30,45 10-15 * * 1-5, cron: 0 16 * * 1-5\nt:\n    ! hi\ndefault: t\n";
+    const src = "# Skill: stock-watch\n# Status: Approved\n# Triggers: cron: 30,45 9 * * 1-5, cron: 0,15,30,45 10-15 * * 1-5, cron: 0 16 * * 1-5\nt:\n    emit(text=\"hi\")\ndefault: t\n";
     const parsed = parse(src);
     expect(parsed.parseErrors).toEqual([]);
     expect(parsed.triggers).toHaveLength(3);
@@ -43,7 +43,7 @@ describe("v0.2.2 — Bug A: # Triggers comma-split with cron expressions", () =>
   });
 
   it("mixed-source on one line still splits by source-keyword", () => {
-    const src = "# Skill: x\n# Status: Approved\n# Triggers: cron: 30,45 9 * * 1-5, session: start\nt:\n    ! hi\ndefault: t\n";
+    const src = "# Skill: x\n# Status: Approved\n# Triggers: cron: 30,45 9 * * 1-5, session: start\nt:\n    emit(text=\"hi\")\ndefault: t\n";
     const parsed = parse(src);
     expect(parsed.parseErrors).toEqual([]);
     expect(parsed.triggers).toEqual([
@@ -53,13 +53,13 @@ describe("v0.2.2 — Bug A: # Triggers comma-split with cron expressions", () =>
   });
 
   it("simple single-trigger no-comma case still works (regression guard)", () => {
-    const src = "# Skill: x\n# Status: Approved\n# Triggers: cron: 0 9 * * *\nt:\n    ! hi\ndefault: t\n";
+    const src = "# Skill: x\n# Status: Approved\n# Triggers: cron: 0 9 * * *\nt:\n    emit(text=\"hi\")\ndefault: t\n";
     const parsed = parse(src);
     expect(parsed.triggers).toEqual([{ source: "cron", name: "0 9 * * *" }]);
   });
 
   it("agent-event source (hyphenated) is recognized as boundary token", () => {
-    const src = "# Skill: x\n# Status: Approved\n# Triggers: cron: 0 9 * * *, agent-event: heartbeat\nt:\n    ! hi\ndefault: t\n";
+    const src = "# Skill: x\n# Status: Approved\n# Triggers: cron: 0 9 * * *, agent-event: heartbeat\nt:\n    emit(text=\"hi\")\ndefault: t\n";
     const parsed = parse(src);
     expect(parsed.triggers).toEqual([
       { source: "cron", name: "0 9 * * *" },
@@ -68,92 +68,18 @@ describe("v0.2.2 — Bug A: # Triggers comma-split with cron expressions", () =>
   });
 });
 
-describe("v0.2.2 — Bug B: multi-line quoted-string kwargs", () => {
-  it("multi-line ~ prompt=\"...\" parses as one op", () => {
-    const src = [
-      "# Skill: reason",
-      "# Status: Approved",
-      "step:",
-      "    ~ prompt=\"STEP 1: extract X from JSON.",
-      "STEP 2: compare to threshold.",
-      "STEP 3: produce alert if breached.\" -> VERDICT",
-      "default: step",
-      "",
-    ].join("\n");
+describe("v0.2.2 — Bug B legacy: `~` op rejected with parse error", () => {
+  it("legacy `~` form is rejected with parse error", () => {
+    const src = "# Skill: reason\nstep:\n    ~ prompt=\"X\" -> R\ndefault: step\n";
     const parsed = parse(src);
-    expect(parsed.parseErrors).toEqual([]);
-    const step = parsed.targets.get("step")!;
-    expect(step.ops).toHaveLength(1);
-    expect(step.ops[0]!.kind).toBe("~");
-    expect(step.ops[0]!.outputVar).toBe("VERDICT");
-    // Ensure the prompt value preserved the newlines from the source.
-    const promptVal = step.ops[0]!.localModelParams!["prompt"] as string;
-    expect(promptVal).toContain("STEP 1");
-    expect(promptVal).toContain("STEP 2");
-    expect(promptVal).toContain("STEP 3");
+    expect(parsed.parseErrors.some((e) => e.includes("Legacy `~`"))).toBe(true);
   });
 
-  it("multi-line ~ with fallback clause still parses", () => {
-    const src = [
-      "# Skill: reason",
-      "# Status: Approved",
-      "step:",
-      "    ~ prompt=\"Line one.",
-      "Line two.\" -> R (fallback: \"unknown\")",
-      "default: step",
-      "",
-    ].join("\n");
+  it("single-line `$ llm prompt=\"...\"` still works", () => {
+    const src = "# Skill: reason\n# Status: Approved\nstep:\n    $ llm prompt=\"One line only\" -> R\ndefault: step\n";
     const parsed = parse(src);
     expect(parsed.parseErrors).toEqual([]);
-    const op = parsed.targets.get("step")!.ops[0]!;
-    expect(op.localModelParams!["fallback"]).toBe("unknown");
-  });
-
-  it("single-line ~ prompt=\"...\" still works (regression guard)", () => {
-    const src = [
-      "# Skill: reason",
-      "# Status: Approved",
-      "step:",
-      "    ~ prompt=\"One line only\" -> R",
-      "default: step",
-      "",
-    ].join("\n");
-    const parsed = parse(src);
-    expect(parsed.parseErrors).toEqual([]);
-    expect(parsed.targets.get("step")!.ops[0]!.localModelParams!["prompt"]).toBe("One line only");
-  });
-
-  it("blank lines outside quoted strings still reset target scope", () => {
-    const src = [
-      "# Skill: x",
-      "# Status: Approved",
-      "fetch:",
-      "    ~ prompt=\"Multi",
-      "line prompt.\" -> A",
-      "",
-      "emit:",
-      "    ! result",
-      "default: emit",
-      "",
-    ].join("\n");
-    const parsed = parse(src);
-    expect(parsed.parseErrors).toEqual([]);
-    expect(parsed.targets.size).toBe(2);
-    expect(parsed.targets.has("fetch")).toBe(true);
-    expect(parsed.targets.has("emit")).toBe(true);
-  });
-
-  it("unterminated quote at EOF surfaces a malformed-op diagnostic (not silent absorb)", () => {
-    const src = [
-      "# Skill: x",
-      "# Status: Approved",
-      "step:",
-      "    ~ prompt=\"never closed",
-      "default: step",
-      "",
-    ].join("\n");
-    const parsed = parse(src);
-    expect(parsed.parseErrors.some((e) => e.includes("Malformed"))).toBe(true);
+    expect(parsed.targets.get("step")!.ops[0]!.body).toContain('prompt="One line only"');
   });
 });
 
@@ -164,12 +90,12 @@ describe("v0.2.2 — Bug C: needs: keyword forms", () => {
       "# Status: Approved",
       "emit:",
       "    needs: evaluate",
-      "    ! done",
+      "    emit(text=\"done\")",
       "evaluate:",
       "    needs: fetch",
-      "    ! mid",
+      "    emit(text=\"mid\")",
       "fetch:",
-      "    ! start",
+      "    emit(text=\"start\")",
       "default: emit",
       "",
     ].join("\n");
@@ -185,11 +111,11 @@ describe("v0.2.2 — Bug C: needs: keyword forms", () => {
       "# Skill: chain",
       "# Status: Approved",
       "emit: needs: evaluate",
-      "    ! done",
+      "    emit(text=\"done\")",
       "evaluate: needs: fetch",
-      "    ! mid",
+      "    emit(text=\"mid\")",
       "fetch:",
-      "    ! start",
+      "    emit(text=\"start\")",
       "default: emit",
       "",
     ].join("\n");
@@ -204,11 +130,11 @@ describe("v0.2.2 — Bug C: needs: keyword forms", () => {
       "# Skill: chain",
       "# Status: Approved",
       "emit: evaluate",
-      "    ! done",
+      "    emit(text=\"done\")",
       "evaluate: fetch",
-      "    ! mid",
+      "    emit(text=\"mid\")",
       "fetch:",
-      "    ! start",
+      "    emit(text=\"start\")",
       "default: emit",
       "",
     ].join("\n");
@@ -223,13 +149,13 @@ describe("v0.2.2 — Bug C: needs: keyword forms", () => {
       "# Skill: x",
       "# Status: Approved",
       "emit: needs: a, b, c",
-      "    ! done",
+      "    emit(text=\"done\")",
       "a:",
-      "    ! a",
+      "    emit(text=\"a\")",
       "b:",
-      "    ! b",
+      "    emit(text=\"b\")",
       "c:",
-      "    ! c",
+      "    emit(text=\"c\")",
       "default: emit",
       "",
     ].join("\n");

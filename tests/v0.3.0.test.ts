@@ -124,7 +124,7 @@ describe("v0.3.0 — lint: append-to-non-list", () => {
 
 describe("v0.3.0 — runtime: $append mutates outer-scope list across foreach iterations", () => {
   it("dedup-by-id pattern works end-to-end", async () => {
-    const src = "# Skill: dedup\n# Status: Approved\n# Vars: MS=[\"a\",\"a\",\"b\",\"c\",\"b\"]\nwalk:\n    $set FOUND = []\n    foreach M in $(MS):\n        if $(M) not in $(FOUND):\n            $append FOUND $(M)\n            ! NEW: $(M)\n        else:\n            ! dup: $(M)\n    ! novel: $(FOUND|length)\ndefault: walk\n";
+    const src = "# Skill: dedup\n# Status: Approved\n# Vars: MS=[\"a\",\"a\",\"b\",\"c\",\"b\"]\nwalk:\n    $set FOUND = []\n    foreach M in $(MS):\n        if $(M) not in $(FOUND):\n            $append FOUND $(M)\n            emit(text=\"NEW: $(M)\")\n        else:\n            emit(text=\"dup: $(M)\")\n    emit(text=\"novel: $(FOUND|length)\")\ndefault: walk\n";
     const r = await compile(src);
     const result = await execute(r.parsed, {}, r.targetOrder, { registry: wired.registry });
     expect(result.errors).toEqual([]);
@@ -142,7 +142,7 @@ describe("v0.3.0 — runtime: $append mutates outer-scope list across foreach it
     // splitter territory (pre-existing limitation; not the accumulator's
     // problem). This still exercises append + `in` membership on per-iter
     // values, which is the load-bearing accumulator behavior.
-    const src = "# Skill: collect\n# Status: Approved\n# Vars: ITEMS=[\"a\",\"b\",\"c\",\"d\"], KEEP=[\"a\",\"c\"]\nrun:\n    $set KEPT = []\n    foreach I in $(ITEMS):\n        if $(I) in $(KEEP):\n            $append KEPT $(I)\n    ! kept: $(KEPT|length)\ndefault: run\n";
+    const src = "# Skill: collect\n# Status: Approved\n# Vars: ITEMS=[\"a\",\"b\",\"c\",\"d\"], KEEP=[\"a\",\"c\"]\nrun:\n    $set KEPT = []\n    foreach I in $(ITEMS):\n        if $(I) in $(KEEP):\n            $append KEPT $(I)\n    emit(text=\"kept: $(KEPT|length)\")\ndefault: run\n";
     const r = await compile(src);
     const result = await execute(r.parsed, {}, r.targetOrder, { registry: wired.registry });
     expect(result.errors).toEqual([]);
@@ -152,7 +152,7 @@ describe("v0.3.0 — runtime: $append mutates outer-scope list across foreach it
 
 describe("v0.3.0 — mechanical-mode renders $append without mutating", () => {
   it("mechanical mode emits 'Would append' record + leaves list unchanged", async () => {
-    const src = "# Skill: t\n# Status: Approved\n# Vars: MS=[\"a\",\"b\"]\nrun:\n    $set FOUND = []\n    foreach M in $(MS):\n        $append FOUND $(M)\n    ! collected: $(FOUND|length)\ndefault: run\n";
+    const src = "# Skill: t\n# Status: Approved\n# Vars: MS=[\"a\",\"b\"]\nrun:\n    $set FOUND = []\n    foreach M in $(MS):\n        $append FOUND $(M)\n    emit(text=\"collected: $(FOUND|length)\")\ndefault: run\n";
     const r = await compile(src);
     const result = await execute(r.parsed, {}, r.targetOrder, { registry: wired.registry, mechanical: true });
     expect(result.errors).toEqual([]);

@@ -247,7 +247,7 @@ export async function compile(
   const dataSkillsInlined: InlinedDataSkillRef[] = [];
   if (skillStore !== undefined) {
     await inlineDataSkills(parsed, skillStore, dataSkillsInlined, [parsed.name ?? "(unnamed)"]);
-  } else if (anyAmpDataLookupNeeded(parsed)) {
+  } else if (anyInlineLookupNeeded(parsed)) {
     // Skill body contains `&` ops but no SkillStore was provided. Compile
     // still proceeds — refs stay as procedural-style for T5 — but issue a
     // warning if the skill might have meant a data-skill ref.
@@ -359,7 +359,7 @@ async function inlineOps(
 ): Promise<SkillOp[]> {
   const out: SkillOp[] = [];
   for (const op of ops) {
-    if (op.kind === "&" && op.ampParams !== undefined) {
+    if (op.kind === "inline" && op.ampParams !== undefined) {
       const refName = op.ampParams.skillName;
       if (chain.includes(refName)) {
         const path = [...chain, refName];
@@ -415,8 +415,8 @@ async function inlineOps(
             setValue: content,
           });
         } else {
-          for (const dataOp of dataSkillBangOps(refParsed)) {
-            out.push({ kind: "!", body: dataOp });
+          for (const dataOp of dataSkillEmitOps(refParsed)) {
+            out.push({ kind: "emit", body: dataOp });
           }
         }
         continue;
@@ -425,7 +425,7 @@ async function inlineOps(
       out.push(op);
       continue;
     }
-    // Recurse into nested bodies for non-& ops.
+    // Recurse into nested bodies for non-inline ops.
     if (op.foreachBody !== undefined) {
       out.push({ ...op, foreachBody: await inlineOps(op.foreachBody, store, inlinedRecord, chain) });
       continue;
@@ -452,15 +452,15 @@ async function inlineOps(
  * wants the whole content as one value.
  */
 function dataSkillContent(parsed: ParsedSkill): string {
-  return dataSkillBangOps(parsed).join("\n");
+  return dataSkillEmitOps(parsed).join("\n");
 }
 
 /**
- * Extract each `!` op body from a data-skill in topological order.
- * Used for bare-`&` inlining where we synthesize N `!` ops in the parent
- * to preserve the per-rule structure agents need for reading.
+ * Extract each `emit` op body from a data-skill in topological order.
+ * Used for bare-`inline` inlining where we synthesize N `emit` ops in
+ * the parent to preserve per-rule structure for downstream readers.
  */
-function dataSkillBangOps(parsed: ParsedSkill): string[] {
+function dataSkillEmitOps(parsed: ParsedSkill): string[] {
   if (parsed.entryTarget === null) return [];
   const order = toposort(parsed.targets, parsed.entryTarget);
   const lines: string[] = [];
@@ -468,28 +468,28 @@ function dataSkillBangOps(parsed: ParsedSkill): string[] {
     const target = parsed.targets.get(name);
     if (!target) continue;
     for (const op of target.ops) {
-      if (op.kind === "!") lines.push(op.body);
+      if (op.kind === "emit") lines.push(op.body);
     }
   }
   return lines;
 }
 
-function anyAmpDataLookupNeeded(parsed: ParsedSkill): boolean {
+function anyInlineLookupNeeded(parsed: ParsedSkill): boolean {
   for (const target of parsed.targets.values()) {
-    if (hasAmpOp(target.ops)) return true;
-    if (target.elseBlock !== undefined && hasAmpOp(target.elseBlock)) return true;
+    if (hasInlineOp(target.ops)) return true;
+    if (target.elseBlock !== undefined && hasInlineOp(target.elseBlock)) return true;
   }
   return false;
 }
 
-function hasAmpOp(ops: SkillOp[]): boolean {
+function hasInlineOp(ops: SkillOp[]): boolean {
   for (const op of ops) {
-    if (op.kind === "&") return true;
-    if (op.foreachBody !== undefined && hasAmpOp(op.foreachBody)) return true;
+    if (op.kind === "inline") return true;
+    if (op.foreachBody !== undefined && hasInlineOp(op.foreachBody)) return true;
     if (op.ifBranches !== undefined) {
-      for (const b of op.ifBranches) if (hasAmpOp(b.body)) return true;
+      for (const b of op.ifBranches) if (hasInlineOp(b.body)) return true;
     }
-    if (op.ifElseBody !== undefined && hasAmpOp(op.ifElseBody)) return true;
+    if (op.ifElseBody !== undefined && hasInlineOp(op.ifElseBody)) return true;
   }
   return false;
 }
@@ -555,10 +555,9 @@ function renderOpPrompt(op: SkillOp, targetName: string, resolved: Map<string, s
     case "$set":  return [`${prefix}- Bind variable: ${op.setName} = ${op.setValue}`];
     case "$append": return [`${prefix}- Append to $(${op.setName}): ${op.setValue}`];
     case "?":     return [`${prefix}- Reason: ${body}`];
-    case "@":     return [`${prefix}- Run shell: ${body} — bind output to $(${op.outputVar ?? `${targetName}.output`})`];
-    case "!":     return [`${prefix}- Tell the user: ${body}`];
-    case "??":    return [`${prefix}- Ask the user: ${body}`];
-    case "&": {
+    case "shell":  return [`${prefix}- Run shell: ${body} — bind output to $(${op.outputVar ?? `${targetName}.output`})`];
+    case "emit":   return [`${prefix}- Tell the user: ${body}`];
+    case "inline": {
       const p = op.ampParams!;
       const argsStr = Object.entries(p.args).map(([k, v]) => `${k}=${substitute(v, resolved)}`).join(" ");
       const bindTail = op.outputVar !== undefined ? ` — bind result to $(${op.outputVar})` : "";
@@ -571,30 +570,6 @@ function renderOpPrompt(op: SkillOp, targetName: string, resolved: Map<string, s
         lines.push(...renderOpPrompt(innerOp, targetName, resolved, prefix + "  "));
       }
       return lines;
-    }
-    case ">": {
-      const p = op.retrievalParams!;
-      const querySub = substitute(p.query, resolved);
-      // v0.2.12 Bug 18: substitute on `limit` and `mode` for consistency
-      // with `query` and `extra`. Pre-fix, limit=$(MAX) rendered literally.
-      const limitSub = typeof p.limit === "string" ? substitute(p.limit, resolved) : p.limit;
-      const modeSub = substitute(p.mode, resolved);
-      const extraStr = Object.entries(p.extra)
-        .map(([k, v]) => `${k}=${substitute(v, resolved)}`)
-        .join(", ");
-      const tail = extraStr ? `, ${extraStr}` : "";
-      return [
-        `${prefix}- Retrieve from DataStore \`${p.connector}\`: mode=${modeSub}, query="${querySub}", limit=${limitSub}${tail} — bind result list to $(${op.outputVar}).`,
-      ];
-    }
-    case "~": {
-      const p = op.localModelParams!;
-      const promptSub = substitute(p.prompt, resolved);
-      const modelName = p.model ?? "default";
-      const tokensTail = p.maxTokens !== undefined ? `, maxTokens=${p.maxTokens}` : "";
-      return [
-        `${prefix}- Invoke LocalModel \`${modelName}\` with prompt="${promptSub}"${tokensTail} — bind response to $(${op.outputVar}).`,
-      ];
     }
     case "if": {
       const lines: string[] = [];
@@ -680,10 +655,9 @@ function renderOpProse(op: SkillOp, resolved: Map<string, string>): string[] {
     case "$set":  return [`Sets variable ${op.setName} to ${op.setValue}.`];
     case "$append": return [`Appends ${op.setValue} to list $(${op.setName}).`];
     case "?":     return [`Reasons through: ${body}.`];
-    case "@":     return [`Runs a shell command: ${body}.`];
-    case "!":     return [`Reports back to the user: ${body}.`];
-    case "??":    return [`Pauses to ask the user: ${body}.`];
-    case "&": {
+    case "shell":  return [`Runs a shell command: ${body}.`];
+    case "emit":   return [`Reports back to the user: ${body}.`];
+    case "inline": {
       const p = op.ampParams!;
       const argsStr = Object.entries(p.args).map(([k, v]) => `${k}=${substitute(v, resolved)}`).join(", ");
       const bindTail = op.outputVar !== undefined ? `; binds to $(${op.outputVar})` : "";
@@ -693,26 +667,6 @@ function renderOpProse(op: SkillOp, resolved: Map<string, string>): string[] {
       const listExpr = substitute(op.foreachList!, resolved);
       const inner = op.foreachBody!.flatMap((o) => renderOpProse(o, resolved));
       return [`For each \`${op.foreachIter}\` in ${listExpr} (loop-local scope), runs: ${inner.join(" ")}`];
-    }
-    case ">": {
-      const p = op.retrievalParams!;
-      const querySub = substitute(p.query, resolved);
-      // v0.2.12 Bug 18: substitute limit/mode here too (mirror of the
-      // prompt-format renderer above).
-      const limitSub = typeof p.limit === "string" ? substitute(p.limit, resolved) : p.limit;
-      const modeSub = substitute(p.mode, resolved);
-      const extraStr = Object.entries(p.extra)
-        .map(([k, v]) => `${k}=${substitute(v, resolved)}`)
-        .join(", ");
-      const tail = extraStr ? ` (filters: ${extraStr})` : "";
-      return [`Queries DataStore \`${p.connector}\` with mode=${modeSub}, query="${querySub}", limit=${limitSub}${tail}; binds to $(${op.outputVar}).`];
-    }
-    case "~": {
-      const p = op.localModelParams!;
-      const promptSub = substitute(p.prompt, resolved);
-      const modelName = p.model ?? "default";
-      const tokensTail = p.maxTokens !== undefined ? ` (maxTokens=${p.maxTokens})` : "";
-      return [`Calls LocalModel \`${modelName}\` with prompt="${promptSub}"${tokensTail}; binds to $(${op.outputVar}).`];
     }
     case "if": {
       const parts: string[] = [];

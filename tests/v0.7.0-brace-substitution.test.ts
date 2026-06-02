@@ -54,7 +54,7 @@ describe("v0.7.0 — ${VAR} substitution at runtime", () => {
 
 describe("v0.7.0 — ${VAR} in conditions", () => {
   it("if ${VAR} == \"value\" parses + executes", async () => {
-    const src = `# Skill: t\n# Status: Approved\n# Vars: MODE=production\nrun:\n    if \${MODE} == "production":\n        ! prod-mode\n    else:\n        ! dev-mode\ndefault: run\n`;
+    const src = `# Skill: t\n# Status: Approved\n# Vars: MODE=production\nrun:\n    if \${MODE} == "production":\n        emit(text="prod-mode")\n    else:\n        emit(text="dev-mode")\ndefault: run\n`;
     const result = await runSkill(src);
     expect(result.errors).toEqual([]);
     expect(result.emissions).toEqual(["prod-mode"]);
@@ -70,7 +70,7 @@ describe("v0.7.0 — ${VAR} in conditions", () => {
       `run:`,
       `    $ json_parse $(ISSUE_JSON) -> P`,
       `    if \${P.sev} == "P0":`,
-      `        ! showstopper`,
+      `        emit(text="showstopper")`,
       `default: run`,
       ``,
     ].join("\n");
@@ -80,7 +80,7 @@ describe("v0.7.0 — ${VAR} in conditions", () => {
   });
 
   it("mixed ${VAR} and $(VAR) in same condition", async () => {
-    const src = `# Skill: t\n# Status: Approved\n# Vars: A=x, B=x\nrun:\n    if \${A} == $(B):\n        ! match\ndefault: run\n`;
+    const src = `# Skill: t\n# Status: Approved\n# Vars: A=x, B=x\nrun:\n    if \${A} == $(B):\n        emit(text="match")\ndefault: run\n`;
     const result = await runSkill(src);
     expect(result.errors).toEqual([]);
     expect(result.emissions).toEqual(["match"]);
@@ -89,21 +89,21 @@ describe("v0.7.0 — ${VAR} in conditions", () => {
 
 describe("v0.7.0 — ${VAR} in $set/$append/op args", () => {
   it("$set X = \"${REF}\" bind-time interp with new form", async () => {
-    const src = `# Skill: t\n# Status: Approved\n# Vars: USER=admin\nrun:\n    $set GREETING = "Hello, \${USER}!"\n    ! \${GREETING}\ndefault: run\n`;
+    const src = `# Skill: t\n# Status: Approved\n# Vars: USER=admin\nrun:\n    $set GREETING = "Hello, \${USER}!"\n    emit(text="\${GREETING}")\ndefault: run\n`;
     const result = await runSkill(src);
     expect(result.errors).toEqual([]);
     expect(result.emissions).toEqual(["Hello, admin!"]);
   });
 
   it("$append uses ${REF} in value", async () => {
-    const src = `# Skill: t\n# Status: Approved\n# Vars: WHO=world\nrun:\n    $set MSG = "hello"\n    $append MSG " \${WHO}"\n    ! \${MSG}\ndefault: run\n`;
+    const src = `# Skill: t\n# Status: Approved\n# Vars: WHO=world\nrun:\n    $set MSG = "hello"\n    $append MSG " \${WHO}"\n    emit(text="\${MSG}")\ndefault: run\n`;
     const result = await runSkill(src);
     expect(result.errors).toEqual([]);
     expect(result.emissions).toEqual(["hello world"]);
   });
 
   it("emit body resolves ${VAR}", async () => {
-    const src = `# Skill: t\n# Status: Approved\n# Vars: NAME=Perry\nrun:\n    ! Hi \${NAME}\ndefault: run\n`;
+    const src = `# Skill: t\n# Status: Approved\n# Vars: NAME=Perry\nrun:\n    emit(text="Hi \${NAME}")\ndefault: run\n`;
     const result = await runSkill(src);
     expect(result.errors).toEqual([]);
     expect(result.emissions).toEqual(["Hi Perry"]);
@@ -112,14 +112,14 @@ describe("v0.7.0 — ${VAR} in $set/$append/op args", () => {
 
 describe("v0.7.0 — parser accepts ${VAR} in defer-int contexts", () => {
   it("# Timeout: ${SECS} defers to runtime resolution", () => {
-    const src = `# Skill: t\n# Status: Approved\n# Vars: SECS=30\n# Timeout: \${SECS}\nrun:\n    ! ok\ndefault: run\n`;
+    const src = `# Skill: t\n# Status: Approved\n# Vars: SECS=30\n# Timeout: \${SECS}\nrun:\n    emit(text="ok")\ndefault: run\n`;
     const parsed = parse(src);
     expect(parsed.parseErrors).toEqual([]);
     expect(parsed.timeout).toBe("${SECS}");
   });
 
   it("> limit=${MAX} defers to runtime resolution", () => {
-    const src = `# Skill: t\n# Status: Approved\n# Vars: MAX=10\nrun:\n    > mode=fts query="x" limit=\${MAX} connector=primary -> R\ndefault: run\n`;
+    const src = `# Skill: t\n# Status: Approved\n# Vars: MAX=10\nrun:\n    $ data_read mode=fts query="x" limit=\${MAX} connector=primary -> R\ndefault: run\n`;
     const parsed = parse(src);
     expect(parsed.parseErrors).toEqual([]);
   });
@@ -127,7 +127,7 @@ describe("v0.7.0 — parser accepts ${VAR} in defer-int contexts", () => {
 
 describe("v0.7.0 — ${VAR} field access via single-equals diagnostic", () => {
   it("if ${VAR} = \"x\" emits single-= diagnostic with ${} rewrite", () => {
-    const src = `# Skill: t\n# Status: Approved\n# Vars: A=x\nrun:\n    if \${A} = "x":\n        ! ok\ndefault: run\n`;
+    const src = `# Skill: t\n# Status: Approved\n# Vars: A=x\nrun:\n    if \${A} = "x":\n        emit(text="ok")\ndefault: run\n`;
     const parsed = parse(src);
     expect(parsed.parseErrors.length).toBeGreaterThan(0);
     expect(parsed.parseErrors[0]).toMatch(/use `==` for equality/);

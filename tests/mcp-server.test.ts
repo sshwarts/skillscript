@@ -183,7 +183,7 @@ describe("McpServer.skill_list / skill_metadata / skill_status", () => {
   it("skill_metadata returns metadata + version history (no source — see skill_read)", async () => {
     const { server, skillStore, cleanup } = withServer();
     try {
-      await skillStore.store("hello", "# Skill: hello\n# Status: Draft\nt:\n    ! hi\ndefault: t\n");
+      await skillStore.store("hello", "# Skill: hello\n# Status: Draft\nt:\n    emit(text=\"hi\")\ndefault: t\n");
       const resp = await server.handle(rpc("tools/call", { name: "skill_metadata", arguments: { name: "hello" } }));
       const result = parseToolResult<Record<string, unknown>>(resp);
       const meta = result["metadata"] as { name: string; status: string };
@@ -200,7 +200,7 @@ describe("McpServer.skill_list / skill_metadata / skill_status", () => {
   it("skill_read returns {name, version, status, source} (v0.13.3)", async () => {
     const { server, skillStore, cleanup } = withServer();
     try {
-      const src = "# Skill: hello\n# Status: Draft\nt:\n    ! hi\ndefault: t\n";
+      const src = "# Skill: hello\n# Status: Draft\nt:\n    emit(text=\"hi\")\ndefault: t\n";
       await skillStore.store("hello", src);
       const resp = await server.handle(rpc("tools/call", { name: "skill_read", arguments: { name: "hello" } }));
       const result = parseToolResult<{ name: string; version: string; status: string; source: string }>(resp);
@@ -274,7 +274,7 @@ describe("McpServer.skill_list / skill_metadata / skill_status", () => {
   it("skill_status transitions Draft → Approved (write path)", async () => {
     const { server, skillStore, cleanup } = withServer();
     try {
-      await skillStore.store("toggle", "# Skill: toggle\n# Status: Draft\nt:\n    ! hi\ndefault: t\n");
+      await skillStore.store("toggle", "# Skill: toggle\n# Status: Draft\nt:\n    emit(text=\"hi\")\ndefault: t\n");
       const resp = await server.handle(rpc("tools/call", { name: "skill_status", arguments: { name: "toggle", new_state: "Approved" } }));
       const result = parseToolResult<{ status: string; previous_status: string }>(resp);
       expect(result.status).toBe("Approved");
@@ -293,7 +293,7 @@ describe("McpServer.skill_list / skill_metadata / skill_status", () => {
   it("skill_status with missing new_state returns clean error (v0.13.7)", async () => {
     const { server, skillStore, cleanup } = withServer();
     try {
-      const original = "# Skill: guard\n# Status: Draft\nt:\n    ! hi\ndefault: t\n";
+      const original = "# Skill: guard\n# Status: Draft\nt:\n    emit(text=\"hi\")\ndefault: t\n";
       await skillStore.store("guard", original);
       const resp = await server.handle(rpc("tools/call", { name: "skill_status", arguments: { name: "guard" } }));
       expect("error" in resp).toBe(true);
@@ -311,7 +311,7 @@ describe("McpServer.skill_list / skill_metadata / skill_status", () => {
   it("skill_status with invalid new_state value returns clean error (v0.13.7)", async () => {
     const { server, skillStore, cleanup } = withServer();
     try {
-      const original = "# Skill: guard2\n# Status: Draft\nt:\n    ! hi\ndefault: t\n";
+      const original = "# Skill: guard2\n# Status: Draft\nt:\n    emit(text=\"hi\")\ndefault: t\n";
       await skillStore.store("guard2", original);
       const resp = await server.handle(rpc("tools/call", { name: "skill_status", arguments: { name: "guard2", new_state: "Bogus" } }));
       expect("error" in resp).toBe(true);

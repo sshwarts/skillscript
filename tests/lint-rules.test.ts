@@ -20,7 +20,7 @@ describe("tier-1: undeclared-var", () => {
   it("flags reference to a variable not declared anywhere", async () => {
     const src = `# Skill: t
 t:
-    ! Hello $(MISSING)
+    emit(text="Hello $(MISSING)")
 
 default: t
 `;
@@ -36,7 +36,7 @@ default: t
 # Vars: NAME=world
 
 t:
-    ! Hello $(NAME)
+    emit(text="Hello $(NAME)")
 
 default: t
 `;
@@ -48,7 +48,7 @@ default: t
     const src = `# Skill: t
 t:
     $set X = hello
-    ! $(X)
+    emit(text="$(X)")
 
 default: t
 `;
@@ -59,7 +59,7 @@ default: t
   it("allows dotted refs (targetname.output, MEMORY.field) as ambient", async () => {
     const src = `# Skill: t
 t:
-    ! see $(other.output) and $(MEMORY.summary)
+    emit(text="see $(other.output) and $(MEMORY.summary)")
 
 default: t
 `;
@@ -72,7 +72,7 @@ default: t
 t:
     $set ITEMS = [a, b]
     foreach I in $(ITEMS):
-        ! item $(I)
+        emit(text="item $(I)")
 
 default: t
 `;
@@ -87,7 +87,7 @@ describe("tier-1: unknown-filter", () => {
 # Vars: X=hello
 
 t:
-    ! see $(X|bogus)
+    emit(text="see $(X|bogus)")
 
 default: t
 `;
@@ -102,10 +102,10 @@ default: t
 # Vars: X=hello
 
 t:
-    ! $(X|url)
-    ! $(X|shell)
-    ! $(X|json)
-    ! $(X|trim)
+    emit(text="$(X|url)")
+    emit(text="$(X|shell)")
+    emit(text="$(X|json)")
+    emit(text="$(X|trim)")
 
 default: t
 `;
@@ -118,7 +118,7 @@ describe("tier-1: unknown-skill-reference", () => {
   it("flags & op pointing at a missing skill", async () => {
     const src = `# Skill: caller
 t:
-    & nonexistent-skill
+    inline(skill="nonexistent-skill")
 
 default: t
 `;
@@ -131,7 +131,7 @@ default: t
   it("doesn't fire when SkillStore isn't provided (can't validate)", async () => {
     const src = `# Skill: caller
 t:
-    & some-skill
+    inline(skill="some-skill")
 
 default: t
 `;
@@ -146,13 +146,13 @@ describe("tier-1: disabled-skill-reference", () => {
 # Status: disabled
 
 t:
-    ! hi
+    emit(text="hi")
 
 default: t
 `);
     const src = `# Skill: caller
 t:
-    & target
+    inline(skill="target")
 
 default: t
 `;
@@ -166,13 +166,13 @@ default: t
 # Status: approved
 
 t:
-    ! hi
+    emit(text="hi")
 
 default: t
 `);
     const src = `# Skill: caller
 t:
-    & target
+    inline(skill="target")
 
 default: t
 `;
@@ -223,10 +223,10 @@ describe("tier-1: circular-dependency", () => {
   it("flags target-dep cycle", async () => {
     const src = `# Skill: t
 a: b
-    ! a
+    emit(text="a")
 
 b: a
-    ! b
+    emit(text="b")
 
 default: a
 `;
@@ -242,7 +242,7 @@ describe("tier-1: missing-dependency", () => {
   it("flags needs: ref to undeclared target", async () => {
     const src = `# Skill: t
 a: ghost
-    ! a
+    emit(text="a")
 
 default: a
 `;
@@ -257,7 +257,7 @@ describe("tier-1: missing-skillstore-for-data-ref", () => {
   it("flags & op when no SkillStore passed to lint", async () => {
     const src = `# Skill: caller
 t:
-    & voice-guide
+    inline(skill="voice-guide")
 
 default: t
 `;
@@ -272,12 +272,12 @@ default: t
     await registry.getSkillStore().store("voice-guide", `# Skill: voice-guide
 # Type: data
 t:
-    ! tone
+    emit(text="tone")
 default: t
 `);
     const src = `# Skill: caller
 t:
-    & voice-guide
+    inline(skill="voice-guide")
 
 default: t
 `;
@@ -288,7 +288,7 @@ default: t
   it("doesn't fire on skills without & ops", async () => {
     const src = `# Skill: t
 t:
-    ! hi
+    emit(text="hi")
 
 default: t
 `;
@@ -298,10 +298,10 @@ default: t
 });
 
 describe("tier-1: malformed-op-grammar + invalid-conditional-syntax (via parse-error categorization)", () => {
-  it("flags malformed-op-grammar for bad > op", async () => {
+  it("flags malformed-op-grammar for legacy `>` op (parse error)", async () => {
     const src = `# Skill: t
 t:
-    > badshape
+    > legacy retrieval
 
 default: t
 `;
@@ -313,7 +313,7 @@ default: t
     const src = `# Skill: t
 t:
     if $(A) && $(B):
-        ! both
+        emit(text="both")
 
 default: t
 `;
@@ -328,7 +328,7 @@ describe("tier-1: status-disabled", () => {
 # Status: disabled
 
 t:
-    ! hi
+    emit(text="hi")
 
 default: t
 `;
@@ -342,7 +342,7 @@ describe("tier-2: unsafe-shell-op", () => {
   it("flags `@ unsafe` shell opt-in", async () => {
     const src = `# Skill: t
 t:
-    @ unsafe rm -rf /tmp/something
+    shell(command="rm -rf /tmp/something", unsafe=true)
 
 default: t
 `;
@@ -367,30 +367,15 @@ default: t
     expect(f!.severity).toBe("warning");
   });
 
-  it("accepts mutation when preceded by ??", async () => {
+  it("accepts mutation when op carries `approved=` kwarg", async () => {
     const src = `# Skill: t
 t:
-    ?? Are you sure you want to delete?
-    $ delete_record id=42
+    $ delete_record id=42 approved="user confirmed"
 
 default: t
 `;
     const r = await lint(src);
     expect(r.findings.find((f) => f.rule === "unconfirmed-mutation")).toBeUndefined();
-  });
-});
-
-describe("tier-2: model-contention", () => {
-  it("flags $ op with batch-shaped tool name + ~ on the same model", async () => {
-    const src = `# Skill: t
-t:
-    $ run_olsen_scan task_type=classify
-    ~ prompt="verdict" model=gemma2 -> V
-
-default: t
-`;
-    const r = await lint(src);
-    expect(r.findings.find((f) => f.rule === "model-contention")).toBeDefined();
   });
 });
 
@@ -401,7 +386,7 @@ describe("tier-2: draft-with-trigger", () => {
 # Triggers: cron: */5 * * * *
 
 t:
-    ! hi
+    emit(text="hi")
 
 default: t
 `;
@@ -415,7 +400,7 @@ default: t
 # Triggers: cron: */5 * * * *
 
 t:
-    ! hi
+    emit(text="hi")
 
 default: t
 `;
@@ -430,13 +415,13 @@ describe("tier-2: reference-to-disabled-skill", () => {
 # Status: disabled
 
 t:
-    ! old behavior
+    emit(text="old behavior")
 
 default: t
 `);
     const src = `# Skill: caller
 t:
-    & legacy
+    inline(skill="legacy")
 
 default: t
 `;
@@ -459,7 +444,7 @@ describe("tier-3: duplicate-skill-name", () => {
         { name: "shared", version: "v2", content_hash: "h2", status: "Approved" as const, created_at: 0, updated_at: 0 },
       ],
     };
-    const src = `# Skill: shared\nt:\n    ! hi\ndefault: t\n`;
+    const src = `# Skill: shared\nt:\n    emit(text="hi")\ndefault: t\n`;
     const r = await lint(src, { skillStore: stubStore });
     const f = r.findings.find((f) => f.rule === "duplicate-skill-name");
     expect(f).toBeDefined();
@@ -471,7 +456,7 @@ describe("compile preflight integration", () => {
   it("LintFailureError thrown when tier-1 rule fires at compile time", async () => {
     const src = `# Skill: t
 t:
-    ! Hello $(MISSING)
+    emit(text="Hello $(MISSING)")
 
 default: t
 `;
@@ -482,7 +467,7 @@ default: t
   it("LintFailureError carries the diagnostics array", async () => {
     const src = `# Skill: t
 t:
-    ! Hello $(MISSING) and $(ALSO_MISSING)
+    emit(text="Hello $(MISSING) and $(ALSO_MISSING)")
 
 default: t
 `;
@@ -503,7 +488,7 @@ default: t
   it("skipLintPreflight: true bypasses preflight (escape hatch)", async () => {
     const src = `# Skill: t
 t:
-    ! Hello $(MISSING)
+    emit(text="Hello $(MISSING)")
 
 default: t
 `;

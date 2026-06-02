@@ -13,7 +13,6 @@ import {
   OpError,
   ConnectorNotFoundError,
   OpTimeoutError,
-  InteractiveOpInAutonomousModeError,
   UnsafeShellDisabledError,
   UnresolvedVariableError,
   TypeMismatchError,
@@ -58,17 +57,8 @@ export interface ExecuteContext {
     skillName: string,
     vars: Record<string, unknown>,
   ) => Promise<ExecuteResult>;
-  /** Mechanical-only preview: `$` / `~` / `>` ops skip real dispatch and bind a placeholder. */
+  /** Mechanical-only preview: `$` ops skip real dispatch and bind a placeholder. */
   mechanical?: boolean;
-  /**
-   * Interactive-mode user-input callback. When provided, `??` ops invoke it
-   * with the prompt and bind the response to the output variable. When
-   * omitted, `??` fails fast (autonomous mode per decision 6). Per Section 2
-   * Ops `??` decline semantics: a `no`/`n`/empty/falsey response binds the
-   * value AND short-circuits downstream targets via soft op-error so
-   * `else:` fires.
-   */
-  askUser?: (prompt: string) => Promise<string>;
   /**
    * Runtime absolute timeout (milliseconds) — the built-in fallback when no
    * per-op, skill, or connector default applies. Per ERD §6 decision 7,
@@ -325,12 +315,11 @@ export async function execute(
     let targetLastBound: string | null = null;
     let targetLastValue: unknown = undefined;
 
-    // v0.14.1 — fresh mutation-auth state per target. `skillAutonomous`
-    // is set from the parsed header; `sawConfirm` resets so a `??` in
-    // target T1 doesn't authorize mutations in T2 (correct scope).
+    // Fresh mutation-auth state per target. `skillAutonomous` is set from
+    // the parsed header. v0.16.0 retired the `sawConfirm` path with the
+    // `ask` op removal.
     const authState: MutationAuthState = {
       skillAutonomous: parsed.autonomous === true,
-      sawConfirm: false,
     };
     try {
       const r = await execOps(target.ops, vars, emissions, fallbacks, ctx, targetName, parsed.timeout, absoluteTimeoutMs, traceBuilder, authState);
@@ -496,17 +485,14 @@ async function execOps(
   let lastBoundVar: string | null = null;
   let lastValue: unknown = undefined;
   for (const op of ops) {
-    // v0.14.1 Layer A — load-bearing mutation gate. Flip `sawConfirm` for the
-    // current op iteration in lint-parity order (`??` flips before its own
-    // gate check) so a `??` op's own classification path stays consistent
-    // with lint. Non-mutation `??` skips the throw branch naturally.
-    if (op.kind === "??") authState.sawConfirm = true;
+    // v0.16.0 — `ask` removed; mutation gate now relies solely on `approved=`
+    // per-op kwarg + `# Autonomous: true` skill flag (sawConfirm path retired).
     const mutKind = classifyMutation(op);
     if (mutKind !== null && !authorizationGranted(op, authState)) {
       throw new UnconfirmedMutationError(
         mutKind.kind,
         mutKind.detail,
-        ["# Autonomous: true header", "preceding ?? / ask() in same target", "approved=\"reason\" per-op kwarg"],
+        ["# Autonomous: true header", "approved=\"reason\" per-op kwarg"],
         buildAuthorizationSuggestion(mutKind),
         op.kind,
         targetName,
@@ -562,14 +548,10 @@ async function execOp(
   }
 }
 
-/** Extract the connector instance name for $/~/> ops; undefined for others. */
+/** Extract the connector instance name for `$` ops; undefined for others. */
 function extractOpConnector(op: SkillOp): string | undefined {
-  switch (op.kind) {
-    case "$": return op.mcpConnector ?? "primary";
-    case "~": return op.localModelParams?.model ?? "default";
-    case ">": return op.retrievalParams?.connector ?? "primary";
-    default: return undefined;
-  }
+  if (op.kind === "$") return op.mcpConnector ?? "primary";
+  return undefined;
 }
 
 async function execOpInner(
@@ -582,7 +564,7 @@ async function execOpInner(
   skillTimeoutSec: number | string | null,
   absoluteTimeoutMs: number,
   traceBuilder: TraceBuilder | null,
-  authState: MutationAuthState = { skillAutonomous: false, sawConfirm: false },
+  authState: MutationAuthState = { skillAutonomous: false },
 ): Promise<ExecOpsResult> {
   switch (op.kind) {
     case "$set": {
@@ -651,12 +633,12 @@ async function execOpInner(
       emissions.push(`Reason: ${body}`);
       return { lastBoundVar: null, lastValue: undefined };
     }
-    case "!": {
+    case "emit": {
       const body = substituteRuntime(op.body, vars);
       emissions.push(body);
       return { lastBoundVar: null, lastValue: undefined };
     }
-    case "@": {
+    case "shell": {
       const body = op.policy === "unsafe"
         ? substituteRuntimeUnsafe(op.body, vars)
         : substituteRuntime(op.body, vars);
@@ -664,8 +646,6 @@ async function execOpInner(
       if (ctx.mechanical === true) {
         const label = op.policy === "unsafe" ? "Would run unsafe shell" : "Would run shell";
         emissions.push(`${label}: ${body} (mechanical: true preview).`);
-        // Bind a placeholder so downstream `$(VAR)` substitutions resolve.
-        // Matches the convention used by `$`/`~`/`>` mechanical-mode binding.
         const flatKey = `${targetName}.output`;
         const placeholder = `[mechanical: would run ${body.slice(0, 40)}${body.length > 40 ? "..." : ""}]`;
         vars.set(flatKey, placeholder);
@@ -685,9 +665,9 @@ async function execOpInner(
         const tokens = tokenizeShellArgs(body);
         if (tokens.length === 0) {
           throw new OpError(
-            `Empty \`@\` op body in target '${targetName}'.`,
-            "@",
-            "Provide a shell command body, e.g., `@ echo hello`.",
+            `Empty \`shell(...)\` op body in target '${targetName}'.`,
+            "shell",
+            "Provide a non-empty `command=\"...\"` kwarg.",
             targetName,
           );
         }
@@ -702,45 +682,14 @@ async function execOpInner(
         lastValue: stdout,
       };
     }
-    case "??": {
-      const promptStr = substituteRuntime(op.body, vars);
-      if (ctx.askUser === undefined) {
-        // Autonomous mode — no interactive surface wired. Per decision 6 +
-        // §6 dispatcher routing, `??` fails fast so dependent targets don't
-        // silently fall through.
-        throw new InteractiveOpInAutonomousModeError(promptStr, targetName);
-      }
-      const response = await ctx.askUser(promptStr);
-      const outName = op.outputVar;
-      if (outName !== undefined) vars.set(outName, response);
-      // Decline semantics (per Section 2 Ops + §13 Open Q #2 resolution):
-      // bind the response AND short-circuit downstream via soft op-error
-      // routed through else: / # OnError:. Closes the silent-fall-through
-      // security bug pattern (subsequent `apply:` running on a "no").
-      if (isDeclineResponse(response)) {
-        throw new OpError(
-          `User declined at \`??\` prompt: '${promptStr}' (response: '${response}'). Dependent targets short-circuited.`,
-          "??",
-          "If decline should not short-circuit, handle the response in an `else:` branch or `# OnError:` fallback.",
-          targetName,
-        );
-      }
-      return {
-        lastBoundVar: outName ?? null,
-        lastValue: response,
-      };
-    }
-    case "&": {
-      // v0.3.1: deferred-resolution path. `&` ops that reached runtime
-      // are either (a) forward-references that compile couldn't inline
-      // because the target wasn't yet stored, or (b) the rare "raw AST
-      // bypassed compile()" case. Try to resolve through a SkillStore on
-      // the context if one is wired; otherwise throw MissingSkillReferenceError
-      // with the structured fields so `# OnError:` can catch.
+    case "inline": {
+      // Deferred-resolution path. `inline` ops that reached runtime are
+      // either (a) forward-references that compile couldn't inline because
+      // the target wasn't yet stored, or (b) the rare "raw AST bypassed
+      // compile()" case. Surface as MissingSkillReferenceError so `# OnError:`
+      // can catch.
       const skillName = op.ampParams?.skillName ?? "(unknown)";
-      // No store wired = can't resolve. Surface as MissingSkillReferenceError
-      // for consistency (same shape as runtime resolve-and-miss path).
-      throw new MissingSkillReferenceError(skillName, "&", "&", targetName);
+      throw new MissingSkillReferenceError(skillName, "inline", "inline", targetName);
     }
     case "file_read": {
       // v0.7.0 — runtime-intrinsic file read. Substitutes `${VAR}` /
@@ -937,6 +886,15 @@ async function execOpInner(
       const toolName = m[1]!;
       const argsStr = m[2] ?? "";
       const args = parseToolArgs(argsStr);
+      // v0.16.0 — op-level `timeout=N` kwarg reserved for `$` dispatch (parity
+      // with legacy `~` `timeoutSeconds`). Pop from args before forwarding so
+      // connectors don't see a kwarg they didn't declare. Accepts int literal
+      // or `$(VAR)` / `${VAR}` ref string; resolveOpTimeoutMs coerces refs.
+      const rawTimeoutKwarg = args["timeout"];
+      let perOpTimeoutSec: number | string | undefined;
+      if (typeof rawTimeoutKwarg === "number") perOpTimeoutSec = rawTimeoutKwarg;
+      else if (typeof rawTimeoutKwarg === "string" && rawTimeoutKwarg !== "") perOpTimeoutSec = rawTimeoutKwarg;
+      if (rawTimeoutKwarg !== undefined) delete args["timeout"];
       const connectorLabel = op.mcpConnector !== undefined ? `${op.mcpConnector}.` : "";
       const flatKey = `${targetName}.output`;
 
@@ -1009,18 +967,20 @@ async function execOpInner(
         return { lastBoundVar: op.outputVar ?? flatKey, lastValue: parsed };
       }
 
-      // v0.7.2 — bare-form name-match dispatch resolution. When `$ <name> ...`
-      // is bare (no dotted prefix) AND `<name>` matches a registered
-      // connector name, route to that connector directly. This makes the
-      // canonical `$ llm prompt="..."` and `$ data_read mode=... query=...
-      // limit=N` paths work in default deployments where the bridges are
-      // auto-wired as `llm` + `memory` (rather than as `primary`). If
-      // `<name>` isn't a registered connector, fall back to the legacy
-      // `primary` lookup — preserves backward-compat for skills that wrote
-      // `$ <tool>` expecting routing through the primary MCP connector.
-      let connectorName = op.mcpConnector ?? "primary";
-      if (op.mcpConnector === undefined && ctx.registry.hasMcpConnector(toolName)) {
+      // Bare-form name-match dispatch: when `$ <name> ...` is bare (no dotted
+      // prefix), `<name>` must match a registered connector name. This makes
+      // typed-contract patterns (`$ llm prompt=...`, `$ data_read mode=...`)
+      // dispatch cleanly to the auto-wired bridge connectors. v0.16.0 dropped
+      // the legacy "primary" fallback — substrate-specific MCP tools require
+      // named form `$ <connector>.<tool>` and fail clearly if bare-form is
+      // used with no matching connector.
+      let connectorName: string;
+      if (op.mcpConnector !== undefined) {
+        connectorName = op.mcpConnector;
+      } else if (ctx.registry.hasMcpConnector(toolName)) {
         connectorName = toolName;
+      } else {
+        connectorName = toolName; // will fail through to ConnectorNotFoundError below
       }
 
       // v0.4.1 — defense-in-depth allowlist check. Lint catches this at
@@ -1053,7 +1013,7 @@ async function execOpInner(
 
       let rawResult: unknown;
       let dispatched = false;
-      const timeoutMs = resolveOpTimeoutMs(undefined, skillTimeoutSec, absoluteTimeoutMs, vars);
+      const timeoutMs = resolveOpTimeoutMs(perOpTimeoutSec, skillTimeoutSec, absoluteTimeoutMs, vars);
       // Op-level fallback (per language reference §9, extended to `$` for
       // cold-agent corpus consistency). On dispatch throw, bind the
       // fallback value to the output var; on missing connector with
@@ -1122,120 +1082,32 @@ async function execOpInner(
         );
       }
       const bindValue = unwrapToolResult(rawResult);
-      vars.set(flatKey, bindValue);
-      if (op.outputVar !== undefined) vars.set(op.outputVar, bindValue);
+      // v0.16.0 — fallback-on-empty parity with legacy `~`/`>` semantics
+      // (LocalModel empty-trimmed-response + Retrieval empty-array both bind
+      // fallback). Without this, the doc-vs-code mismatch at parser.ts:84-91
+      // (which claims `$` fallback fires "on throw or empty result") would
+      // persist. Empty = "" after trim, OR [], OR null/undefined.
+      let finalValue: unknown = bindValue;
+      if (dollarFallback !== undefined) {
+        const isEmptyString = typeof bindValue === "string" && bindValue.trim() === "";
+        const isEmptyArray = Array.isArray(bindValue) && bindValue.length === 0;
+        const isNullish = bindValue === null || bindValue === undefined;
+        if (isEmptyString || isEmptyArray || isNullish) {
+          finalValue = dollarFallback;
+          fallbacks.push({
+            target: targetName,
+            opKind: "$",
+            value: dollarFallback,
+            reason: `$ ${connectorLabel}${toolName} returned empty result`,
+          });
+        }
+      }
+      vars.set(flatKey, finalValue);
+      if (op.outputVar !== undefined) vars.set(op.outputVar, finalValue);
       return {
         lastBoundVar: op.outputVar ?? flatKey,
-        lastValue: bindValue,
+        lastValue: finalValue,
       };
-    }
-    case ">": {
-      const p = op.retrievalParams!;
-      const querySub = substituteRuntime(p.query, vars);
-      const extraSub: Record<string, unknown> = {};
-      for (const [k, v] of Object.entries(p.extra)) {
-        extraSub[k] = substituteRuntime(v, vars);
-      }
-      if (ctx.mechanical === true) {
-        // Bind a 1-element array of placeholders so foreach M in $(RESULTS)
-        // iterates once with a dotted-accessible M (matches common author
-        // patterns like `$(M.id)`, `$(M.summary)`). Authors expecting empty
-        // result sets test the empty case in unit tests, not mechanical mode.
-        const mechanicalValue: unknown = p.fallback !== undefined
-          ? p.fallback
-          : [makeMechanicalPlaceholder(`${op.outputVar}[0]`)];
-        emissions.push(
-          `Would query DataStore \`${p.connector}\` with mode=${p.mode}, ` +
-          `query="${querySub}", limit=${p.limit} (mechanical: true preview). ` +
-          `Binding $(${op.outputVar}) = placeholder result set.`,
-        );
-        vars.set(op.outputVar!, mechanicalValue);
-        return { lastBoundVar: op.outputVar!, lastValue: mechanicalValue };
-      }
-      const store = ctx.registry.getDataStore(p.connector);
-      const limitResolved = resolveIntParam(p.limit, vars, "limit");
-      const filters = {
-        query: querySub,
-        mode: p.mode,
-        limit: limitResolved,
-        ...extraSub,
-      };
-      const retrievalTimeoutMs = resolveOpTimeoutMs(undefined, skillTimeoutSec, absoluteTimeoutMs, vars);
-      // Op-level fallback (per language reference §9): on throw OR empty
-      // result, bind the fallback value and continue. Without a fallback,
-      // throws propagate to `else:` / `# OnError:` / target error.
-      // coerceLiteralValue parses array-shaped literals (`[]`, `[a, b]`)
-      // into actual arrays so downstream `foreach M in $(VAR)` iterates
-      // correctly on the empty/sentinel case.
-      const coercedFallback = p.fallback !== undefined ? coerceLiteralValue(p.fallback) : undefined;
-      let results: unknown;
-      try {
-        results = await dispatchWithTimeout(() => store.query(filters), retrievalTimeoutMs, ">");
-        if (coercedFallback !== undefined && Array.isArray(results) && results.length === 0) {
-          results = coercedFallback;
-        }
-      } catch (err) {
-        if (coercedFallback !== undefined) {
-          results = coercedFallback;
-        } else {
-          throw err;
-        }
-      }
-      vars.set(op.outputVar!, results);
-      return { lastBoundVar: op.outputVar!, lastValue: results };
-    }
-    case "~": {
-      const p = op.localModelParams!;
-      const promptSub = substituteRuntime(p.prompt, vars);
-      if (ctx.mechanical === true) {
-        const modelName = p.model ?? "default";
-        // v0.2.12 Bug 23: bind a Proxy placeholder (same shape as the `$`/`>`
-        // mechanical handlers) so dotted field access — `$(HI.outputs.text)`,
-        // `$(HI.choices.0.message.content)` — resolves to deeper placeholders
-        // instead of erroring with UnresolvedVariableError. Pre-fix the `~` op
-        // bound a flat string, which broke field access in mechanical mode.
-        const placeholder = makeMechanicalPlaceholder(
-          op.outputVar ?? `${modelName}.output`,
-        );
-        emissions.push(
-          `Would invoke LocalModel \`${modelName}\` with prompt='${promptSub}' ` +
-          `(mechanical: true preview). Binding $(${op.outputVar}) = ${stringifyValue(placeholder)}`,
-        );
-        vars.set(op.outputVar!, placeholder);
-        return { lastBoundVar: op.outputVar!, lastValue: placeholder };
-      }
-      let model;
-      try {
-        model = ctx.registry.getLocalModel(p.model);
-      } catch (err) {
-        if (p.fallback !== undefined) {
-          vars.set(op.outputVar!, p.fallback);
-          return { lastBoundVar: op.outputVar!, lastValue: p.fallback };
-        }
-        throw err;
-      }
-      const runOpts: { maxTokens?: number; model?: string } = {};
-      if (p.maxTokens !== undefined) {
-        runOpts.maxTokens = resolveIntParam(p.maxTokens, vars, "maxTokens");
-      }
-      const tildeTimeoutMs = resolveOpTimeoutMs(p.timeoutSeconds, skillTimeoutSec, absoluteTimeoutMs, vars);
-      // Op-level fallback (per language reference §9): on throw OR empty
-      // (trimmed) response, bind the fallback value.
-      let response: string;
-      try {
-        response = await dispatchWithTimeout(() => model.run(promptSub, runOpts), tildeTimeoutMs, "~");
-        if (p.fallback !== undefined && response.trim() === "") {
-          response = p.fallback;
-        }
-      } catch (err) {
-        if (p.fallback !== undefined) {
-          response = p.fallback;
-        } else {
-          throw err;
-        }
-      }
-      vars.set(op.outputVar!, response);
-      return { lastBoundVar: op.outputVar!, lastValue: response };
     }
     case "foreach": {
       const listVal = resolveListExpr(op.foreachList!, vars);
@@ -1417,22 +1289,22 @@ async function execShellCommand(bin: string, args: string[], timeoutMs: number):
       clearTimeout(timer);
       reject(new OpError(
         `Failed to spawn '${bin}': ${err.message}`,
-        "@",
-        "Verify the binary is on PATH and executable. Check for typos in the `@` op body.",
+        "shell",
+        "Verify the binary is on PATH and executable. Check for typos in the `shell(command=...)` body.",
       ));
     });
     child.on("close", (code) => {
       clearTimeout(timer);
       if (killed) {
-        reject(new OpTimeoutError(timeoutMs, "@"));
+        reject(new OpTimeoutError(timeoutMs, "shell"));
         return;
       }
       if (code !== 0) {
         const trimmed = stderr.trim();
         reject(new OpError(
           `Shell command '${bin}' exited with code ${code}${trimmed ? `: ${trimmed.slice(0, 200)}` : ""}.`,
-          "@",
-          "Inspect the stderr output. Add `(fallback: ...)` to the `@` op for graceful failure on non-zero exit.",
+          "shell",
+          "Inspect the stderr output. Add `(fallback: ...)` to the `shell(...)` op for graceful failure on non-zero exit.",
         ));
         return;
       }
@@ -1440,11 +1312,6 @@ async function execShellCommand(bin: string, args: string[], timeoutMs: number):
       resolve(stdout.replace(/\n$/, ""));
     });
   });
-}
-
-function isDeclineResponse(raw: string): boolean {
-  const t = raw.trim().toLowerCase();
-  return t === "" || t === "no" || t === "n" || t === "false" || t === "0";
 }
 
 /**

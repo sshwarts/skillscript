@@ -65,28 +65,28 @@ describe("v0.5.0 item 4 — parseFilterChain helper", () => {
 
 describe("v0.5.0 item 4 — runtime substitution with |fallback", () => {
   it("resolved ref → fallback is no-op", async () => {
-    const src = `# Skill: t\n# Status: Approved\n# Vars: NAME=admin\nrun:\n    ! Hello $(NAME|fallback:"stranger")!\ndefault: run\n`;
+    const src = `# Skill: t\n# Status: Approved\n# Vars: NAME=admin\nrun:\n    emit(text="Hello $(NAME|fallback:"stranger")!")\ndefault: run\n`;
     const result = await runSkill(src);
     expect(result.errors).toEqual([]);
     expect(result.emissions).toEqual(["Hello admin!"]);
   });
 
   it("undeclared field on parsed JSON → fallback substitutes", async () => {
-    const src = `# Skill: t\n# Status: Approved\n# Vars: PAYLOAD={"name":"admin"}\nrun:\n    $ json_parse $(PAYLOAD) -> P\n    ! Hello $(P.email|fallback:"<no email>")!\ndefault: run\n`;
+    const src = `# Skill: t\n# Status: Approved\n# Vars: PAYLOAD={"name":"admin"}\nrun:\n    $ json_parse $(PAYLOAD) -> P\n    emit(text="Hello $(P.email|fallback:"<no email>")!")\ndefault: run\n`;
     const result = await runSkill(src);
     expect(result.errors).toEqual([]);
     expect(result.emissions).toEqual(["Hello <no email>!"]);
   });
 
   it("nested field on parsed JSON, missing → fallback", async () => {
-    const src = `# Skill: t\n# Status: Approved\n# Vars: PAYLOAD={"user":{"name":"admin"}}\nrun:\n    $ json_parse $(PAYLOAD) -> P\n    ! tier=$(P.user.tier|fallback:"free")\ndefault: run\n`;
+    const src = `# Skill: t\n# Status: Approved\n# Vars: PAYLOAD={"user":{"name":"admin"}}\nrun:\n    $ json_parse $(PAYLOAD) -> P\n    emit(text="tier=$(P.user.tier|fallback:"free")")\ndefault: run\n`;
     const result = await runSkill(src);
     expect(result.errors).toEqual([]);
     expect(result.emissions).toEqual(["tier=free"]);
   });
 
   it("fallback value with subsequent filter (length on defaulted string)", async () => {
-    const src = `# Skill: t\n# Status: Approved\nrun:\n    ! len=$(MISSING|fallback:"hello"|length)\ndefault: run\n`;
+    const src = `# Skill: t\n# Status: Approved\nrun:\n    emit(text="len=$(MISSING|fallback:"hello"|length)")\ndefault: run\n`;
     const result = await runSkill(src);
     expect(result.errors).toEqual([]);
     expect(result.emissions).toEqual(["len=5"]);
@@ -96,21 +96,21 @@ describe("v0.5.0 item 4 — runtime substitution with |fallback", () => {
     // Author chain trims first; when ref is missing, fallback substitutes
     // its arg (with spaces preserved — the trim already ran in chain
     // position, and won't reapply post-fallback).
-    const src = `# Skill: t\n# Status: Approved\nrun:\n    ! result=[$(MISSING|fallback:"  has space  "|trim)]\ndefault: run\n`;
+    const src = `# Skill: t\n# Status: Approved\nrun:\n    emit(text="result=[$(MISSING|fallback:"  has space  "|trim)]")\ndefault: run\n`;
     const result = await runSkill(src);
     expect(result.errors).toEqual([]);
     expect(result.emissions).toEqual(["result=[has space]"]);
   });
 
   it("fallback empty string arg works", async () => {
-    const src = `# Skill: t\n# Status: Approved\nrun:\n    ! result=[$(MISSING|fallback:"")]\ndefault: run\n`;
+    const src = `# Skill: t\n# Status: Approved\nrun:\n    emit(text="result=[$(MISSING|fallback:"")]")\ndefault: run\n`;
     const result = await runSkill(src);
     expect(result.errors).toEqual([]);
     expect(result.emissions).toEqual(["result=[]"]);
   });
 
   it("without fallback, missing ref throws (regression)", async () => {
-    const src = `# Skill: t\n# Status: Approved\n# Vars: PAYLOAD={"name":"admin"}\nrun:\n    $ json_parse $(PAYLOAD) -> P\n    ! $(P.email)\ndefault: run\n`;
+    const src = `# Skill: t\n# Status: Approved\n# Vars: PAYLOAD={"name":"admin"}\nrun:\n    $ json_parse $(PAYLOAD) -> P\n    emit(text="$(P.email)")\ndefault: run\n`;
     const result = await runSkill(src);
     expect(result.errors.length).toBeGreaterThan(0);
   });
@@ -118,31 +118,31 @@ describe("v0.5.0 item 4 — runtime substitution with |fallback", () => {
 
 describe("v0.5.0 item 4 — lint", () => {
   it("undeclared-var suppressed when |fallback appears", async () => {
-    const src = `# Skill: t\n# Status: Approved\nrun:\n    ! Hello $(TOTALLY_UNDECLARED|fallback:"world")!\ndefault: run\n`;
+    const src = `# Skill: t\n# Status: Approved\nrun:\n    emit(text="Hello $(TOTALLY_UNDECLARED|fallback:"world")!")\ndefault: run\n`;
     const r = await lint(src);
     expect(r.findings.find((f) => f.rule === "undeclared-var")).toBeUndefined();
   });
 
   it("undeclared-var fires when |fallback absent (regression)", async () => {
-    const src = `# Skill: t\n# Status: Approved\nrun:\n    ! Hello $(TOTALLY_UNDECLARED)!\ndefault: run\n`;
+    const src = `# Skill: t\n# Status: Approved\nrun:\n    emit(text="Hello $(TOTALLY_UNDECLARED)!")\ndefault: run\n`;
     const r = await lint(src);
     expect(r.findings.find((f) => f.rule === "undeclared-var")).toBeDefined();
   });
 
   it("unknown-filter does NOT fire on |fallback", async () => {
-    const src = `# Skill: t\n# Status: Approved\n# Vars: X=admin\nrun:\n    ! $(X|fallback:"none")\ndefault: run\n`;
+    const src = `# Skill: t\n# Status: Approved\n# Vars: X=admin\nrun:\n    emit(text="$(X|fallback:"none")")\ndefault: run\n`;
     const r = await lint(src);
     expect(r.findings.find((f) => f.rule === "unknown-filter")).toBeUndefined();
   });
 
   it("unknown-filter still fires on unknown filter alongside |fallback", async () => {
-    const src = `# Skill: t\n# Status: Approved\n# Vars: X=admin\nrun:\n    ! $(X|fallback:"none"|nosuchfilter)\ndefault: run\n`;
+    const src = `# Skill: t\n# Status: Approved\n# Vars: X=admin\nrun:\n    emit(text="$(X|fallback:"none"|nosuchfilter)")\ndefault: run\n`;
     const r = await lint(src);
     expect(r.findings.find((f) => f.rule === "unknown-filter")).toBeDefined();
   });
 
   it("old name |default: is now an unknown filter (vocabulary alignment fence)", async () => {
-    const src = `# Skill: t\n# Status: Approved\n# Vars: X=admin\nrun:\n    ! $(X|default:"none")\ndefault: run\n`;
+    const src = `# Skill: t\n# Status: Approved\n# Vars: X=admin\nrun:\n    emit(text="$(X|default:"none")")\ndefault: run\n`;
     const r = await lint(src);
     expect(r.findings.find((f) => f.rule === "unknown-filter")).toBeDefined();
   });
@@ -150,7 +150,7 @@ describe("v0.5.0 item 4 — lint", () => {
 
 describe("v0.5.0 item 4 — condition contexts", () => {
   it("if $(MISSING|fallback:\"yes\") == \"yes\" works", async () => {
-    const src = `# Skill: t\n# Status: Approved\nrun:\n    if $(MAYBE|fallback:"yes") == "yes":\n        ! matched\ndefault: run\n`;
+    const src = `# Skill: t\n# Status: Approved\nrun:\n    if $(MAYBE|fallback:"yes") == "yes":\n        emit(text="matched")\ndefault: run\n`;
     const result = await runSkill(src);
     expect(result.errors).toEqual([]);
     expect(result.emissions).toEqual(["matched"]);

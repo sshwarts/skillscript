@@ -1,4 +1,4 @@
 # Skill: bad
 t:
-    ~ bareword
+    & legacy-inline-op
 default: t

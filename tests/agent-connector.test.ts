@@ -103,8 +103,8 @@ describe("AgentConnector — dispatch wiring", () => {
 # Output: agent: perry
 
 greet:
-    ! morning brief one
-    ! morning brief two
+    emit(text="morning brief one")
+    emit(text="morning brief two")
 
 default: greet
 `, reg);
@@ -126,7 +126,7 @@ default: greet
 # Output: template: perry
 
 build:
-    ! draft template body
+    emit(text="draft template body")
 
 default: build
 `, reg);
@@ -150,7 +150,7 @@ default: build
 # Output: agent: perry
 
 greet:
-    ! preview only
+    emit(text="preview only")
 
 default: greet
 `, reg, /* mechanical */ true);
@@ -168,7 +168,7 @@ default: greet
 # Output: template: claude
 
 emit:
-    ! shared payload
+    emit(text="shared payload")
 
 default: emit
 `, reg);
@@ -185,7 +185,7 @@ default: emit
 # Output: agent: perry
 
 greet:
-    ! still emits
+    emit(text="still emits")
 
 default: greet
 `, reg);

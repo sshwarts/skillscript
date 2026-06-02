@@ -89,13 +89,13 @@ describe("v0.7.3 — bare-form bridge dispatch lint (full user path: lint → co
     expect(unwiredErrors[0]!.message).toContain("unknown_tool");
   });
 
-  it("LINT — bare `$ <name>` with `primary` wired (legacy path) still passes (regression guard)", async () => {
+  it("v0.16.0 — bare `$ <name>` with `primary` wired now FIRES (primary fallback dropped)", async () => {
     const wired = bootstrap({ skillsDir: join(home, "skills"), traceDir: join(home, "traces") });
     wired.registry.registerMcpConnector("primary", new LocalModelMcpConnector(new FakeLocalModel()));
     const src = `# Skill: t\n# Status: Approved\nrun:\n    $ some_tool prompt="hi" -> R\n    emit(text="\${R}")\ndefault: run\n`;
     const result = await lint(src, { registry: wired.registry });
     const unwiredErrors = result.findings.filter((f) => f.rule === "unwired-primary-connector");
-    expect(unwiredErrors).toEqual([]);
+    expect(unwiredErrors.length).toBeGreaterThan(0);
   });
 
   it("FULL USER PATH — bare `$ data_read` + `$ llm` skill runs lint → compile → execute end-to-end", async () => {

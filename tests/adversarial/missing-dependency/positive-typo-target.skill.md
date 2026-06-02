@@ -1,6 +1,6 @@
 # Skill: bad
 helper:
-    ! help
+    emit(text="help")
 main: helpr
-    ! main
+    emit(text="main")
 default: main

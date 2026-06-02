@@ -1,5 +1,5 @@
 # Skill: clean
 t:
-    ! first
-    ! second
+    emit(text="first")
+    emit(text="second")
 default: t

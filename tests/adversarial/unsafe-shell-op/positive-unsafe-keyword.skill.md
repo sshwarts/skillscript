@@ -1,4 +1,4 @@
 # Skill: bad
 t:
-    @ unsafe rm -rf /tmp/something
+    shell(command="rm -rf /tmp/something", unsafe=true)
 default: t

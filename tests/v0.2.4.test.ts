@@ -28,7 +28,7 @@ describe("v0.2.4 — Bug D: apostrophe in plain text doesn't swallow targets", (
       "# Description: skill that handles symbol's intraday drops",
       "",
       "main:",
-      "    ! hello",
+      "    emit(text=\"hello\")",
       "",
       "default: main",
       "",
@@ -47,11 +47,11 @@ describe("v0.2.4 — Bug D: apostrophe in plain text doesn't swallow targets", (
       "# Status: Approved",
       "",
       "fetch:",
-      "    ! It's working",
+      "    emit(text=\"It's working\")",
       "",
       "process:",
       "    needs: fetch",
-      "    ! Don't break",
+      "    emit(text=\"Don't break\")",
       "",
       "default: process",
       "",
@@ -63,23 +63,10 @@ describe("v0.2.4 — Bug D: apostrophe in plain text doesn't swallow targets", (
     expect(parsed.targets.has("process")).toBe(true);
   });
 
-  it("multi-line ~ prompt=\"...\" still folds correctly (v0.2.2 fix preserved)", () => {
-    const src = [
-      "# Skill: x",
-      "# Status: Approved",
-      "step:",
-      "    ~ prompt=\"line one with apostrophe's",
-      "line two\" -> R",
-      "default: step",
-      "",
-    ].join("\n");
+  it("legacy `~` form is rejected", () => {
+    const src = "# Skill: x\nstep:\n    ~ prompt=\"X\" -> R\ndefault: step\n";
     const parsed = parse(src);
-    expect(parsed.parseErrors).toEqual([]);
-    const op = parsed.targets.get("step")!.ops[0]!;
-    expect(op.kind).toBe("~");
-    expect(op.outputVar).toBe("R");
-    expect(op.localModelParams!["prompt"]).toMatch(/line one/);
-    expect(op.localModelParams!["prompt"]).toMatch(/line two/);
+    expect(parsed.parseErrors.some((e) => e.includes("Legacy `~`"))).toBe(true);
   });
 
   it("apostrophe inside ! literal body does not engage fold", () => {
@@ -87,8 +74,8 @@ describe("v0.2.4 — Bug D: apostrophe in plain text doesn't swallow targets", (
       "# Skill: x",
       "# Status: Approved",
       "step:",
-      "    ! Don't worry about this",
-      "    ! It's fine",
+      "    emit(text=\"Don't worry about this\")",
+      "    emit(text=\"It's fine\")",
       "default: step",
       "",
     ].join("\n");
@@ -107,7 +94,7 @@ describe("v0.2.4 — Bug D: apostrophe in plain text doesn't swallow targets", (
       "# Status: Approved",
       "",
       "fetch:",
-      "    @ curl -s https://example.com",
+      "    shell(command=\"curl -s https://example.com\")",
       "",
       "default: fetch",
       "",
@@ -118,36 +105,36 @@ describe("v0.2.4 — Bug D: apostrophe in plain text doesn't swallow targets", (
   });
 });
 
-describe("v0.2.4 — Bug F: (fallback: ...) on @ and & ops binds outputVar correctly", () => {
-  it("@ op with -> VAR (fallback: ...) sets outputVar and fallback", () => {
+describe("v0.2.4 — Bug F: (fallback: ...) on shell + inline ops binds outputVar correctly", () => {
+  it("shell op with -> VAR (fallback: ...) sets outputVar and fallback", () => {
     const src = [
       "# Skill: x",
       "# Status: Approved",
       "fetch:",
-      "    @ curl -s https://example.com -> RAW (fallback: \"\")",
+      "    shell(command=\"curl -s https://example.com\") -> RAW (fallback: \"\")",
       "use:",
       "    needs: fetch",
-      "    ! $(RAW)",
+      "    emit(text=\"$(RAW)\")",
       "default: use",
       "",
     ].join("\n");
     const parsed = parse(src);
     expect(parsed.parseErrors).toEqual([]);
     const fetchOp = parsed.targets.get("fetch")!.ops[0]!;
-    expect(fetchOp.kind).toBe("@");
+    expect(fetchOp.kind).toBe("shell");
     expect(fetchOp.outputVar).toBe("RAW");
     expect(fetchOp.fallback).toBe("");
   });
 
-  it("@ op binding flows into lint: $(RAW) is declared, no undeclared-var error", async () => {
+  it("shell op binding flows into lint: $(RAW) is declared, no undeclared-var error", async () => {
     const src = [
       "# Skill: x",
       "# Status: Approved",
       "fetch:",
-      "    @ curl -s https://example.com -> RAW (fallback: \"fallback-value\")",
+      "    shell(command=\"curl -s https://example.com\") -> RAW (fallback: \"fallback-value\")",
       "use:",
       "    needs: fetch",
-      "    ! $(RAW)",
+      "    emit(text=\"$(RAW)\")",
       "default: use",
       "",
     ].join("\n");
@@ -156,35 +143,15 @@ describe("v0.2.4 — Bug F: (fallback: ...) on @ and & ops binds outputVar corre
     expect(compiled.targetOrder).toEqual(["fetch", "use"]);
   });
 
-  it("& op with -> VAR (fallback: ...) sets outputVar and fallback", () => {
+  it("shell(unsafe=true) with -> VAR (fallback: ...) still binds correctly", () => {
     const src = [
       "# Skill: x",
       "# Status: Approved",
       "fetch:",
-      "    & sub-skill key=val -> RESULT (fallback: \"none\")",
+      "    shell(command=\"echo hello\", unsafe=true) -> R (fallback: \"\")",
       "use:",
       "    needs: fetch",
-      "    ! $(RESULT)",
-      "default: use",
-      "",
-    ].join("\n");
-    const parsed = parse(src);
-    expect(parsed.parseErrors).toEqual([]);
-    const fetchOp = parsed.targets.get("fetch")!.ops[0]!;
-    expect(fetchOp.kind).toBe("&");
-    expect(fetchOp.outputVar).toBe("RESULT");
-    expect(fetchOp.fallback).toBe("none");
-  });
-
-  it("@ unsafe with -> VAR (fallback: ...) still binds correctly", () => {
-    const src = [
-      "# Skill: x",
-      "# Status: Approved",
-      "fetch:",
-      "    @ unsafe echo hello -> R (fallback: \"\")",
-      "use:",
-      "    needs: fetch",
-      "    ! $(R)",
+      "    emit(text=\"$(R)\")",
       "default: use",
       "",
     ].join("\n");
@@ -196,15 +163,15 @@ describe("v0.2.4 — Bug F: (fallback: ...) on @ and & ops binds outputVar corre
     expect(op.fallback).toBe("");
   });
 
-  it("regression: @ op without fallback still binds outputVar (v0.2.3 behavior preserved)", () => {
+  it("regression: shell op without fallback still binds outputVar", () => {
     const src = [
       "# Skill: x",
       "# Status: Approved",
       "fetch:",
-      "    @ curl -s https://example.com -> RAW",
+      "    shell(command=\"curl -s https://example.com\") -> RAW",
       "use:",
       "    needs: fetch",
-      "    ! $(RAW)",
+      "    emit(text=\"$(RAW)\")",
       "default: use",
       "",
     ].join("\n");

@@ -134,7 +134,6 @@ export {
   OpError,
   ConnectorNotFoundError,
   OpTimeoutError,
-  InteractiveOpInAutonomousModeError,
   UnsafeShellDisabledError,
   UnresolvedVariableError,
   MissingSkillReferenceError,

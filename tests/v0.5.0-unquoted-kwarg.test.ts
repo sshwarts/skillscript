@@ -36,7 +36,7 @@ describe("v0.5.0 item 1 — fires on suspect binding origins", () => {
   });
 
   it("FAIL: var bound from `~` op output (always suspect)", async () => {
-    const src = `# Skill: t\n# Status: Approved\nrun:\n    ~ prompt="Pick a topic" -> TOPIC\n    $ search_issues query=$(TOPIC) -> R\ndefault: run\n`;
+    const src = `# Skill: t\n# Status: Approved\nrun:\n    $ llm prompt="Pick a topic" -> TOPIC\n    $ search_issues query=$(TOPIC) -> R\ndefault: run\n`;
     const r = await lint(src);
     expect(r.findings.find((x) => x.rule === R)).toBeDefined();
   });
@@ -48,7 +48,7 @@ describe("v0.5.0 item 1 — fires on suspect binding origins", () => {
   });
 
   it("FAIL: var bound from `>` op (retrieval) — multi-word results", async () => {
-    const src = `# Skill: t\n# Status: Approved\nrun:\n    > mode=fts query="topic" limit=1 -> MEMS\n    $ summarize text=$(MEMS) -> R\ndefault: run\n`;
+    const src = `# Skill: t\n# Status: Approved\nrun:\n    $ data_read mode=fts query="topic" limit=1 -> MEMS\n    $ summarize text=$(MEMS) -> R\ndefault: run\n`;
     const r = await lint(src);
     expect(r.findings.find((x) => x.rule === R)).toBeDefined();
   });

@@ -85,7 +85,7 @@ describe("v0.3.2 — and/or/not boolean connectives", () => {
 
 describe("v0.3.2 — compound conditions in elif chains", () => {
   it("elif uses same compound grammar as if", async () => {
-    const src = `# Skill: t\n# Status: Approved\n# Vars: X=foo, Y=bar\nrun:\n    if $(X) == "wrong" and $(Y) == "wrong":\n        ! impossible\n    elif $(X) == "foo" or $(Y) == "wrong":\n        ! elif-hit\n    else:\n        ! fallthrough\ndefault: run\n`;
+    const src = `# Skill: t\n# Status: Approved\n# Vars: X=foo, Y=bar\nrun:\n    if $(X) == "wrong" and $(Y) == "wrong":\n        emit(text="impossible")\n    elif $(X) == "foo" or $(Y) == "wrong":\n        emit(text="elif-hit")\n    else:\n        emit(text="fallthrough")\ndefault: run\n`;
     const home = mkdtempSync(join(tmpdir(), "v032-elif-"));
     const wired = bootstrap({ skillsDir: join(home, "skills"), traceDir: join(home, "traces") });
     const compiled = await compile(src);
@@ -98,25 +98,25 @@ describe("v0.3.2 — compound conditions in elif chains", () => {
 
 describe("v0.3.2 — parser accepts compound conditions", () => {
   it("if with `and` parses cleanly", () => {
-    const src = `# Skill: t\n# Status: Approved\nrun:\n    if $(X) == "a" and $(Y) == "b":\n        ! both\ndefault: run\n`;
+    const src = `# Skill: t\n# Status: Approved\nrun:\n    if $(X) == "a" and $(Y) == "b":\n        emit(text="both")\ndefault: run\n`;
     const r = parse(src);
     expect(r.parseErrors).toEqual([]);
   });
 
   it("if with `or` parses cleanly", () => {
-    const src = `# Skill: t\n# Status: Approved\nrun:\n    if $(X) == "a" or $(Y) == "b":\n        ! either\ndefault: run\n`;
+    const src = `# Skill: t\n# Status: Approved\nrun:\n    if $(X) == "a" or $(Y) == "b":\n        emit(text="either")\ndefault: run\n`;
     const r = parse(src);
     expect(r.parseErrors).toEqual([]);
   });
 
   it("if with `not` parses cleanly", () => {
-    const src = `# Skill: t\n# Status: Approved\nrun:\n    if not $(X):\n        ! falsy\ndefault: run\n`;
+    const src = `# Skill: t\n# Status: Approved\nrun:\n    if not $(X):\n        emit(text="falsy")\ndefault: run\n`;
     const r = parse(src);
     expect(r.parseErrors).toEqual([]);
   });
 
   it("if with parenthesized compound parses cleanly", () => {
-    const src = `# Skill: t\n# Status: Approved\nrun:\n    if ($(A) == "1" or $(B) == "2") and $(C) == "3":\n        ! ok\ndefault: run\n`;
+    const src = `# Skill: t\n# Status: Approved\nrun:\n    if ($(A) == "1" or $(B) == "2") and $(C) == "3":\n        emit(text="ok")\ndefault: run\n`;
     const r = parse(src);
     expect(r.parseErrors).toEqual([]);
   });
@@ -147,14 +147,14 @@ describe("v0.3.2 — help surface", () => {
 
 describe("v0.3.2 — undeclared-var lint walks compound conditions", () => {
   it("catches undeclared ref on either side of and/or", async () => {
-    const src = `# Skill: t\n# Status: Approved\n# Vars: X=foo\nrun:\n    if $(X) == "foo" and $(UNDECLARED) == "ok":\n        ! ok\ndefault: run\n`;
+    const src = `# Skill: t\n# Status: Approved\n# Vars: X=foo\nrun:\n    if $(X) == "foo" and $(UNDECLARED) == "ok":\n        emit(text="ok")\ndefault: run\n`;
     const r = await lint(src);
     const f = r.findings.find((x) => x.rule === "undeclared-var" && /UNDECLARED/.test(x.message));
     expect(f).toBeDefined();
   });
 
   it("catches undeclared ref inside not prefix", async () => {
-    const src = `# Skill: t\n# Status: Approved\nrun:\n    if not $(UNDECLARED_NOT):\n        ! ok\ndefault: run\n`;
+    const src = `# Skill: t\n# Status: Approved\nrun:\n    if not $(UNDECLARED_NOT):\n        emit(text="ok")\ndefault: run\n`;
     const r = await lint(src);
     const f = r.findings.find((x) => x.rule === "undeclared-var" && /UNDECLARED_NOT/.test(x.message));
     expect(f).toBeDefined();

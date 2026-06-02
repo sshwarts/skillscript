@@ -1,4 +1,4 @@
 # Skill: ok
 t:
-    @ ls -la
+    shell(command="ls -la")
 default: t

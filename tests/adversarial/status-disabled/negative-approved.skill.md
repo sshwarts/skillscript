@@ -1,5 +1,5 @@
 # Skill: ok
 # Status: Approved
 t:
-    ! hi
+    emit(text="hi")
 default: t

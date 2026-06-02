@@ -1,4 +1,4 @@
 # Skill: unsafe
 t:
-    ! hi
+    emit(text="hi")
 default: t

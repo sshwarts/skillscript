@@ -22,7 +22,7 @@ import { compile } from "../src/compile.js";
 
 describe("v0.2.10 Bug 1 — `-> VAR` renders as $(VAR) in compile artifact", () => {
   it("@ op with -> VAR renders the bound variable name", async () => {
-    const src = "# Skill: t\n# Status: Approved\nfetch:\n    @ echo hi -> GREETING\ndefault: fetch\n";
+    const src = "# Skill: t\n# Status: Approved\nfetch:\n    shell(command=\"echo hi\") -> GREETING\ndefault: fetch\n";
     const r = await compile(src);
     expect(r.output).toMatch(/bind output to \$\(GREETING\)/);
     expect(r.output).not.toMatch(/\$\(fetch\.output\)/);
@@ -35,7 +35,7 @@ describe("v0.2.10 Bug 1 — `-> VAR` renders as $(VAR) in compile artifact", () 
   });
 
   it("@ op WITHOUT -> binding falls back to $(<target>.output)", async () => {
-    const src = "# Skill: t\n# Status: Approved\nfetch:\n    @ echo hi\ndefault: fetch\n";
+    const src = "# Skill: t\n# Status: Approved\nfetch:\n    shell(command=\"echo hi\")\ndefault: fetch\n";
     const r = await compile(src);
     expect(r.output).toMatch(/bind output to \$\(fetch\.output\)/);
   });
@@ -43,7 +43,7 @@ describe("v0.2.10 Bug 1 — `-> VAR` renders as $(VAR) in compile artifact", () 
 
 describe("v0.2.10 Bug 2 — `# Vars:` doesn't split mid-value on commas", () => {
   it("Perry's repro: LOCATION=Asheville,NC, UNITS=metric → 2 vars", () => {
-    const src = "# Skill: t\n# Status: Approved\n# Vars: LOCATION=Asheville,NC, UNITS=metric\nm:\n    ! hi\ndefault: m\n";
+    const src = "# Skill: t\n# Status: Approved\n# Vars: LOCATION=Asheville,NC, UNITS=metric\nm:\n    emit(text=\"hi\")\ndefault: m\n";
     const r = parse(src);
     expect(r.parseErrors).toEqual([]);
     expect(r.vars).toEqual([
@@ -53,7 +53,7 @@ describe("v0.2.10 Bug 2 — `# Vars:` doesn't split mid-value on commas", () => 
   });
 
   it("chains of bare-required vars still split (A, B, C → 3 vars)", () => {
-    const src = "# Skill: t\n# Status: Approved\n# Vars: A, B, C\nm:\n    ! hi\ndefault: m\n";
+    const src = "# Skill: t\n# Status: Approved\n# Vars: A, B, C\nm:\n    emit(text=\"hi\")\ndefault: m\n";
     const r = parse(src);
     expect(r.vars).toEqual([
       { name: "A", required: true },
@@ -63,7 +63,7 @@ describe("v0.2.10 Bug 2 — `# Vars:` doesn't split mid-value on commas", () => 
   });
 
   it("mixed: bare-required + defaulted-with-comma + bare-defaulted", () => {
-    const src = "# Skill: t\n# Status: Approved\n# Vars: NC, LOCATION=Asheville,NC, UNITS=metric\nm:\n    ! hi\ndefault: m\n";
+    const src = "# Skill: t\n# Status: Approved\n# Vars: NC, LOCATION=Asheville,NC, UNITS=metric\nm:\n    emit(text=\"hi\")\ndefault: m\n";
     const r = parse(src);
     expect(r.vars).toEqual([
       { name: "NC", required: true },
@@ -73,7 +73,7 @@ describe("v0.2.10 Bug 2 — `# Vars:` doesn't split mid-value on commas", () => 
   });
 
   it("# Templates: with hyphenated skill names still splits (regression guard from v0.2.6)", () => {
-    const src = "# Skill: t\n# Status: Approved\n# Templates: queue-drain-procedure, ops-page\n# Output: agent: oncall\nm:\n    ! hi\ndefault: m\n";
+    const src = "# Skill: t\n# Status: Approved\n# Templates: queue-drain-procedure, ops-page\n# Output: agent: oncall\nm:\n    emit(text=\"hi\")\ndefault: m\n";
     const r = parse(src);
     expect(r.parseErrors).toEqual([]);
     expect(r.templates).toEqual(["queue-drain-procedure", "ops-page"]);
@@ -82,7 +82,7 @@ describe("v0.2.10 Bug 2 — `# Vars:` doesn't split mid-value on commas", () => 
 
 describe("v0.2.10 Bug 3 — nested control flow parses correctly", () => {
   it("if-in-if (two levels of nesting)", () => {
-    const src = "# Skill: t\n# Status: Approved\nmain:\n    if $(A):\n        if $(B):\n            ! both\ndefault: main\n";
+    const src = "# Skill: t\n# Status: Approved\nmain:\n    if $(A):\n        if $(B):\n            emit(text=\"both\")\ndefault: main\n";
     const r = parse(src);
     expect(r.parseErrors).toEqual([]);
     const op = r.targets.get("main")!.ops[0]!;
@@ -91,7 +91,7 @@ describe("v0.2.10 Bug 3 — nested control flow parses correctly", () => {
   });
 
   it("foreach inside if", () => {
-    const src = "# Skill: t\n# Status: Approved\nmain:\n    if $(A):\n        foreach M in $(LIST):\n            ! $(M)\ndefault: main\n";
+    const src = "# Skill: t\n# Status: Approved\nmain:\n    if $(A):\n        foreach M in $(LIST):\n            emit(text=\"$(M)\")\ndefault: main\n";
     const r = parse(src);
     expect(r.parseErrors).toEqual([]);
     const op = r.targets.get("main")!.ops[0]!;
@@ -99,13 +99,13 @@ describe("v0.2.10 Bug 3 — nested control flow parses correctly", () => {
   });
 
   it("if-then-sibling op at same target level", () => {
-    const src = "# Skill: t\n# Status: Approved\nmain:\n    if $(A):\n        ! inside\n    ! after\ndefault: main\n";
+    const src = "# Skill: t\n# Status: Approved\nmain:\n    if $(A):\n        emit(text=\"inside\")\n    emit(text=\"after\")\ndefault: main\n";
     const r = parse(src);
     expect(r.parseErrors).toEqual([]);
     const ops = r.targets.get("main")!.ops;
     expect(ops).toHaveLength(2);
     expect(ops[0]!.kind).toBe("if");
-    expect(ops[1]!.kind).toBe("!");
+    expect(ops[1]!.kind).toBe("emit");
   });
 
   it("the load-bearing case: elif with nested-if then sibling else", () => {
@@ -118,12 +118,12 @@ describe("v0.2.10 Bug 3 — nested control flow parses correctly", () => {
       "# Vars: A=1, B=2",
       "main:",
       `    if $(A) > "5":`,
-      "        ! high",
+      "        emit(text=\"high\")",
       `    elif $(A) > "0":`,
       `        if $(B) > "0":`,
-      "            ! medium-both",
+      "            emit(text=\"medium-both\")",
       "    else:",
-      "        ! default",
+      "        emit(text=\"default\")",
       "default: main",
       "",
     ].join("\n");
@@ -136,7 +136,7 @@ describe("v0.2.10 Bug 3 — nested control flow parses correctly", () => {
   });
 
   it("deeply nested: if > foreach > if", () => {
-    const src = "# Skill: t\n# Status: Approved\nmain:\n    if $(A):\n        foreach M in $(LIST):\n            if $(M.urgent):\n                ! flagged\ndefault: main\n";
+    const src = "# Skill: t\n# Status: Approved\nmain:\n    if $(A):\n        foreach M in $(LIST):\n            if $(M.urgent):\n                emit(text=\"flagged\")\ndefault: main\n";
     const r = parse(src);
     expect(r.parseErrors).toEqual([]);
   });

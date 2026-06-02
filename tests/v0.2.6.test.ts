@@ -62,7 +62,7 @@ describe("v0.2.6 → v0.9.6 — Item 3: parser captures # Event-type: + # Templa
       "# Output: agent: oncall",
       "",
       "main:",
-      "    ! alert body",
+      "    emit(text=\"alert body\")",
       "default: main",
       "",
     ].join("\n");
@@ -73,14 +73,14 @@ describe("v0.2.6 → v0.9.6 — Item 3: parser captures # Event-type: + # Templa
   });
 
   it("absence of both headers leaves fields at default null / empty array", () => {
-    const src = "# Skill: x\n# Status: Approved\nm:\n    ! hi\ndefault: m\n";
+    const src = "# Skill: x\n# Status: Approved\nm:\n    emit(text=\"hi\")\ndefault: m\n";
     const parsed = parse(src);
     expect(parsed.eventType).toBeNull();
     expect(parsed.templates).toEqual([]);
   });
 
   it("# Templates: (none) parses as empty list", () => {
-    const src = "# Skill: x\n# Status: Approved\n# Output: agent: a\n# Templates: (none)\nm:\n    ! hi\ndefault: m\n";
+    const src = "# Skill: x\n# Status: Approved\n# Output: agent: a\n# Templates: (none)\nm:\n    emit(text=\"hi\")\ndefault: m\n";
     const parsed = parse(src);
     expect(parsed.templates).toEqual([]);
   });
@@ -93,7 +93,7 @@ describe("v0.2.6 → v0.9.6 — Item 3: unused-augmenting-header lint rule", () 
       "# Status: Approved",
       "# Event-type: orphan",
       "m:",
-      "    ! hi",
+      "    emit(text=\"hi\")",
       "default: m",
       "",
     ].join("\n");
@@ -112,7 +112,7 @@ describe("v0.2.6 → v0.9.6 — Item 3: unused-augmenting-header lint rule", () 
       "# Templates: follow-up-skill",
       "# Output: agent: assistant",
       "m:",
-      "    ! hi",
+      "    emit(text=\"hi\")",
       "default: m",
       "",
     ].join("\n");
@@ -122,7 +122,7 @@ describe("v0.2.6 → v0.9.6 — Item 3: unused-augmenting-header lint rule", () 
   });
 
   it("does NOT fire when neither field is set", async () => {
-    const src = "# Skill: x\n# Status: Approved\nm:\n    ! hi\ndefault: m\n";
+    const src = "# Skill: x\n# Status: Approved\nm:\n    emit(text=\"hi\")\ndefault: m\n";
     const result = await lint(src);
     const warning = result.findings.find((f) => f.rule === "unused-augmenting-header");
     expect(warning).toBeUndefined();
@@ -142,7 +142,7 @@ describe("v0.2.6 → v0.9.6 — DeliveryPayload meta envelope (Q8 contract)", ()
       "# Output: agent: oncall",
       "",
       "main:",
-      "    ! Queue at 47 items.",
+      "    emit(text=\"Queue at 47 items.\")",
       "default: main",
       "",
     ].join("\n");
@@ -171,7 +171,7 @@ describe("v0.2.6 → v0.9.6 — DeliveryPayload meta envelope (Q8 contract)", ()
       "# Output: template: scott",
       "",
       "main:",
-      "    ! morning brief body",
+      "    emit(text=\"morning brief body\")",
       "default: main",
       "",
     ].join("\n");
@@ -196,7 +196,7 @@ describe("v0.2.6 → v0.9.6 — DeliveryPayload meta envelope (Q8 contract)", ()
       "# Output: agent: oncall",
       "",
       "main:",
-      "    ! cron tick",
+      "    emit(text=\"cron tick\")",
       "default: main",
       "",
     ].join("\n");
@@ -224,7 +224,7 @@ describe("v0.2.6 → v0.9.6 — DeliveryPayload meta envelope (Q8 contract)", ()
       "# Output: agent: anon",
       "",
       "main:",
-      "    ! hi",
+      "    emit(text=\"hi\")",
       "default: main",
       "",
     ].join("\n");

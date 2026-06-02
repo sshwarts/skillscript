@@ -40,7 +40,7 @@ const GOOD_SKILL = [
   "# Description: Emit a greeting",
   "# Status: Draft",
   "greet:",
-  "    ! hello",
+  "    emit(text=\"hello\")",
   "default: greet",
   "",
 ].join("\n");
@@ -135,7 +135,7 @@ describe("v0.2.3 — compile_skill MCP tool", () => {
       "# Vars: WHO=world",
       "# Status: Draft",
       "g:",
-      "    ! Hello $(WHO)",
+      "    emit(text=\"Hello $(WHO)\")",
       "default: g",
       "",
     ].join("\n");

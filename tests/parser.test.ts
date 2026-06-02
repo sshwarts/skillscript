@@ -10,7 +10,7 @@ describe("parser", () => {
 # Vars: WHO=world
 
 greet:
-    ! Hello, $(WHO)!
+    emit(text="Hello, $(WHO)!")
 
 default: greet
 `;
@@ -23,34 +23,33 @@ default: greet
     expect(p.targets.has("greet")).toBe(true);
     const target = p.targets.get("greet")!;
     expect(target.ops).toHaveLength(1);
-    expect(target.ops[0]).toMatchObject({ kind: "!", body: "Hello, $(WHO)!" });
+    expect(target.ops[0]).toMatchObject({ kind: "emit", body: "Hello, $(WHO)!" });
   });
 
-  it("parses $set, ?, @, !, ?? ops", () => {
+  it("parses $set, ?, shell, emit ops", () => {
     const src = `t:
     $set X = hello
     ? thinking
-    @ ls -la
-    ! talking
-    ?? what?
+    shell(command="ls -la")
+    emit(text="talking")
 
 default: t
 `;
     const p = parse(src);
     expect(p.parseErrors).toEqual([]);
     const kinds = p.targets.get("t")!.ops.map((o) => o.kind);
-    expect(kinds).toEqual(["$set", "?", "@", "!", "??"]);
+    expect(kinds).toEqual(["$set", "?", "shell", "emit"]);
   });
 
   it("parses target deps and toposorts", () => {
     const src = `a:
-    ! a
+    emit(text="a")
 
 b: a
-    ! b
+    emit(text="b")
 
 c: b
-    ! c
+    emit(text="c")
 
 default: c
 `;
@@ -62,10 +61,10 @@ default: c
 
   it("detects dep cycles", () => {
     const src = `a: b
-    ! a
+    emit(text="a")
 
 b: a
-    ! b
+    emit(text="b")
 
 default: a
 `;
@@ -77,11 +76,11 @@ default: a
     const src = `t:
     $set MODE = fast
     if $(MODE) == "fast":
-        ! fast path
+        emit(text="fast path")
     elif $(MODE) == "slow":
-        ! slow path
+        emit(text="slow path")
     else:
-        ! default
+        emit(text="default")
 
 default: t
 `;
@@ -97,7 +96,7 @@ default: t
     const src = `t:
     $set ITEMS = [a, b, c]
     foreach I in $(ITEMS):
-        ! $(I)
+        emit(text="$(I)")
 
 default: t
 `;
@@ -116,7 +115,7 @@ default: t
 # Output: agent: oncall
 
 t:
-    ! hi
+    emit(text="hi")
 
 default: t
 `;
@@ -131,7 +130,7 @@ default: t
 # Output: slack: #alerts
 
 t:
-    ! hi
+    emit(text="hi")
 
 default: t
 `;
@@ -143,7 +142,7 @@ default: t
 # Output: card: id
 
 t:
-    ! hi
+    emit(text="hi")
 
 default: t
 `;
@@ -155,7 +154,7 @@ default: t
   it("rejects unsupported condition shapes", () => {
     const src = `t:
     if $(A) && $(B):
-        ! both
+        emit(text="both")
 
 default: t
 `;
@@ -166,7 +165,7 @@ default: t
 
   it("rejects top-level if/elif", () => {
     const src = `if $(X):
-    ! oops
+    emit(text="oops")
 
 default: foo
 `;

@@ -92,9 +92,9 @@ describe("v0.2.1 — wireDeclarativeTriggers()", () => {
   it("registers # Triggers: headers from Approved skills only", async () => {
     const wired = bootstrap({ skillsDir: join(home, "skills"), traceDir: join(home, "traces") });
     await wired.skillStore.store("approved-one",
-      "# Skill: approved-one\n# Status: Approved\n# Triggers: cron: */5 * * * *\nt:\n    ! hi\ndefault: t\n");
+      "# Skill: approved-one\n# Status: Approved\n# Triggers: cron: */5 * * * *\nt:\n    emit(text=\"hi\")\ndefault: t\n");
     await wired.skillStore.store("draft-one",
-      "# Skill: draft-one\n# Status: Draft\n# Triggers: cron: */1 * * * *\nt:\n    ! hi\ndefault: t\n");
+      "# Skill: draft-one\n# Status: Draft\n# Triggers: cron: */1 * * * *\nt:\n    emit(text=\"hi\")\ndefault: t\n");
     const { registered, skipped } = await wireDeclarativeTriggers(wired, () => {});
     expect(registered).toBe(1);
     expect(skipped).toBe(0);
@@ -107,7 +107,7 @@ describe("v0.2.1 — wireDeclarativeTriggers()", () => {
   it("registers every # Triggers: entry when a skill declares multiple", async () => {
     const wired = bootstrap({ skillsDir: join(home, "skills"), traceDir: join(home, "traces") });
     await wired.skillStore.store("multi",
-      "# Skill: multi\n# Status: Approved\n# Triggers: cron: 0 9 * * *, session: start\nt:\n    ! hi\ndefault: t\n");
+      "# Skill: multi\n# Status: Approved\n# Triggers: cron: 0 9 * * *, session: start\nt:\n    emit(text=\"hi\")\ndefault: t\n");
     const { registered } = await wireDeclarativeTriggers(wired, () => {});
     expect(registered).toBe(2);
     const sources = wired.scheduler.listTriggers().map((t) => t.source).sort();
@@ -222,7 +222,7 @@ describe("v0.2.1 — scheduler.start() in dashboard host", () => {
       trace: { mode: "on" },
     });
     await wired.skillStore.store("ticky",
-      "# Skill: ticky\n# Status: Approved\nt:\n    ! pong\ndefault: t\n");
+      "# Skill: ticky\n# Status: Approved\nt:\n    emit(text=\"pong\")\ndefault: t\n");
     wired.scheduler.registerTrigger({
       skillName: "ticky",
       source: "cron",

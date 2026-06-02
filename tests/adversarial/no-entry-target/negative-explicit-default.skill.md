@@ -1,4 +1,4 @@
 # Skill: ok
 a:
-    ! a
+    emit(text="a")
 default: a

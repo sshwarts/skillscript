@@ -109,7 +109,7 @@ describe("DashboardServer /rpc endpoint", () => {
   it("POST /rpc routes tools/call (skill_list, v0.9.8 SkillCatalog)", async () => {
     // alpha is agent-invokable (no # Output:, no triggers) — surfaces in skills
     // per v0.9.8.1 inference branch.
-    await ctx.skillStore.store("alpha", "# Skill: alpha\n# Status: Approved\nt:\n    ! hi\ndefault: t\n");
+    await ctx.skillStore.store("alpha", "# Skill: alpha\n# Status: Approved\nt:\n    emit(text=\"hi\")\ndefault: t\n");
     const r = await fetch(`${ctx.baseUrl}/rpc`, {
       method: "POST",
       headers: { "content-type": "application/json" },

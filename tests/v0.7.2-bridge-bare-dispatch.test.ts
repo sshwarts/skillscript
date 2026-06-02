@@ -99,17 +99,13 @@ describe("v0.7.2 — bare-form bridge dispatch (push-blocker fix)", () => {
     expect((result.errors[0] as { class?: string }).class).toBe("ConnectorNotFoundError");
   });
 
-  it("explicit primary still works (no regression for adopters who wire primary)", async () => {
+  it("v0.16.0: named-form `$ primary.prompt` works against a wired primary", async () => {
     const wired = bootstrap({ skillsDir: join(home, "skills"), traceDir: join(home, "traces") });
-    // Wire a `primary` connector so the bare-form fallback path works.
     wired.registry.registerMcpConnector("primary", new LocalModelMcpConnector(new FakeLocalModel()));
 
-    // `$ some_tool ...` — `some_tool` isn't a registered connector name,
-    // so falls back to `primary`. Primary is wired (FakeLocalModel ignores
-    // toolName and expects `prompt` kwarg; without one it throws). For
-    // backward-compat we just confirm the resolver finds primary, not
-    // whether the actual call succeeds.
-    const src = `# Skill: t\n# Status: Approved\nrun:\n    $ some_tool prompt="hi" -> R\n    emit(text="\${R}")\ndefault: run\n`;
+    // Named form against `primary` connector + `prompt` tool (declared on
+    // LocalModelMcpConnector.staticTools).
+    const src = `# Skill: t\n# Status: Approved\nrun:\n    $ primary.prompt prompt="hi" -> R\n    emit(text="\${R}")\ndefault: run\n`;
     const compiled = await compile(src);
     const result = await execute(compiled.parsed, compiled.resolvedVariables, compiled.targetOrder, { registry: wired.registry });
     expect(result.errors).toEqual([]);

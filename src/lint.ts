@@ -402,11 +402,11 @@ const UNDECLARED_VAR: LintRule = {
     for (const [targetName, target] of ctx.parsed.targets) {
       const reported = new Set<string>(); // dedupe per target
       for (const op of target.ops) {
-        // `@ unsafe` ops use bash `$(...)` syntax — handled by
+        // Unsafe `shell` ops use bash `$(...)` syntax — handled by
         // unsafe-shell-ambiguous-subst, which offers the dual rewrite
         // (`$$(NAME)` for bash, `$(KNOWN_VAR)` for skillscript). Skip here
         // to avoid double-reporting.
-        if (op.kind === "@" && op.policy === "unsafe") continue;
+        if (op.kind === "shell" && op.policy === "unsafe") continue;
         for (const ref of extractVarRefs(op)) {
           // Heuristic: dotted refs (targetname.output, MEMORY.field) pass
           // as ambient — runtime substitution handles dotted lookups.
@@ -462,9 +462,9 @@ const MALFORMED_OP_GRAMMAR: LintRule = {
   id: "malformed-op-grammar",
   severity: "error",
   description: "An op line failed parser grammar validation. Surfaces parse errors that originate from op-specific shape.",
-  remediation: "Check the op's syntax against the language reference. Common cases: `>` and `~` need `key=value ... -> VAR`; `& skill arg=value -> VAR` for skill invocations.",
+  remediation: "Check the op's syntax against the language reference. `$ tool key=value ... -> VAR` for MCP dispatch; `verb(kwarg=value, ...) [-> VAR]` for runtime intrinsics.",
   check: (ctx) => ctx.parsed.parseErrors
-    .filter((msg) => /Malformed `[~>&$@!?]/.test(msg))
+    .filter((msg) => /Malformed `\$|Malformed function-call|Legacy `[~>&@!?]/.test(msg))
     .map((msg) => ({
       rule: "malformed-op-grammar",
       severity: "error" as const,
@@ -568,40 +568,6 @@ const UNKNOWN_SKILL_REFERENCE: LintRule = {
           extras: { referenced_skill: name, vias: Array.from(vias) },
         });
       }
-    }
-    return findings;
-  },
-};
-
-// v0.2.12 Bug 26. Tier-2 warning when a `>` retrieval op carries kwargs
-// outside the documented set. Cold author wrote `since=1h` (hallucinated
-// time-window predicate) and the kwarg passed silently. The documented
-// kwarg set is mode/query/limit/connector/fallback plus filter shapes
-// the connector advertises via staticCapabilities (out of band here).
-const KNOWN_RETRIEVAL_KWARGS = new Set(["mode", "query", "limit", "connector", "fallback"]);
-
-const UNKNOWN_RETRIEVAL_ARG: LintRule = {
-  id: "unknown-retrieval-arg",
-  severity: "warning",
-  description: "A `>` retrieval op carries a kwarg outside the documented set (mode/query/limit/connector/fallback).",
-  remediation: "Remove the kwarg, or check it against your DataStore connector's documentation — extras pass through to the connector but unrecognized ones often indicate hallucinated syntax.",
-  check: (ctx) => {
-    const findings: LintFinding[] = [];
-    for (const [targetName, target] of ctx.parsed.targets) {
-      walkOps(target.ops, (op) => {
-        if (op.kind !== ">") return;
-        const extras = op.retrievalParams?.extra ?? {};
-        for (const k of Object.keys(extras)) {
-          if (KNOWN_RETRIEVAL_KWARGS.has(k)) continue;
-          findings.push({
-            rule: "unknown-retrieval-arg",
-            severity: "warning",
-            message: `\`>\` op in target '${targetName}' carries unknown kwarg '${k}'. Documented kwargs: ${Array.from(KNOWN_RETRIEVAL_KWARGS).join(", ")}. If '${k}' is a connector-specific filter, confirm it against the connector's docs.`,
-            block: targetName,
-            extras: { unknown_kwarg: k },
-          });
-        }
-      });
     }
     return findings;
   },
@@ -810,11 +776,20 @@ const UNVERIFIED_QUALIFIED_TOOL: LintRule = {
 // the lint message didn't explain the layering. Now: if all sites have
 // fallback → info with layering explanation; if any site lacks it → error
 // (unchanged).
+// v0.16.0 — bare-form `$ <tool>` is reserved for runtime-intrinsic ops + tools
+// whose name name-matches a registered MCP connector (the typed-contract pattern,
+// e.g. `$ llm prompt=...` dispatches to the `llm` connector). Substrate-specific
+// MCP tool dispatch (e.g. `amp_olsen_task`) MUST use named form `$ <connector>.<tool>`
+// — no more "primary fallback" leniency. Closes the discipline-only-contract gap
+// where adopters wrote bare-form expecting `primary` and silent-failed on cron-fired
+// paths when primary wasn't registered.
+const BARE_FORM_INTRINSICS = new Set(["execute_skill", "json_parse"]);
+
 const UNWIRED_PRIMARY_CONNECTOR: LintRule = {
   id: "unwired-primary-connector",
   severity: "error",
-  description: "A bare `$ TOOL` op (no connector prefix) routes to either (a) a wired connector matching the op name, or (b) the `primary` connector's tool dispatch. Neither resolves. Demoted to advisory when every call site declares `(fallback: ...)` (v0.9.4.1).",
-  remediation: "For skill authors (in-skill fix): qualify the op as `$ <connector>.<tool>` against a wired connector, OR pick a `tool` name that matches a wired connector name (e.g., `$ llm prompt=...` if `llm` is wired), OR add `(fallback: \"...\")` to every call site to acknowledge dispatch-time guarding. For runtime operators (config fix): wire a connector whose name matches the bare op (the v0.7.2 canonical pattern — e.g., `llm` / `memory` auto-wire by default in bundled deployments), or add a `primary` entry to connectors.json that handles the tool.",
+  description: "A bare `$ TOOL` op (no connector prefix) routes only to (a) a runtime-intrinsic op or (b) a wired connector whose name matches the op name. v0.16.0 removed the `primary` fallback — substrate-specific MCP tools require named form `$ <connector>.<tool>`.",
+  remediation: "Use named form `$ <connector>.<tool>` for substrate-specific MCP dispatch (e.g., `$ amp.amp_olsen_task` instead of `$ amp_olsen_task`). Bare form is reserved for runtime intrinsics (`execute_skill`, `json_parse`) and typed-contract ops where the tool name matches a wired connector (e.g., `$ llm prompt=...` if `llm` is wired).",
   check: (ctx) => {
     if (ctx.mcpConnectorNames === undefined) return [];
     const findings: LintFinding[] = [];
@@ -823,18 +798,14 @@ const UNWIRED_PRIMARY_CONNECTOR: LintRule = {
     for (const [targetName, target] of ctx.parsed.targets) {
       walkOps(target.ops, (op) => {
         if (op.kind !== "$" || op.mcpConnector !== undefined) return;
-        // Built-in intercepts that don't need a connector at all.
         const m = /^([A-Za-z_][\w:-]*)/.exec(op.body);
         if (m === null) return;
         const toolName = m[1]!;
-        if (toolName === "execute_skill" || toolName === "json_parse") return;
-        // v0.7.3 name-match: if the bare op name matches a wired
-        // connector, the runtime dispatch resolver routes there directly.
-        // (Mirrors `runtime.ts` `$` op dispatch — kept in sync with that
-        // fix to prevent the v0.7.2-shape regression of lint-fails-then-
-        // user-never-reaches-runtime.)
+        if (BARE_FORM_INTRINSICS.has(toolName)) return;
+        // Name-match: bare op name matches a wired connector → typed-contract
+        // pattern (e.g., `$ llm` against wired `llm` connector). Runtime
+        // dispatch resolver routes directly.
         if (ctx.mcpConnectorNames!.includes(toolName)) return;
-        if (ctx.mcpConnectorNames!.includes("primary")) return;
         const key = `${targetName}:${toolName}`;
         const hasFallback = op.fallback !== undefined;
         const existing = groups.get(key);
@@ -859,7 +830,7 @@ const UNWIRED_PRIMARY_CONNECTOR: LintRule = {
         findings.push({
           rule: "unwired-primary-connector",
           severity: "error",
-          message: `\`$ ${toolName}\` in target '${targetName}' is a bare tool op — no connector named '${toolName}' wired and no \`primary\` fallback. Wired connectors: ${wired}.`,
+          message: `\`$ ${toolName}\` in target '${targetName}' is bare-form but '${toolName}' is not a runtime intrinsic AND doesn't match any wired MCP connector. Bare form is reserved for typed-contract / intrinsic ops. Use named form \`$ <connector>.${toolName}\` for substrate-specific MCP dispatch. Wired connectors: ${wired}.`,
           block: targetName,
           extras: { tool: toolName },
         });
@@ -924,13 +895,6 @@ const UNPARSED_JSON_FIELD_ACCESS: LintRule = {
         if (op.foreachList !== undefined) reportIfMatches(op.foreachList, targetName);
         if (op.ifBranches !== undefined) {
           for (const b of op.ifBranches) reportIfMatches(b.cond, targetName);
-        }
-        if (op.retrievalParams !== undefined) {
-          reportIfMatches(op.retrievalParams.query, targetName);
-          for (const v of Object.values(op.retrievalParams.extra)) reportIfMatches(String(v), targetName);
-        }
-        if (op.localModelParams !== undefined) {
-          reportIfMatches(op.localModelParams.prompt, targetName);
         }
         if (op.ampParams !== undefined) {
           for (const v of Object.values(op.ampParams.args)) reportIfMatches(v, targetName);
@@ -1124,11 +1088,11 @@ const MISSING_SKILLSTORE_FOR_DATA_REF: LintRule = {
     const findings: LintFinding[] = [];
     for (const [targetName, target] of ctx.parsed.targets) {
       for (const op of target.ops) {
-        if (op.kind === "&") {
+        if (op.kind === "inline") {
           findings.push({
             rule: "missing-skillstore-for-data-ref",
             severity: "error",
-            message: `Skill references skill '${op.ampParams?.skillName ?? "(unknown)"}' via \`&\`, but lint was invoked without a SkillStore (call site: ${ctx.callSite}). Data-skill inlining will silently skip; the \`&\` op will survive into the runtime and error.`,
+            message: `Skill references skill '${op.ampParams?.skillName ?? "(unknown)"}' via \`inline(...)\`, but lint was invoked without a SkillStore (call site: ${ctx.callSite}). Data-skill inlining will silently skip; the \`inline\` op will survive into the runtime and error.`,
             block: targetName,
             extras: { call_site: ctx.callSite },
           });
@@ -1196,7 +1160,7 @@ const UNSAFE_SHELL_AMBIGUOUS_SUBST: LintRule = {
     for (const [targetName, target] of ctx.parsed.targets) {
       const reported = new Set<string>();
       walkOps(target.ops, (op) => {
-        if (op.kind !== "@" || op.policy !== "unsafe") return;
+        if (op.kind !== "shell" || op.policy !== "unsafe") return;
         const re = new RegExp(REF_RE.source, "g");
         let m: RegExpExecArray | null;
         while ((m = re.exec(op.body)) !== null) {
@@ -1241,7 +1205,7 @@ const UNSAFE_SHELL_OP: LintRule = {
     const findings: LintFinding[] = [];
     for (const [targetName, target] of ctx.parsed.targets) {
       walkOps(target.ops, (op) => {
-        if (op.kind === "@" && op.policy === "unsafe") {
+        if (op.kind === "shell" && op.policy === "unsafe") {
           findings.push({
             rule: "unsafe-shell-op",
             severity: "warning",
@@ -1277,7 +1241,7 @@ const UNSAFE_SHELL_DISABLED: LintRule = {
     const findings: LintFinding[] = [];
     for (const [targetName, target] of ctx.parsed.targets) {
       walkOps(target.ops, (op) => {
-        if (op.kind === "@" && op.policy === "unsafe") {
+        if (op.kind === "shell" && op.policy === "unsafe") {
           findings.push({
             rule: "unsafe-shell-disabled",
             severity: "error",
@@ -1307,8 +1271,8 @@ const UNSAFE_SHELL_DISABLED: LintRule = {
 const UNCONFIRMED_MUTATION: LintRule = {
   id: "unconfirmed-mutation",
   severity: "warning",
-  description: "A mutation-class op runs without author authorization. Mutation classes: `$ tool` with mutating-name shape (write/update/delete/...); `$ data_write` MCP dispatch; `file_write(...)` function-call op. Silent when the skill declares `# Autonomous: true` (v0.4.2), when a preceding `??` / `ask(...)` confirmation gates the op, or (v0.7.0+) when the op carries `approved=\"reason\"` per-op authorization.",
-  remediation: "Three ways to authorize: (1) add `# Autonomous: true` at the skill header for cron/agent-fired skills; (2) add a preceding `??` / `ask(prompt=\"...\")` confirmation op in the same target; (3) v0.7.0+: pass `approved=\"reason\"` kwarg on the mutation op itself (any non-empty string; presence is what matters, value not parsed semantically).",
+  description: "A mutation-class op runs without author authorization. Mutation classes: `$ tool` with mutating-name shape (write/update/delete/...); `$ data_write` MCP dispatch; `file_write(...)` function-call op. Silent when the skill declares `# Autonomous: true` or when the op carries `approved=\"reason\"` per-op authorization.",
+  remediation: "Two ways to authorize: (1) add `# Autonomous: true` at the skill header for cron/agent-fired skills; (2) pass `approved=\"reason\"` kwarg on the mutation op itself (any non-empty string; presence is what matters, value not parsed semantically).",
   check: (ctx) => {
     const skillAutonomous = ctx.parsed.autonomous === true;
     // v0.4.2 — `# Autonomous: true` skills are unattended by design;
@@ -1318,11 +1282,8 @@ const UNCONFIRMED_MUTATION: LintRule = {
     if (skillAutonomous) return [];
     const findings: LintFinding[] = [];
     for (const [targetName, target] of ctx.parsed.targets) {
-      const authState: MutationAuthState = { skillAutonomous, sawConfirm: false };
+      const authState: MutationAuthState = { skillAutonomous };
       for (const op of target.ops) {
-        // v0.7.0+: ask(prompt=...) parses to kind "??" in the AST, so the
-        // same check captures both legacy `??` and canonical `ask()`.
-        if (op.kind === "??") authState.sawConfirm = true;
         if (authorizationGranted(op, authState)) continue;
         const classification = classifyMutation(op);
         if (classification === null) continue;
@@ -1330,7 +1291,7 @@ const UNCONFIRMED_MUTATION: LintRule = {
           findings.push({
             rule: "unconfirmed-mutation",
             severity: "warning",
-            message: `\`file_write(path="${classification.detail}")\` in target '${targetName}' is a mutation op without authorization. Add \`approved="..."\` kwarg, precede with \`ask(...)\`, or declare \`# Autonomous: true\`.`,
+            message: `\`file_write(path="${classification.detail}")\` in target '${targetName}' is a mutation op without authorization. Add \`approved="..."\` kwarg or declare \`# Autonomous: true\`.`,
             block: targetName,
             extras: { op_kind: "file_write", path: classification.detail },
           });
@@ -1338,45 +1299,12 @@ const UNCONFIRMED_MUTATION: LintRule = {
           findings.push({
             rule: "unconfirmed-mutation",
             severity: "warning",
-            message: `\`$\` op in target '${targetName}' invokes '${classification.detail}' (mutating shape) without authorization. Add \`approved="..."\` kwarg, precede with \`ask(...)\`, or declare \`# Autonomous: true\`.`,
+            message: `\`$\` op in target '${targetName}' invokes '${classification.detail}' (mutating shape) without authorization. Add \`approved="..."\` kwarg or declare \`# Autonomous: true\`.`,
             block: targetName,
             extras: { tool_name: classification.detail },
           });
         }
       }
-    }
-    return findings;
-  },
-};
-
-const MODEL_CONTENTION: LintRule = {
-  id: "model-contention",
-  severity: "warning",
-  description: "Skill body has a `$` op dispatching async batch work on a model + a downstream `~ model=X` synchronous call to the same model. The runtime serializes per-model; the sync call queues behind the batch.",
-  remediation: "Use distinct models for async vs sync work: e.g., `gemma2` for batch + `qwen` for the interactive verdict. See ERD §3 model selection convention.",
-  check: (ctx) => {
-    const findings: LintFinding[] = [];
-    // Heuristic: collect ~ op model names per target. Flag if any $ op
-    // in the same target dispatches a batch-classification-shaped tool
-    // (name contains "olsen", "scan", "batch", "classify"). Conservative.
-    for (const [targetName, target] of ctx.parsed.targets) {
-      const syncModels = new Set<string>();
-      walkOps(target.ops, (op) => {
-        if (op.kind === "~" && op.localModelParams?.model) syncModels.add(op.localModelParams.model);
-      });
-      if (syncModels.size === 0) return findings;
-      walkOps(target.ops, (op) => {
-        if (op.kind !== "$") return;
-        const toolName = op.body.split(/\s+/)[0] ?? "";
-        if (/scan|batch|classify|atomize/i.test(toolName)) {
-          findings.push({
-            rule: "model-contention",
-            severity: "warning",
-            message: `Target '${targetName}' dispatches batch work via '${toolName}' AND uses sync \`~ model=...\` — possible model contention on the same backend.`,
-            block: targetName,
-          });
-        }
-      });
     }
     return findings;
   },
@@ -1620,7 +1548,7 @@ const OUTPUT_AGENT_TARGET_NO_EMIT: LintRule = {
     if (agentBoundOutputs.length === 0) return findings;
     let hasEmit = false;
     for (const [, target] of ctx.parsed.targets) {
-      walkOps(target.ops, (op) => { if (op.kind === "!") hasEmit = true; });
+      walkOps(target.ops, (op) => { if (op.kind === "emit") hasEmit = true; });
       if (hasEmit) break;
     }
     if (hasEmit) return findings;
@@ -2142,7 +2070,7 @@ const APPEND_TO_NON_LIST: LintRule = {
 type BindingOrigin =
   | { kind: "vars"; rawDefault?: string }
   | { kind: "set-literal"; value: string }
-  | { kind: "op-output"; op: "$" | "~" | ">" | "@" }
+  | { kind: "op-output"; op: "$" | "shell" }
   | { kind: "foreach-iter" }
   | { kind: "set-ref" }; // $set X = $(REF) — propagate, treated as suspect
 
@@ -2165,9 +2093,7 @@ function buildBindingOrigins(parsed: ParsedSkill): Map<string, BindingOrigin> {
       }
       if (op.outputVar !== undefined) {
         if (op.kind === "$") origins.set(op.outputVar, { kind: "op-output", op: "$" });
-        else if (op.kind === "~") origins.set(op.outputVar, { kind: "op-output", op: "~" });
-        else if (op.kind === ">") origins.set(op.outputVar, { kind: "op-output", op: ">" });
-        else if (op.kind === "@") origins.set(op.outputVar, { kind: "op-output", op: "@" });
+        else if (op.kind === "shell") origins.set(op.outputVar, { kind: "op-output", op: "shell" });
       }
       if (op.kind === "foreach" && op.foreachIter !== undefined) {
         origins.set(op.foreachIter, { kind: "foreach-iter" });
@@ -2237,14 +2163,13 @@ const UNQUOTED_SUBSTITUTION_IN_KWARG_VALUE: LintRule = {
               extras: { kwarg: key, var_name: varName, origin: origin!.kind, op: "$" },
             });
           }
-        } else if (op.kind === "@") {
-          // v0.7.2 — legacy @ shell op. Tokenize the body the same way the
-          // runtime would (whitespace-separated, quotes respected), then
-          // flag any token that is a bare unquoted substitution. Quoted
-          // tokens (`"${VAR}"` / `'${VAR}'`) are safe.
+        } else if (op.kind === "shell") {
+          // Tokenize the shell body the same way the runtime would
+          // (whitespace-separated, quotes respected), then flag any token
+          // that is a bare unquoted substitution. Quoted tokens
+          // (`"${VAR}"` / `'${VAR}'`) are safe.
           const tokens = tokenizeKeywordArgs(op.body);
           for (const tok of tokens) {
-            // Skip quoted tokens — the quotes protect against whitespace split.
             if ((tok.startsWith('"') && tok.endsWith('"')) || (tok.startsWith("'") && tok.endsWith("'"))) continue;
             if (!(tok.startsWith("$(") || tok.startsWith("${"))) continue;
             const m = subStPattern.exec(tok);
@@ -2253,15 +2178,15 @@ const UNQUOTED_SUBSTITUTION_IN_KWARG_VALUE: LintRule = {
             const rootVar = varName.split(".")[0]!;
             const origin = origins.get(rootVar);
             if (!isOriginSuspect(origin)) continue;
-            const dedupKey = `${targetName}:@:${varName}`;
+            const dedupKey = `${targetName}:shell:${varName}`;
             if (reported.has(dedupKey)) continue;
             reported.add(dedupKey);
             findings.push({
               rule: "unquoted-substitution-in-kwarg-value",
               severity: "warning",
-              message: `\`@ ... \${${varName}}\` shell arg in target '${targetName}': unquoted substitution. ${describeOriginRisk(origin!)} Wrap as \`"\${${varName}}"\` to prevent silent word-splitting if the value contains whitespace.`,
+              message: `\`shell(command="... \${${varName}} ...")\` in target '${targetName}': unquoted substitution. ${describeOriginRisk(origin!)} Wrap as \`"\${${varName}}"\` to prevent silent word-splitting if the value contains whitespace.`,
               block: targetName,
-              extras: { var_name: varName, origin: origin!.kind, op: "@" },
+              extras: { var_name: varName, origin: origin!.kind, op: "shell" },
             });
           }
         }
@@ -2285,82 +2210,6 @@ function describeOriginRisk(origin: BindingOrigin): string {
       return `Variable is a \`foreach\` iterator — element type unknown statically.`;
   }
 }
-
-/**
- * v0.7.1 — tier-2 visibility nudge for legacy symbol-form ops (`~`, `>`,
- * `@`, `!`, `??`, `&`). The parser still accepts these during the v0.7.x
- * grace period; the runtime dispatches them as before. This rule surfaces
- * the canonical replacement so authors editing skills see the migration
- * path. Tier-1 promotion (refuse-to-compile) lands in v0.8 or v0.9 once
- * the adopter ecosystem confirms migration is settled.
- *
- * The `$ tool` op is NOT flagged — that shape is canonical (MCP dispatch
- * marker). Only the 6 symbol ops that became function-call ops in v0.7.0.
- */
-const DEPRECATED_SYMBOL_OP_REPLACEMENT: Record<string, string> = {
-  // v0.7.2: bridge classes ship default-wired so `$ llm` / `$ data_read` work
-  // out of the box in default deployments. Suggestions are load-bearing
-  // (no more "(or your wired connector name)" caveat).
-  "~": "$ llm prompt=\"...\" [maxTokens=N] [model=\"...\"] -> R",
-  ">": "$ data_read mode=\"fts|semantic|rerank\" query=\"...\" limit=N -> R",
-  "@": "shell(command=\"...\") [-> R]",
-  "!": "emit(text=\"...\")",
-  "??": "ask(prompt=\"...\") -> R",
-  "&": "inline(skill=\"...\")   (or execute_skill(skill_name=\"...\", ...) -> R for procedural composition)",
-};
-
-const DEPRECATED_SYMBOL_OP: LintRule = {
-  id: "deprecated-symbol-op",
-  severity: "warning",
-  description: "An op uses the legacy symbol form deprecated in v0.7.0.",
-  remediation: "Rewrite to the canonical v0.7.0 form (see message). All legacy ops continue to compile during the grace period; tier-1 promotion (refuse-to-compile) lands in v0.8/v0.9. See CHANGELOG.md `## 0.7.0 — Migration` for the full rewrite rules.",
-  check: (ctx) => {
-    const findings: LintFinding[] = [];
-    for (const [targetName, target] of ctx.parsed.targets) {
-      const reported = new Set<string>();
-      walkOps(target.ops, (op) => {
-        const replacement = DEPRECATED_SYMBOL_OP_REPLACEMENT[op.kind];
-        if (replacement === undefined) return;
-        // v0.7.1: skip ops authored in canonical function-call form. The
-        // parser collapses both `! x` and `emit(text="x")` to kind "!",
-        // so without the sourceForm marker the lint would fire on
-        // canonical code. Source-form marker preserves which surface
-        // the author wrote.
-        if (op.sourceForm === "function-call") return;
-        // Dedupe per-kind-per-target — one nudge per legacy op type per
-        // target is plenty; further occurrences don't add signal.
-        const key = `${targetName}:${op.kind}`;
-        if (reported.has(key)) return;
-        reported.add(key);
-        findings.push({
-          rule: "deprecated-symbol-op",
-          severity: "warning",
-          message: `Op '${op.kind}' in target '${targetName}' is deprecated in v0.7.0. Rewrite as: \`${replacement}\``,
-          block: targetName,
-          extras: { legacy_op: op.kind, canonical_replacement: replacement },
-        });
-      });
-      if (target.elseBlock !== undefined) {
-        walkOps(target.elseBlock, (op) => {
-          const replacement = DEPRECATED_SYMBOL_OP_REPLACEMENT[op.kind];
-          if (replacement === undefined) return;
-          if (op.sourceForm === "function-call") return;
-          const key = `${targetName}:else:${op.kind}`;
-          if (reported.has(key)) return;
-          reported.add(key);
-          findings.push({
-            rule: "deprecated-symbol-op",
-            severity: "warning",
-            message: `Op '${op.kind}' in target '${targetName}' (else block) is deprecated in v0.7.0. Rewrite as: \`${replacement}\``,
-            block: targetName,
-            extras: { legacy_op: op.kind, canonical_replacement: replacement },
-          });
-        });
-      }
-    }
-    return findings;
-  },
-};
 
 /**
  * v0.7.1 — tier-2 visibility nudge for legacy `$(VAR)` substitution form.
@@ -2472,7 +2321,6 @@ const RULES: LintRule[] = [
   RESERVED_KEYWORD,
   UNKNOWN_SKILL_REFERENCE,
   UNKNOWN_TEMPLATE_REFERENCE,
-  UNKNOWN_RETRIEVAL_ARG,
   UNKNOWN_CONNECTOR,
   UNKNOWN_CONNECTOR_CLASS,
   UNWIRED_PRIMARY_CONNECTOR,
@@ -2490,14 +2338,12 @@ const RULES: LintRule[] = [
   MISSING_SKILLSTORE_FOR_DATA_REF,
   // Tier-2 (warning)
   DEPRECATED_QUESTION,
-  DEPRECATED_SYMBOL_OP,
   DEPRECATED_SUBSTITUTION_SHAPE,
   UNSAFE_SHELL_AMBIGUOUS_SUBST,
   UNSAFE_SHELL_OP,
   UNSAFE_SHELL_DISABLED,
   UNCONFIRMED_MUTATION,
   UNQUOTED_SUBSTITUTION_IN_KWARG_VALUE,
-  MODEL_CONTENTION,
   DRAFT_WITH_TRIGGER,
   REFERENCE_TO_DISABLED_SKILL,
   UNUSED_AUGMENTING_HEADER,
@@ -2538,9 +2384,7 @@ function walkOps(ops: SkillOp[], visit: (op: SkillOp) => void): void {
   }
 }
 
-// v0.2.12 Bug 19: tag refs with op kind so diagnostics report the actual
-// operator (pre-Bug-19 every message said "via `&`" even for `$ execute_skill`).
-interface CompositionRef { name: string; via: "&" | "$ execute_skill"; }
+interface CompositionRef { name: string; via: "inline" | "$ execute_skill"; }
 
 function collectAmpRefsFromOps(ops: SkillOp[]): CompositionRef[] {
   const out: CompositionRef[] = [];
@@ -2552,8 +2396,8 @@ function collectAmpRefsFromOps(ops: SkillOp[]): CompositionRef[] {
     out.push({ name, via });
   };
   walkOps(ops, (op) => {
-    if (op.kind === "&" && op.ampParams !== undefined) emit(op.ampParams.skillName, "&");
-    // v0.2.11 Bug 7: $ execute_skill is also a composition primitive.
+    if (op.kind === "inline" && op.ampParams !== undefined) emit(op.ampParams.skillName, "inline");
+    // `$ execute_skill` is also a composition primitive.
     if (op.kind === "$" && /^execute_skill\b/.test(op.body)) {
       // v0.15.2 — accept either `name` or `skill_name` (back-compat alias).
       const m = /\b(?:skill_name|name)\s*=\s*(?:"([^"]+)"|'([^']+)'|([A-Za-z_][\w-]*))/.exec(op.body);
@@ -2615,10 +2459,6 @@ function extractVarRefsWithFilter(op: SkillOp): Array<{ name: string; filter?: s
 
 function collectOpText(op: SkillOp): string {
   let text = op.body;
-  if (op.retrievalParams !== undefined) {
-    text += " " + op.retrievalParams.query + " " + Object.values(op.retrievalParams.extra).join(" ");
-  }
-  if (op.localModelParams !== undefined) text += " " + op.localModelParams.prompt;
   if (op.setValue !== undefined) text += " " + op.setValue;
   if (op.foreachList !== undefined) text += " " + op.foreachList;
   return text;

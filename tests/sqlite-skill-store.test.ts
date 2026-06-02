@@ -11,14 +11,14 @@ const SAMPLE_SKILL = `# Skill: hello
 # Status: Draft
 # Description: Says hi
 t:
-    ! hi
+    emit(text="hi")
 default: t
 `;
 
 const APPROVED_SKILL = `# Skill: hello-approved
 # Status: Approved
 t:
-    ! hi
+    emit(text="hi")
 default: t
 `;
 

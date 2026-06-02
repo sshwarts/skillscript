@@ -1,4 +1,4 @@
-// Static help content for the `help` MCP tool (v0.2.8). Cold-agent
+// Static help content for the `help` MCP tool. Cold-agent
 // language discovery — answers the minimum-viable questions a new
 // author needs to write a working skill, without needing to load the
 // full language reference.
@@ -16,7 +16,7 @@
 
 import type { Registry } from "./connectors/registry.js";
 
-const QUICKSTART = `# Skillscript — quickstart (v0.7.0+ canonical surface)
+const QUICKSTART = `# Skillscript — quickstart
 
 Skillscript is a declarative language for authoring agent workflows. A
 skill is a small program with named targets composed of typed ops. The
@@ -37,14 +37,14 @@ The three delivery channels are all first-class:
 |---|---|---|
 | **Embedded prompt** | \`emit(text="...")\` | Skill output is delivered to the receiving agent via the \`# Output: agent: <name>\` lifecycle hook |
 | **File handoff** | \`file_write(path="...", content="...")\` | Skill writes a file at a known location for the agent to read |
-| **Data handoff** | \`$ data_write content="..." recipients=["agent"] -> R\` | Skill writes a record the target agent picks up via mailbox. Routes through the wired \`data_write\` connector (default: \`DataStoreMcpConnector\` bundled in v0.8.0+). |
+| **Data handoff** | \`$ data_write content="..." recipients=["agent"] -> R\` | Skill writes a record the target agent picks up via mailbox. Routes through the wired \`data_write\` connector (default: \`DataStoreMcpConnector\` bundled). |
 
 ## 2. The three op classes
 
 | Class | Shape | Examples |
 |---|---|---|
 | **Mutation statements** | \`$verb VAR = value\` / \`$verb VAR <value>\` | \`$set NAME = "Scott"\`, \`$append LIST <item>\` |
-| **Runtime-intrinsic function-calls** | \`verb(kwarg=value, ...) [-> BINDING]\` | \`emit(text="...")\`, \`ask(prompt="...") -> R\`, \`inline(skill="...")\`, \`execute_skill(name="...") -> R\`, \`shell(command="...") -> R\`, \`file_read(path="...") -> R\`, \`file_write(path="...", content="...")\` |
+| **Runtime-intrinsic function-calls** | \`verb(kwarg=value, ...) [-> BINDING]\` | \`emit(text="...")\`, \`inline(skill="...")\`, \`execute_skill(name="...") -> R\`, \`shell(command="...") -> R\`, \`file_read(path="...") -> R\`, \`file_write(path="...", content="...")\`, \`notify(agent="...")\` |
 | **External MCP dispatch** | \`$ <connector> kwarg=value, ... [-> BINDING]\` | \`$ youtrack_search query="..." -> R\`, \`$ llm prompt="..." -> R\`, \`$ data_read mode=fts query="..." -> R\` |
 
 The \`$\` prefix marks **state-affecting ops** (mutation OR external dispatch). Function-call shape marks **language-intrinsic ops the runtime knows directly**.
@@ -74,7 +74,7 @@ default: target_b                      ← goal target the runtime walks toward
 
 Use \`\${VAR}\` (canonical) inside any kwarg value or emit body. Field access works: \`\${ISSUE.title}\`. Filter chains: \`\${VAR|trim|length}\`. Missing-value fallback: \`\${VAR|fallback:"-"}\`.
 
-The legacy \`$(VAR)\` form still compiles during the v0.7.x grace period (tier-2 \`deprecated-substitution-shape\` warning); tier-1 promotion in v0.8/v0.9.
+The legacy \`$(VAR)\` form still compiles with a tier-2 \`deprecated-substitution-shape\` warning; rewrite to canonical \`\${VAR}\`.
 
 ## 5. Result binding + fallback
 
@@ -142,26 +142,26 @@ What this example demonstrates:
 Use \`help({topic: "ops"})\`, \`help({topic: "frontmatter"})\`, \`help({topic: "examples"})\`,
 \`help({topic: "connectors"})\`, or \`help({topic: "lint-codes"})\` for deeper sections.
 
-**Note on legacy syntax.** Legacy symbol-form ops (\`~\`, \`>\`, \`@\`, \`!\`, \`??\`, \`&\`) and \`$(VAR)\` substitution continue to compile during the v0.7.x grace period with tier-2 deprecation warnings. CHANGELOG.md \`## 0.7.0 — Migration\` documents the rewrite rules.
+**Note on substitution form.** Use \`\${VAR}\` for variable substitution. The bare-paren \`$(VAR)\` form still compiles with a tier-2 \`deprecated-substitution-shape\` warning.
 `;
 
-const OPS = `# Ops reference — v0.7.0 canonical surface
+const OPS = `# Ops reference
 
 Three op classes, two grammars:
 
 | Class | Shape | When you reach for it |
 |---|---|---|
 | **Mutation statements** | \`$verb VAR = value\` / \`$verb VAR <value>\` | Bind / mutate a named variable in scope |
-| **Runtime-intrinsic function-calls** | \`verb(kwarg=value, ...) [-> BINDING]\` | Language-intrinsic side-effects: emit, ask, file I/O, shell, composition |
+| **Runtime-intrinsic function-calls** | \`verb(kwarg=value, ...) [-> BINDING]\` | Language-intrinsic side-effects: emit, notify, file I/O, shell, composition |
 | **External MCP dispatch** | \`$ <connector> kwarg=value, ... [-> BINDING]\` | Any tool resolved through \`connectors.json\` (LLM calls, data queries, business tools) |
 
-The \`$\` prefix marks **state-affecting** ops (mutation OR external dispatch). Function-call shape marks **language-intrinsic** ops the runtime knows directly. Legacy symbol forms (\`~\` / \`>\` / \`@\` / \`!\` / \`??\` / \`&\`) compile during the v0.7.x grace period with tier-2 \`deprecated-symbol-op\` warnings.
+The \`$\` prefix marks **state-affecting** ops (mutation OR external dispatch). Function-call shape marks **language-intrinsic** ops the runtime knows directly.
 
 ## Class 1: Mutation statements
 
 ### \`$set VAR = value\`
 
-Bind a variable; runtime resolves \`\${REF}\` substitutions in the RHS at bind time (v0.5.0). Value can be a literal, a \`\${REF}\` interpolation, or a JSON literal (object / array / bool / null).
+Bind a variable; runtime resolves \`\${REF}\` substitutions in the RHS at bind time. Value can be a literal, a \`\${REF}\` interpolation, or a JSON literal (object / array / bool / null).
 
 \`\`\`
 $set GREETING = "Hello, \${USER}!"
@@ -171,7 +171,7 @@ $set CONFIG = {"timeout": 30, "retries": 3}
 
 ### \`$append VAR <value>\`
 
-Append to a binding. v0.5.0 type-dispatches on the existing target:
+Append to a binding. Type-dispatches on the existing target:
 - **List-typed target** → push (\`$set FOUND = []\` then \`$append FOUND \${ID}\`)
 - **String-typed target** → concatenate (\`$set REPORT = ""\` then \`$append REPORT "more text"\`)
 
@@ -191,7 +191,7 @@ The append mutates the outer-scope binding (unlike \`$set\`, which is loop-local
 
 ## Class 2: Runtime-intrinsic function-calls
 
-Closed set: \`emit\`, \`notify\`, \`ask\`, \`inline\`, \`execute_skill\`, \`shell\`, \`file_read\`, \`file_write\`. Unknown function-call names fire \`unknown-runtime-op\` tier-1 with remediation "if this is an MCP tool, use \`$ tool args -> R\` shape instead."
+Closed set: \`emit\`, \`notify\`, \`inline\`, \`execute_skill\`, \`shell\`, \`file_read\`, \`file_write\`. Unknown function-call names fire \`unknown-runtime-op\` tier-1 with remediation "if this is an MCP tool, use \`$ tool args -> R\` shape instead."
 
 ### \`emit(text="...")\` — output to skill consumer
 
@@ -204,7 +204,7 @@ emit(text="\${ISSUES.totalCount} open showstoppers in \${PROJECT}")
 
 ### \`notify(agent="...", message?, connectors?) -> ACK\` — mid-skill agent alert
 
-Synchronous alert to a named agent via wired AgentConnector(s). v0.8.0 op.
+Synchronous alert to a named agent via wired AgentConnector(s).
 **Contrast with \`emit\`:** \`emit\` accumulates into end-of-skill bulk delivery
 via the \`# Output: agent: <name>\` lifecycle hook; \`notify\` fires
 mid-execution to interrupt or page an agent before the skill completes.
@@ -225,14 +225,6 @@ notify(agent="reviewer", connectors=["slack"]) -> A
 notify(agent="ops", message="911", event_type="ticket-911", correlation_id="\${INCIDENT_ID}")
 \`\`\`
 
-### \`ask(prompt="...") -> R\` — prompt the user
-
-Interactive only. Autonomous-mode dispatch fails with a clean error (use \`# Autonomous: true\` skill flag to disable the gate).
-
-\`\`\`
-ask(prompt="Proceed with auto-assignment for P0/P1?") -> APPROVAL
-\`\`\`
-
 ### \`shell(command="...", unsafe=true) [-> R]\` — local subprocess
 
 Default mode: structural spawn — one binary, no shell metacharacters, no pipes/redirects. \`unsafe=true\` opts into full bash; tier-2 lint warns.
@@ -242,9 +234,9 @@ shell(command="git status --porcelain") -> STATUS
 shell(command="echo hi && date +%Y", unsafe=true) -> OUT
 \`\`\`
 
-**Argv quoting (v0.9.4):** structural-spawn tokenizes the command on whitespace then strips quotes around each token. To pass quoted args (e.g., JSON payloads, strings with spaces), either set \`unsafe=true\` and let bash quote-handle, OR write the payload to a file via \`file_write\` and read it back inside the structurally-spawned command (e.g., \`shell(command="cat /tmp/payload.json | jq .field") -> R\` under \`unsafe=true\`). The structural mode is deliberately conservative — quoted-arg-aware tokenization is on the v1.0 wishlist.
+**Argv quoting:** structural-spawn tokenizes the command on whitespace then strips quotes around each token. To pass quoted args (e.g., JSON payloads, strings with spaces), either set \`unsafe=true\` and let bash quote-handle, OR write the payload to a file via \`file_write\` and read it back inside the structurally-spawned command (e.g., \`shell(command="cat /tmp/payload.json | jq .field") -> R\` under \`unsafe=true\`). The structural mode is deliberately conservative.
 
-**Container FS isolation (v0.9.4):** shell() runs inside the runtime's container/sandbox. Writes to \`/tmp/x\` from \`shell(command="touch /tmp/x")\` land in the RUNTIME's \`/tmp/x\`, not on the author's host. Same isolation as \`file_read\` / \`file_write\` — cross-namespace work needs a known shared volume.
+**Container FS isolation:** shell() runs inside the runtime's container/sandbox. Writes to \`/tmp/x\` from \`shell(command="touch /tmp/x")\` land in the RUNTIME's \`/tmp/x\`, not on the author's host. Same isolation as \`file_read\` / \`file_write\` — cross-namespace work needs a known shared volume.
 
 ### \`file_read(path="...") -> R\` — read file contents
 
@@ -279,7 +271,7 @@ execute_skill(name="extract-json-number", JSON_BLOB="\${RAW}", FIELD_PATH="total
 emit(text="Extracted: \${RESULT.final_vars.VALUE|trim}")
 \`\`\`
 
-v0.15.2 — \`name\` is the canonical kwarg, aligning with \`skill_read({name})\` / \`skill_write({name})\` / \`skill_status({name})\`. \`skill_name\` is accepted as a silent back-compat alias; older corpora using the \`skill_name="..."\` shape continue to work unchanged.
+\`name\` is the canonical kwarg, aligning with \`skill_read({name})\` / \`skill_write({name})\` / \`skill_status({name})\`. \`skill_name\` is accepted as a silent back-compat alias.
 
 ## Class 3: External MCP dispatch
 
@@ -304,9 +296,9 @@ Resolves the tool name against the adopter's \`connectors.json\`. Flat form (\`$
 | Substitution | \`id=\${BUG_ID}\` | resolved at dispatch time |
 | Quoted substitution | \`query="\${QUERY}"\` | quoted resolution (recommended when value may contain whitespace) |
 
-**v0.5.0 lint warning** \`unquoted-substitution-in-kwarg-value\` fires when an unquoted \`\${VAR}\` sits in kwarg-value position and VAR's binding origin suggests whitespace. Wrap as \`key="\${VAR}"\` to prevent silent arg truncation if the resolved value contains spaces.
+**Lint warning** \`unquoted-substitution-in-kwarg-value\` fires when an unquoted \`\${VAR}\` sits in kwarg-value position and VAR's binding origin suggests whitespace. Wrap as \`key="\${VAR}"\` to prevent silent arg truncation if the resolved value contains spaces.
 
-**\`$ json_parse \${VAR} -> P\`** (v0.3.3) parses input as JSON and binds the structured value to \`P\`. Dotted descent via \`\${P.field}\` works in conditions and emit. Throws on malformed JSON (caught by \`else:\` / \`# OnError:\`).
+**\`$ json_parse \${VAR} -> P\`** parses input as JSON and binds the structured value to \`P\`. Dotted descent via \`\${P.field}\` works in conditions and emit. Throws on malformed JSON (caught by \`else:\` / \`# OnError:\`).
 
 \`\`\`
 # Vars: PAYLOAD={"status":"ok","count":3}
@@ -327,9 +319,9 @@ $ data_read mode=fts query="recent incidents" limit=10 -> CONTEXT
 $ data_write content="\${REPORT}" recipients=[oncall] tags=[morning-sweep] approved="cron deliverable" -> R
 \`\`\`
 
-**Today's reality (v0.10).** Default deployments auto-wire \`llm\` + \`memory\` + \`data_write\` MCP connectors via bundled bridges — but **only when the underlying substrate is configured**. v0.10 base config: \`SqliteDataStore\` is wired conditionally (substrate.data_store: \`"sqlite"\`); \`LocalModel\` is \`null\` by default. To enable \`$ llm\`, set \`substrate.local_model: "ollama"\` in \`~/.skillscript/connectors.json\` (then restart the runtime host). To enable \`$ data_read\` / \`$ data_write\`, set \`substrate.data_store: "sqlite"\` (default value in the scaffold). The bridges are the same shape they've always been (\`LocalModelMcpConnector\` over \`LocalModel\`; \`DataStoreMcpConnector\` over \`DataStore\` — same instance under both \`memory\` + \`data_write\` names so query + write share substrate). Adopters with their own substrate impl wire it programmatically. See [\`docs/configuration.md\`](docs/configuration.md) for the substrate config reference.
+**Bundled bridges + substrate config.** Default deployments auto-wire \`llm\` + \`data_read\` + \`data_write\` MCP connectors via bundled bridges — but **only when the underlying substrate is configured**. Base config: \`SqliteDataStore\` is wired conditionally (\`substrate.data_store: "sqlite"\`); \`LocalModel\` is \`null\` by default. To enable \`$ llm\`, set \`substrate.local_model: "ollama"\` in \`~/.skillscript/connectors.json\` (then restart the runtime host). To enable \`$ data_read\` / \`$ data_write\`, set \`substrate.data_store: "sqlite"\` (default value in the scaffold). The bridges: \`LocalModelMcpConnector\` over \`LocalModel\`; \`DataStoreMcpConnector\` over \`DataStore\` — same instance under both \`data_read\` + \`data_write\` names so query + write share substrate. Adopters with their own substrate impl wire it programmatically. See [\`docs/configuration.md\`](docs/configuration.md) for the substrate config reference.
 
-**One canonical call surface per concern.** \`$ data_read\` is **the** data-retrieval call surface — one contract (\`mode=... query=... limit=N -> R\` returning \`{items: [...]}\` envelope), one connector name. Both bare-form (\`$ data_read ...\`) and dotted-form (\`$ data_read.query ...\`) dispatch through the same registered connector. Same shape for \`$ llm\` (one \`prompt=... [maxTokens=N] [model="..."] -> R\` contract returning the response string). Author against the canonical \`$ llm\` / \`$ data_read\` surfaces today; legacy \`~\` / \`>\` removal lands in v0.8/v0.9.
+**One canonical call surface per concern.** \`$ data_read\` is **the** data-retrieval call surface — one contract (\`mode=... query=... limit=N -> R\` returning \`{items: [...]}\` envelope), one connector name. Both bare-form (\`$ data_read ...\`) and dotted-form (\`$ data_read.query ...\`) dispatch through the same registered connector. Same shape for \`$ llm\` (\`prompt=... [maxTokens=N] [model="..."] -> R\` returns the response string; optional op-level \`timeout=N\` kwarg overrides skill-level \`# Timeout:\`; optional trailing \`(fallback: "...")\` fires on throw or empty result). \`$ llm\` and \`$ data_read\` are the canonical surfaces for LLM dispatch and data retrieval.
 
 ## Pipe filters
 
@@ -341,32 +333,32 @@ Apply on \`\${VAR|filter}\` references; chain left-to-right.
 | \`shell\` | POSIX single-quote escape |
 | \`json\` | JSON.stringify |
 | \`trim\` | Whitespace trim |
-| \`length\` | Array element count or string char count (v0.2.5) |
-| \`fallback:"X"\` | (v0.5.0) Coalesce-on-missing: when the upstream ref is unresolved, substitute literal \`X\` and continue the chain. Positional — \`\${VAR|fallback:"-"|upper}\` defaults-then-uppercases. |
-| \`isodate\` | (v0.5.0) Format an epoch timestamp (ms or sec, auto-detected by magnitude) as ISO-8601. Passes already-ISO strings through unchanged. \`\${EVENT.fired_at_unix|isodate}\`. |
+| \`length\` | Array element count or string char count |
+| \`fallback:"X"\` | Coalesce-on-missing: when the upstream ref is unresolved, substitute literal \`X\` and continue the chain. Positional — \`\${VAR|fallback:"-"|upper}\` defaults-then-uppercases. |
+| \`isodate\` | Format an epoch timestamp (ms or sec, auto-detected by magnitude) as ISO-8601. Passes already-ISO strings through unchanged. \`\${EVENT.fired_at_unix|isodate}\`. |
 
-**\`\${NOW}\` ambient ref** substitutes as an ISO-8601 string per v0.5.0 spec. Numeric epoch values remain available as \`\${EVENT.fired_at}\` (ms) and \`\${EVENT.fired_at_unix}\` (sec).
+**\`\${NOW}\` ambient ref** substitutes as an ISO-8601 string. Numeric epoch values remain available as \`\${EVENT.fired_at}\` (ms) and \`\${EVENT.fired_at_unix}\` (sec).
 
 ## Conditional grammar
 
 \`\`\`
 if \${VAR}:                            ← truthy check
-if not \${VAR}:                        ← falsy check (v0.3.2)
+if not \${VAR}:                        ← falsy check
 if \${VAR} == "literal":               ← equality vs literal
 if \${VAR} == \${OTHER}:                ← equality vs ref
 if \${VAR} != "literal":               ← inequality
-if \${N} < "10":                       ← numeric comparison (v0.2.5)
+if \${N} < "10":                       ← numeric comparison
 if \${N} >= \${THRESHOLD}:              ← numeric vs ref
 if \${M.id} in \${SEEN}:                ← set membership
 if \${M.id} not in \${SEEN}:
-if \${A} == "ok" and \${B} == "ok":     ← logical AND (v0.3.2)
-if \${A} == "urgent" or \${B} > "5":    ← logical OR (v0.3.2)
-if not \${A} and (\${B} or \${C}):      ← compound with parens + not (v0.3.2)
+if \${A} == "ok" and \${B} == "ok":     ← logical AND
+if \${A} == "urgent" or \${B} > "5":    ← logical OR
+if not \${A} and (\${B} or \${C}):      ← compound with parens + not
 \`\`\`
 
 Branches via \`if:\` / \`elif COND:\` / \`else:\`. The \`else:\` after a target body is a separate error-handler block (distinguished by indentation scope).
 
-### Compound conditions (v0.3.2)
+### Compound conditions
 
 \`and\` / \`or\` / \`not\` connect simple conditions into compound expressions:
 
@@ -374,21 +366,9 @@ Branches via \`if:\` / \`elif COND:\` / \`else:\`. The \`else:\` after a target 
 - **Parentheses** override precedence: \`(a or b) and c\`
 - **Short-circuit evaluation**: AND skips RHS if LHS is false; OR skips RHS if LHS is true. Useful for the validate-then-access pattern — \`if \${X} == "ok" and \${X.field} ...\` won't error on the field access when \`\${X} == "ok"\` is false.
 
-## Legacy syntax (grace period — tier-2 deprecated)
+## Substitution form
 
-| Legacy | Canonical |
-|---|---|
-| \`! text\` | \`emit(text="text")\` |
-| \`?? "prompt" -> R\` | \`ask(prompt="prompt") -> R\` |
-| \`@ cmd args [-> R]\` | \`shell(command="cmd args") [-> R]\` |
-| \`@ unsafe cmd\` | \`shell(command="cmd", unsafe=true)\` |
-| \`& skill-name\` | \`inline(skill="skill-name")\` |
-| \`~ prompt="..." -> R\` | \`$ llm prompt="..." -> R\` (auto-wired via \`LocalModelMcpConnector\` bridge in default deployments) |
-| \`> mode=... query=... -> R\` | \`$ data_read mode=... query=... -> R\` (auto-wired via \`DataStoreMcpConnector\` bridge in default deployments) |
-| \`$(VAR)\` | \`\${VAR}\` |
-| \`(approved: "reason")\` trailer | \`approved="reason"\` kwarg |
-
-All legacy forms compile during v0.7.x with tier-2 \`deprecated-symbol-op\` / \`deprecated-substitution-shape\` warnings. Tier-1 promotion (refuse-to-compile) lands in v0.8/v0.9.
+Use \`\${VAR}\` for variable substitution. The bare-paren \`$(VAR)\` form still compiles with a tier-2 \`deprecated-substitution-shape\` warning; rewrite to \`\${VAR}\`.
 `;
 
 const FRONTMATTER = `# Frontmatter headers — full reference
@@ -398,22 +378,22 @@ Skill files open with \`# Key: value\` headers. Order isn't significant.
 ## Required
 
 - \`# Skill: <name>\` — identity. Reserved keywords (\`default\`, \`needs\`, etc.) rejected.
-- \`# Status: Draft | Approved v1:<token> | Disabled\` — lifecycle state. **v0.9.0**: Approved status requires a stamped \`vN:<token>\` (e.g. \`Approved v1:a1b2c3d4\`); the dashboard's approval flow stamps it. Naked \`Approved\` (no token) refuses to execute. Only Approved+verified skills fire via triggers, MCP \`execute_skill\`, in-skill \`$ execute_skill\`, or compile-time \`&\` inline.
+- \`# Status: Draft | Approved v1:<token> | Disabled\` — lifecycle state. Approved status requires a stamped \`vN:<token>\` (e.g. \`Approved v1:a1b2c3d4\`); the dashboard's approval flow stamps it. Naked \`Approved\` (no token) refuses to execute. Only Approved+verified skills fire via triggers, MCP \`execute_skill\`, in-skill \`$ execute_skill\`, or compile-time \`inline(...)\`.
 
 ## Common
 
 - \`# Description: <prose>\` — human-readable explanation; surfaces in dashboards.
-- \`# Type: procedural | data\` — \`procedural\` (default) for runtime-fired skills; \`data\` for compile-time-inlined fragments referenced by \`inline(skill="...")\` (canonical) or legacy \`& <skill-name>\` ops.
+- \`# Type: procedural | data\` — \`procedural\` (default) for runtime-fired skills; \`data\` for compile-time-inlined fragments referenced by \`inline(skill="...")\`.
 - \`# Vars: NAME=default, OTHER\` — declared variables. \`NAME=default\` provides a default; bare \`NAME\` is required at invocation.
 - \`# Triggers: cron: 0 9 * * *, session: start\` — autonomous-dispatch sources. Comma-separated entries split by source-keyword boundary; cron expressions with commas (\`30,45 9 * * 1-5\`) parse correctly.
-- \`# Output: text | agent: <name> | template: <name> | file: path | none\` — output routing. Five kinds, all substrate-neutral. **Two substrate-neutral lifecycle hooks** (v0.8.0): \`agent: <name>\` (renamed from \`prompt-context:\`) routes via AgentConnector as augment-kind delivery; \`template: <name>\` routes as template-kind delivery (receiving agent executes the rendered playbook). Both default to **joined emissions string** (the \`emit(text=...)\` lines concatenated with newlines). \`text\` / \`file:\` default to the **last-bound variable value** (structured), falling back to the emissions array when no var was bound. If your skill emits multiple lines and a downstream consumer only sees the final tool output via \`outputs.text\`, that's the structured-default behavior — use \`# Output: agent: <name>\` (or another text-coerced kind) to publish the joined emissions instead. **For substrate-specific delivery destinations** (Slack, WhatsApp, Discord, pagerduty, custom dashboards, etc.) — that's contract-between-the-skill-and-the-substrate territory, downstream of the language. Two paths: (1) \`$ <connector>.<tool> ...\` inside the skill body to dispatch through an adopter-wired MCP connector, or (2) deliver via \`agent: <name>\` to an agent whose AgentConnector decides how to surface the result.
+- \`# Output: text | agent: <name> | template: <name> | file: path | none\` — output routing. Five kinds, all substrate-neutral. **Two substrate-neutral lifecycle hooks**: \`agent: <name>\` routes via AgentConnector as augment-kind delivery; \`template: <name>\` routes as template-kind delivery (receiving agent executes the rendered playbook). Both default to **joined emissions string** (the \`emit(text=...)\` lines concatenated with newlines). \`text\` / \`file:\` default to the **last-bound variable value** (structured), falling back to the emissions array when no var was bound. If your skill emits multiple lines and a downstream consumer only sees the final tool output via \`outputs.text\`, that's the structured-default behavior — use \`# Output: agent: <name>\` (or another text-coerced kind) to publish the joined emissions instead. **For substrate-specific delivery destinations** (Slack, WhatsApp, Discord, pagerduty, custom dashboards, etc.) — that's contract-between-the-skill-and-the-substrate territory, downstream of the language. Two paths: (1) \`$ <connector>.<tool> ...\` inside the skill body to dispatch through an adopter-wired MCP connector, or (2) deliver via \`agent: <name>\` to an agent whose AgentConnector decides how to surface the result.
 - \`# OnError: <fallback-skill-name>\` — error-handler skill invoked when an op fails and no target-level \`else:\` catches.
-- \`# Autonomous: true | false\` — declarative authorship intent for unattended-execution skills (cron-fired, agent-fired, etc.). v0.4.2. Today silences \`unconfirmed-mutation\` lint warnings for the whole skill (since the user-confirmation pattern doesn't apply to autonomous skills); reserved as the canonical autonomous-skill category marker for future rules + scheduling defaults + discovery surfaces. Omitted = interactive (default).
+- \`# Autonomous: true | false\` — declarative authorship intent for unattended-execution skills (cron-fired, agent-fired, etc.). Silences \`unconfirmed-mutation\` lint warnings for the whole skill (since the user-confirmation pattern doesn't apply to autonomous skills); reserved as the canonical autonomous-skill category marker for future rules + scheduling defaults + discovery surfaces. Omitted = interactive (default).
 
 ## Augmenting / Template only
 
-- \`# Event-type: <string>\` — adopter-defined routing vocabulary; flows to \`DeliveryMeta.event_type\` on lifecycle-hook deliveries as the frontmatter fallback. \`notify(event_type=...)\` kwarg takes precedence per-emit. Renamed from \`# Delivery-context:\` in v0.9.6 for vocab consistency.
-- \`# Templates: <skill_name>, <skill_name>\` — comma-separated Template-skill names referenced by this skill; validated for existence by \`unknown-template-reference\` lint. As of v0.9.6 no longer flows through DeliveryPayload (per audit Q10).
+- \`# Event-type: <string>\` — adopter-defined routing vocabulary; flows to \`DeliveryMeta.event_type\` on lifecycle-hook deliveries as the frontmatter fallback. \`notify(event_type=...)\` kwarg takes precedence per-emit.
+- \`# Templates: <skill_name>, <skill_name>\` — comma-separated Template-skill names referenced by this skill; validated for existence by \`unknown-template-reference\` lint.
 
 (\`# Event-type:\` fires \`unused-augmenting-header\` lint warning if set on a Headless skill — one with no \`agent:\` or \`template:\` output declaration.)
 
@@ -434,7 +414,7 @@ Skill files open with \`# Key: value\` headers. Order isn't significant.
 # Triggers: cron: 0 7 * * *, agent-event: drift-detected
 \`\`\`
 
-Trigger sources today: \`cron\` (poll-based), \`session\` (\`start\` / \`end\` phases). Parse-only in v0.2: \`event\`, \`agent-event\`, \`file-watch\`, \`sensor\` (firing lands in v1.0).
+Trigger sources: \`cron\` (poll-based), \`session\` (\`start\` / \`end\` phases). Parse-only (firing not yet wired): \`event\`, \`agent-event\`, \`file-watch\`, \`sensor\`.
 
 ## Ambient variables (auto-populated by the runtime)
 
@@ -445,11 +425,11 @@ The runtime injects these refs — don't declare them in \`# Vars:\` / \`# Requi
 | \`$(NOW)\` | runtime clock | ISO-8601 timestamp at op-dispatch time |
 | \`$(USER)\` | invocation context | Identity passed via \`agentId\` / CLI user |
 | \`$(SESSION_CONTEXT)\` | runtime session | Free-form session snapshot for cross-skill carry |
-| \`$(TRIGGER_TYPE)\` | scheduler | \`cron\` / \`session\` / \`webhook\` / \`agent\` / \`cli\` / \`dashboard\` / \`inline\` (v0.9.6 enum lock) |
+| \`$(TRIGGER_TYPE)\` | scheduler | \`cron\` / \`session\` / \`webhook\` / \`agent\` / \`cli\` / \`dashboard\` / \`inline\` |
 | \`$(TRIGGER_PAYLOAD)\` | scheduler | JSON-serializable payload attached to the firing trigger |
 | \`$(ERROR_CONTEXT)\` | runtime error handler | Inside \`else:\` and \`# OnError:\` only; \`.kind\` / \`.message\` / \`.target\` accessible |
 
-\`EVENT.*\` auto-populates on cron-fired skills (v0.2.7 scheduler):
+\`EVENT.*\` auto-populates on cron-fired skills:
 
 | Ref | Value |
 |---|---|
@@ -459,14 +439,13 @@ The runtime injects these refs — don't declare them in \`# Vars:\` / \`# Requi
 | \`$(EVENT.fired_at_plus_1d_unix)\` | \`fired_at_unix + 86_400\` |
 | \`$(EVENT.fired_at_plus_7d_unix)\` | \`fired_at_unix + 604_800\` |
 
-(v0.2.12 Bug 24 — \`EVENT.*\` was undocumented before this release.)
 
 ## Variable reference forms
 
 \`\`\`
 $(VAR)              bare ref (any declared/output-bound/ambient name)
 $(VAR.field)        dotted field access on JSON-bound vars + ambient family
-$(LIST.0)           indexed access (v0.2.12 Bug 25 — was undocumented)
+$(LIST.0)           indexed access
 $(LIST.0.id)        mixed indexed + field-access (chains arbitrarily deep)
 $(VAR|filter)       filter pipe (see \`help({topic: "ops"})\` for filter list)
 $(VAR.field|filter) field-access then filter
@@ -475,7 +454,7 @@ $(VAR.field|filter) field-access then filter
 Unresolved refs: tier-1 \`undeclared-var\` at compile, \`UnresolvedVariableError\` at runtime.
 `;
 
-const EXAMPLES = `# Five canonical worked skills (v0.7.0+ canonical surface)
+const EXAMPLES = `# Five canonical worked skills
 
 ## 1. Minimal (single target, no dependencies)
 
@@ -572,7 +551,7 @@ default: render
 
 Demonstrates: \`execute_skill(...)\` runtime composition (each child runs through the runtime under a depth-counted chain), per-call \`(fallback: ...)\` for resilience, kwarg forwarding, \`->\` binding child output for downstream reference.
 
-## 5. Dedup-by-id with the accumulator (v0.3.0+)
+## 5. Dedup-by-id with the accumulator
 
 \`\`\`
 # Skill: dedup-walk
@@ -640,7 +619,7 @@ default: go
 
 Demonstrates: \`$ data_write\` substrate-portable durable handoff (returns \`{id, created_at}\` envelope). \`recipients=[...]\` is the bracket-array literal form — the receiving agent's mailbox surfaces this on their next session check.
 
-## 7. File output with confirmed write (v0.9.2+)
+## 7. File output with confirmed write
 
 \`\`\`
 # Skill: triage-report
@@ -657,7 +636,7 @@ build:
 default: build
 \`\`\`
 
-Demonstrates: \`$append\` accumulator over a string + \`file_write\` side effect. The v0.9.2 runtime emits a \`[file_write] wrote N bytes to <path>\` transcript line on success so the caller can confirm the write landed.
+Demonstrates: \`$append\` accumulator over a string + \`file_write\` side effect. The runtime emits a \`[file_write] wrote N bytes to <path>\` transcript line on success so the caller can confirm the write landed.
 
 ## Per-substrate return-shape note
 
@@ -671,12 +650,12 @@ Different connectors return different envelope shapes. Cold authors authoring ag
 
 Don't assume \`.totalCount\` exists on every envelope — it's a ticketing convention, not a universal one. Use the runtime's \`runtime_capabilities()\` + introspection to confirm shapes when in doubt.
 
-**Array length (v0.9.4):** to get the count of an array bound from a substrate query (e.g., \`\${ITEMS.items}\` is the array), use the **\`|length\` filter**: \`\${ITEMS.items|length}\`. The JS convention \`\${ITEMS.items.length}\` does NOT work — skillscript's dotted-ref resolver does string-keyed property descent and \`.length\` on an array returns undefined at substitution time. Filter syntax is canonical for collection-shape operations across all substrates.
+**Array length:** to get the count of an array bound from a substrate query (e.g., \`\${ITEMS.items}\` is the array), use the **\`|length\` filter**: \`\${ITEMS.items|length}\`. The JS convention \`\${ITEMS.items.length}\` does NOT work — skillscript's dotted-ref resolver does string-keyed property descent and \`.length\` on an array returns undefined at substitution time. Filter syntax is canonical for collection-shape operations across all substrates.
 `;
 
 const COMPOSITION = `# Composition — composing skills from other skills
 
-Skillscript has two composition primitives in v0.7.0+ canonical form. Both let one skill draw on another's output, with different semantics around when the child runs.
+Skillscript has two composition primitives. Both let one skill draw on another's output, with different semantics around when the child runs.
 
 ## 1. \`inline(skill="<name>")\` — compile-time data-skill inline
 
@@ -702,7 +681,7 @@ gather:
     execute_skill(skill_name="mailbox-triage", inputs={"USER": "\${USER_NAME}"}) -> MAIL
 \`\`\`
 
-Two kwarg-forwarding styles, both supported (v0.2.9):
+Two kwarg-forwarding styles, both supported:
 - **Bare kwargs** — \`USER="\${USER_NAME}"\` natural skill grammar
 - **\`inputs={...}\` JSON** — useful when forwarding many fields verbatim
 
@@ -711,7 +690,7 @@ The bound \`-> R\` carries the child's full execution record (final_vars, transc
 ## Limits & lint signals
 
 - **Recursion**: depth-5 chain by default (\`ExecuteSkillRecursionError\` if exceeded).
-- **Lint** (\`unknown-skill-reference\`, tier-2 as of v0.3.1): both \`inline(skill="<name>")\` and \`execute_skill(skill_name="<name>", ...)\` validate the child exists in the SkillStore at compile time. Forward references are allowed: missing skills lint as warning (not error), runtime throws \`MissingSkillReferenceError\` if still unresolved at execute. Tier-3 \`deferred-skill-reference\` advisory confirms when the deferred-resolution path is engaged.
+- **Lint** (\`unknown-skill-reference\`, tier-2): both \`inline(skill="<name>")\` and \`execute_skill(skill_name="<name>", ...)\` validate the child exists in the SkillStore at compile time. Forward references are allowed: missing skills lint as warning (not error), runtime throws \`MissingSkillReferenceError\` if still unresolved at execute. Tier-3 \`deferred-skill-reference\` advisory confirms when the deferred-resolution path is engaged.
 - **Lint** (\`disabled-skill-reference\`, tier-1): any composition primitive pointing at a \`# Status: Disabled\` skill blocks compile.
 
 ## When to use which
@@ -720,12 +699,6 @@ The bound \`-> R\` carries the child's full execution record (final_vars, transc
 |---|---|
 | Static knowledge in a prompt | \`inline(skill="<data-skill>")\` |
 | Child output bound into parent scope | \`execute_skill(skill_name="<skill>", ...) -> R\` |
-
-## Legacy forms (grace period)
-
-- \`& <skill-name>\` → \`inline(skill="<skill-name>")\` (compile-time inline)
-- \`& invoke <skill-name>\` (removed concept) → \`execute_skill(skill_name="<skill-name>")\`
-- \`$ execute_skill skill_name="<child>" ... -> R\` → \`execute_skill(skill_name="<child>", ...) -> R\` (legacy MCP-dispatch shape still compiles during grace; canonical is the function-call shape)
 
 See \`help({topic: "examples"})\` example 4 for a worked orchestrator skill.
 `;
@@ -737,12 +710,12 @@ Skillscript skills don't import packages — they invoke connectors. The runtime
 | Contract | Purpose | Op surface |
 |---|---|---|
 | \`SkillStore\` | Skill source persistence + status lifecycle | implicit (\`inline\` / \`execute_skill\` reference) |
-| \`LocalModel\` | LLM inference | \`$ llm\` MCP dispatch via \`LocalModelMcpConnector\` bridge — auto-wired ONLY when \`substrate.local_model\` is set in \`connectors.json\`. v0.10 default: null (off). |
-| \`DataStore\` | Data persistence + query | \`$ data_read\` MCP dispatch via \`DataStoreMcpConnector\` bridge — auto-wired when \`substrate.data_store\` is set (default in v0.10 scaffold: \`"sqlite"\`). |
+| \`LocalModel\` | LLM inference | \`$ llm\` MCP dispatch via \`LocalModelMcpConnector\` bridge — auto-wired when \`substrate.local_model\` is set in \`connectors.json\`. Default: off. |
+| \`DataStore\` | Data persistence + query | \`$ data_read\` MCP dispatch via \`DataStoreMcpConnector\` bridge — auto-wired when \`substrate.data_store\` is set (default scaffold: \`"sqlite"\`). |
 | \`McpConnector\` | MCP tool dispatch — all external tools | \`$ <connector_name> args\` |
 | \`AgentConnector\` | Deliver augment/template payloads | \`# Output: agent:\` / \`template:\` |
 
-**v0.10 substrate framing.** Canonical syntax routes substrate-specific dispatch through MCP (\`$ llm\` / \`$ data_read\` rather than legacy \`~\` / \`>\`). Runtime hosts (MCP server + web dashboard) honor whichever substrate the deployment configures via \`~/.skillscript/connectors.json\`:
+**Substrate framing.** Canonical syntax routes substrate-specific dispatch through MCP (\`$ llm\` / \`$ data_read\`). Runtime hosts (MCP server + web dashboard) honor whichever substrate the deployment configures via \`~/.skillscript/connectors.json\`:
 
 \`\`\`json
 {
@@ -756,23 +729,23 @@ Skillscript skills don't import packages — they invoke connectors. The runtime
 
 Short-form (\`"sqlite"\`, \`"ollama"\`, \`"filesystem"\`, \`null\`) wires bundled defaults. Object form (\`{type, config}\`) overrides config. Adopters with custom substrate impls (AMP, Pinecone, etc.) write a programmatic bootstrap. Authoring CLI commands (\`skillfile compile\` / \`lint\` / \`audit\` / \`list\`) stay filesystem-pinned regardless. See \`docs/configuration.md\`.
 
-**Cold-author footgun (v0.10).** \`$ llm\` errors with \`No \`llm\` connector wired. Set \`substrate.local_model: 'ollama'\` in connectors.json...\` when the substrate slot is null. Same for \`$ data_read\` / \`$ data_write\` against null \`substrate.data_store\`. The error message points at the right config knob — no need to dig through API docs.
+**Cold-author footgun.** \`$ llm\` errors with \`No \`llm\` connector wired. Set \`substrate.local_model: 'ollama'\` in connectors.json...\` when the substrate slot is null. Same for \`$ data_read\` / \`$ data_write\` against null \`substrate.data_store\`. The error message points at the right config knob — no need to dig through API docs.
 
-**Adopter-extensible class registration (v0.7.3).** Custom \`McpConnector\` classes that are JSON-instantiable register via \`registerConnectorClass(name, entry)\` from adopter bootstrap before \`loadConnectorsConfig\` runs. Replaces the pre-v0.7.3 pattern of editing the bundled \`KNOWN_CONNECTOR_CLASSES\` Map directly (merge-conflict bait). See \`examples/custom-bootstrap.example.ts\`.
+**Adopter-extensible class registration.** Custom \`McpConnector\` classes that are JSON-instantiable register via \`registerConnectorClass(name, entry)\` from adopter bootstrap before \`loadConnectorsConfig\` runs. See \`examples/custom-bootstrap.example.ts\`.
 
-**Canonical runtime config (v0.7.3).** \`skillscript.config.json\` externalizes runtime knobs (skillsDir, traceDir, dashboard port, etc.) so the two-instance posture (dev + adopter on same machine) works as copy-and-tweak. CLI flags override file values; file values override defaults. See \`skillscript.config.json.example\`.
+**Canonical runtime config.** \`skillscript.config.json\` externalizes runtime knobs (skillsDir, traceDir, dashboard port, etc.) so the two-instance posture (dev + adopter on same machine) works as copy-and-tweak. CLI flags override file values; file values override defaults. See \`skillscript.config.json.example\`.
 
-**One canonical call surface per concern.** \`$ data_read\` is **the** data-retrieval call surface — one contract (\`mode=... query=... limit=N -> R\` returning \`{items: [...]}\` envelope), one connector name. Both bare-form (\`$ data_read ...\`) and dotted-form (\`$ data_read.query ...\`) dispatch through the same registered connector. Same shape for \`$ llm\` (one \`prompt=... [maxTokens=N] [model="..."] -> R\` contract returning the response string). The legacy \`~\` / \`>\` removal lands in v0.8/v0.9 — author against the canonical \`$ llm\` / \`$ data_read\` surfaces today.
+**One canonical call surface per concern.** \`$ data_read\` is **the** data-retrieval call surface — one contract (\`mode=... query=... limit=N -> R\` returning \`{items: [...]}\` envelope), one connector name. Both bare-form (\`$ data_read ...\`) and dotted-form (\`$ data_read.query ...\`) dispatch through the same registered connector. Same shape for \`$ llm\` (\`prompt=... [maxTokens=N] [model="..."] -> R\` returns the response string; optional op-level \`timeout=N\` kwarg overrides skill-level \`# Timeout:\`; optional trailing \`(fallback: "...")\` fires on throw or empty result). \`$ llm\` and \`$ data_read\` are the canonical surfaces for LLM dispatch and data retrieval.
 
 ## Discovery
 
 \`runtime_capabilities()\` reports the live picture: which connectors are registered, which feature flags they advertise, and which named instances exist (e.g., \`default\` / \`qwen\` LocalModels, \`youtrack\` McpConnector).
 
-For shell execution (\`shell(...)\` op), \`runtime_capabilities\` also reports \`shellExecution.mode\` (\`"structural-spawn"\`) and \`shellExecution.unsafe_enabled\` (whether \`shell(command=..., unsafe=true)\` / legacy \`@ unsafe\` is permitted in this deployment).
+For shell execution (\`shell(...)\` op), \`runtime_capabilities\` also reports \`shellExecution.mode\` (\`"structural-spawn"\`) and \`shellExecution.unsafe_enabled\` (whether \`shell(command=..., unsafe=true)\` is permitted in this deployment).
 
 ## Container filesystem isolation
 
-When the runtime is sandboxed (Docker container, deployed VM, etc.), the runtime's filesystem is namespace-isolated from the author's host. \`file_read("/tmp/x")\` and \`file_write(path="/tmp/x", ...)\` operate on the *runtime's* \`/tmp\`, not the host's. For cross-namespace work, use a known shared volume path or expose the file via a mount point both sides see. \`runtime_capabilities()\` (planned v0.8+) will report writable base paths to make this discoverable from cold-author position.
+When the runtime is sandboxed (Docker container, deployed VM, etc.), the runtime's filesystem is namespace-isolated from the author's host. \`file_read("/tmp/x")\` and \`file_write(path="/tmp/x", ...)\` operate on the *runtime's* \`/tmp\`, not the host's. For cross-namespace work, use a known shared volume path or expose the file via a mount point both sides see.
 `;
 
 
@@ -804,36 +777,34 @@ Three tiers per ERD §3:
 - \`circular-dependency\` — dep cycle between targets
 - \`missing-dependency\` — \`needs:\` references a target not declared
 - \`missing-skillstore-for-data-ref\` — \`&\` op fires without a SkillStore wired
-- \`unsafe-shell-disabled\` — \`@ unsafe\` declared but \`enableUnsafeShell: false\` (v0.2.11 Bug 5; fires only when caller passes the flag explicitly false)
-- \`uninitialized-append\` — \`$append VAR ...\` where VAR has no \`$set\` or \`# Vars:\` init in any enclosing scope (v0.3.0)
-- \`foreach-local-accumulator-target\` — \`$append VAR ...\` where the matching \`$set VAR = []\` is in the same scope as the append (typically same foreach body — would silently lose data each iter) (v0.3.0)
-- \`append-to-non-list\` — \`$append VAR ...\` where VAR's static init is a non-list value (v0.3.0; list-only)
+- \`unsafe-shell-disabled\` — \`shell(command=..., unsafe=true)\` declared but \`enableUnsafeShell: false\` on the runtime (fires only when caller passes the flag explicitly false)
+- \`uninitialized-append\` — \`$append VAR ...\` where VAR has no \`$set\` or \`# Vars:\` init in any enclosing scope
+- \`foreach-local-accumulator-target\` — \`$append VAR ...\` where the matching \`$set VAR = []\` is in the same scope as the append (typically same foreach body — would silently lose data each iter)
+- \`append-to-non-list\` — \`$append VAR ...\` where VAR's static init is a non-list value (list-only)
 
 ## Tier-2 (warning)
 
 - \`deprecated-question\` — bare \`?\` op (deprecated v1; compile-error in v1.x)
-- \`deprecated-symbol-op\` (v0.7.1) — legacy symbol-form op (\`~\`, \`>\`, \`@\`, \`!\`, \`??\`, \`&\`) compiles but warns with canonical replacement. Tier-1 promotion (refuse-to-compile) lands in v0.8/v0.9.
-- \`deprecated-substitution-shape\` (v0.7.1) — \`$(VAR)\` substitution form compiles but warns; rewrite to \`\${VAR}\`. Tier-1 promotion in v0.8/v0.9.
-- \`unsafe-shell-ambiguous-subst\` — \`$(NAME)\` inside \`@ unsafe\` body that isn't a declared variable; collides with bash command-sub syntax
-- \`unsafe-shell-op\` — \`@ unsafe\` op present; requires human review every time
-- \`unknown-retrieval-arg\` — \`>\` op carries kwargs outside mode/query/limit/connector/fallback (v0.2.12 Bug 26)
-- \`unknown-skill-reference\` — \`&\` or \`$ execute_skill\` references a skill not in the store (demoted from tier-1 in v0.3.1; runtime throws \`MissingSkillReferenceError\` if still unresolved at execute)
-- \`unknown-template-reference\` — \`# Templates: <name>\` references a skill not in the store (demoted from tier-1 in v0.3.1)
-- \`unconfirmed-mutation\` — mutation-class op (\`$\` tool with mutating-name shape, \`$ data_write\`, \`file_write(...)\`) runs without authorization. v0.7.0+ accepts the captured \`approved="reason"\` per-op kwarg as authorization (any non-empty string; presence is what matters). Silent when the skill declares \`# Autonomous: true\` (v0.4.2 — the autonomous-skill category exempts the rule since the user-confirmation pattern doesn't apply to unattended-execution skills) or when a preceding \`??\` / \`ask(...)\` op gates the mutation in the same target.
+- \`deprecated-substitution-shape\` — \`$(VAR)\` substitution form compiles but warns; rewrite to \`\${VAR}\`.
+- \`unsafe-shell-ambiguous-subst\` — \`$(NAME)\` inside \`shell(command=..., unsafe=true)\` body that isn't a declared variable; collides with bash command-sub syntax
+- \`unsafe-shell-op\` — \`shell(command=..., unsafe=true)\` present; requires human review every time
+- \`unknown-skill-reference\` — \`inline(skill="...")\` or \`execute_skill(name="...")\` references a skill not in the store (tier-2; runtime throws \`MissingSkillReferenceError\` if still unresolved at execute)
+- \`unknown-template-reference\` — \`# Templates: <name>\` references a skill not in the store
+- \`unconfirmed-mutation\` — mutation-class op (\`$\` tool with mutating-name shape, \`$ data_write\`, \`file_write(...)\`) runs without authorization. Accepts the captured \`approved="reason"\` per-op kwarg as authorization (any non-empty string; presence is what matters). Silent when the skill declares \`# Autonomous: true\` (the autonomous-skill category exempts the rule since the user-confirmation pattern doesn't apply to unattended-execution skills).
 - \`model-contention\` — async + sync ops on the same model serialize on a single runtime worker
 - \`draft-with-trigger\` — \`# Status: Draft\` skill has \`# Triggers:\` declared; triggers won't fire until Approved
 - \`reference-to-disabled-skill\` — \`&\` op references a Disabled skill (also tier-1 in some contexts)
-- \`unused-augmenting-header\` — \`# Event-type:\` set on a skill with no agent-bound output (v0.2.6, renamed v0.9.6)
+- \`unused-augmenting-header\` — \`# Event-type:\` set on a skill with no agent-bound output
 
 ## Tier-3 (info)
 
 - \`no-default-target\` — no \`default:\` declaration (relevant for data skills only; procedural skills hit tier-1)
 - \`duplicate-skill-name\` — name collides with an existing stored skill
 - \`plugin-collision\` — placeholder for v1.x plugin-loader name conflicts
-- \`deferred-skill-reference\` — composition ref (\`&\` / \`$ execute_skill\` / \`# Templates:\`) targets a skill not currently in the SkillStore; resolution deferred to execute time (v0.3.1+). Confirms the forward-reference path is engaged; clears once the target is stored.
-- \`unparsed-json-field-access\` — op text contains \`$(VAR|json_parse).field\`; the \`|json_parse\` filter was removed in v0.3.3. Replace with \`$ json_parse $(VAR) -> P\` then \`$(P.field)\`.
-- \`object-iteration-advisory\` (v0.7.2) — \`foreach IT in \${VAR}\` iterates a bound variable whose origin is a \`$\` MCP tool output, without a \`.field\` accessor. MCP tools commonly wrap arrays in an envelope object (\`.items\`, \`.results\`, \`.issuesPage\`, \`.data\`, \`.records\`). Check the tool's response shape; rewrite as \`foreach IT in \${VAR.items}\` (or the correct field). Placeholder for v0.8 tool-schema introspection that catches this precisely.
-- \`disallowed-tool\` (tier-1, v0.4.1) — \`$ name.tool\` references a tool not in the connector's \`allowed_tools\` allowlist. Either rewrite the skill to use a permitted tool or update \`connectors.json\` to grant access. Runtime defense-in-depth refuses disallowed dispatch even if lint is bypassed.
+- \`deferred-skill-reference\` — composition ref (\`inline\` / \`$ execute_skill\` / \`# Templates:\`) targets a skill not currently in the SkillStore; resolution deferred to execute time. Confirms the forward-reference path is engaged; clears once the target is stored.
+- \`unparsed-json-field-access\` — op text contains \`$(VAR|json_parse).field\`; the \`|json_parse\` filter is no longer supported. Use \`$ json_parse $(VAR) -> P\` then \`$(P.field)\`.
+- \`object-iteration-advisory\` — \`foreach IT in \${VAR}\` iterates a bound variable whose origin is a \`$\` MCP tool output, without a \`.field\` accessor. MCP tools commonly wrap arrays in an envelope object (\`.items\`, \`.results\`, \`.issuesPage\`, \`.data\`, \`.records\`). Check the tool's response shape; rewrite as \`foreach IT in \${VAR.items}\` (or the correct field).
+- \`disallowed-tool\` (tier-1) — \`$ name.tool\` references a tool not in the connector's \`allowed_tools\` allowlist. Either rewrite the skill to use a permitted tool or update \`connectors.json\` to grant access. Runtime defense-in-depth refuses disallowed dispatch even if lint is bypassed.
 
 \`compile_skill({source})\` runs the full lint preflight and reports
 findings in the \`errors\` + \`warnings\` arrays. \`lint_skill({source})\`

@@ -146,7 +146,7 @@ export function extractReferences(source: string): string[] {
 
 function collectAmpRefs(ops: SkillOp[], out: Set<string>): void {
   for (const op of ops) {
-    if (op.kind === "&" && op.ampParams !== undefined) {
+    if (op.kind === "inline" && op.ampParams !== undefined) {
       out.add(op.ampParams.skillName);
     }
     if (op.foreachBody !== undefined) collectAmpRefs(op.foreachBody, out);

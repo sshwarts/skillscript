@@ -3,5 +3,5 @@
 
 t:
     foreach in in $(ITEMS):
-        ! $(in)
+        emit(text="$(in)")
 default: t

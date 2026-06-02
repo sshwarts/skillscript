@@ -88,7 +88,7 @@ describe("Scheduler", () => {
   it("dispatchSkill skips Draft status with debug log", async () => {
     const { store, cleanup } = withTempStore();
     try {
-      await store.store("draft-skill", "# Skill: draft-skill\n# Status: Draft\nt:\n    ! hi\ndefault: t\n");
+      await store.store("draft-skill", "# Skill: draft-skill\n# Status: Draft\nt:\n    emit(text=\"hi\")\ndefault: t\n");
       const logs: string[] = [];
       const sched = new Scheduler({
         registry: new Registry(),
@@ -106,7 +106,7 @@ describe("Scheduler", () => {
   it("dispatchSkill skips Disabled status", async () => {
     const { store, cleanup } = withTempStore();
     try {
-      await store.store("disabled-skill", "# Skill: disabled-skill\n# Status: Disabled\nt:\n    ! hi\ndefault: t\n");
+      await store.store("disabled-skill", "# Skill: disabled-skill\n# Status: Disabled\nt:\n    emit(text=\"hi\")\ndefault: t\n");
       const logs: string[] = [];
       const sched = new Scheduler({
         registry: new Registry(),
@@ -124,7 +124,7 @@ describe("Scheduler", () => {
   it("dispatchSkill executes Approved skill", async () => {
     const { store, cleanup } = withTempStore();
     try {
-      await store.store("ok-skill", "# Skill: ok-skill\n# Status: Approved\nt:\n    ! ran\ndefault: t\n");
+      await store.store("ok-skill", "# Skill: ok-skill\n# Status: Approved\nt:\n    emit(text=\"ran\")\ndefault: t\n");
       const sched = new Scheduler({ registry: new Registry(), skillStore: store });
       const result = await sched.dispatchSkill("ok-skill");
       expect(result).not.toBeNull();
@@ -139,7 +139,7 @@ describe("Scheduler", () => {
     try {
       await store.store(
         "uses-event",
-        "# Skill: uses-event\n# Status: Approved\nt:\n    ! fired at $(EVENT.fired_at_unix)\ndefault: t\n",
+        "# Skill: uses-event\n# Status: Approved\nt:\n    emit(text=\"fired at $(EVENT.fired_at_unix)\")\ndefault: t\n",
       );
       const sched = new Scheduler({ registry: new Registry(), skillStore: store });
       const fixedNow = 1779370000000;
@@ -159,7 +159,7 @@ describe("Scheduler", () => {
     try {
       await store.store(
         "cron-target",
-        "# Skill: cron-target\n# Status: Approved\nt:\n    ! tick\ndefault: t\n",
+        "# Skill: cron-target\n# Status: Approved\nt:\n    emit(text=\"tick\")\ndefault: t\n",
       );
       // Pin time to 2026-05-21T09:00:30 (matches `0 9 * * *` because minute is 0).
       let mockNow = new Date("2026-05-21T09:00:30").getTime();
@@ -193,7 +193,7 @@ describe("Scheduler", () => {
   it("tick() skips event/agent-event/file-watch/sensor sources (parse-only v1)", async () => {
     const { store, cleanup } = withTempStore();
     try {
-      await store.store("evt-skill", "# Skill: evt-skill\n# Status: Approved\nt:\n    ! hi\ndefault: t\n");
+      await store.store("evt-skill", "# Skill: evt-skill\n# Status: Approved\nt:\n    emit(text=\"hi\")\ndefault: t\n");
       const sched = new Scheduler({ registry: new Registry(), skillStore: store });
       sched.registerTrigger({ skillName: "evt-skill", source: "event", name: "some.event", declarative: false });
       sched.registerTrigger({ skillName: "evt-skill", source: "file-watch", name: "/tmp/x", declarative: false });
@@ -211,11 +211,11 @@ describe("Scheduler", () => {
     try {
       await store.store(
         "session-start",
-        "# Skill: session-start\n# Status: Approved\nt:\n    ! started\ndefault: t\n",
+        "# Skill: session-start\n# Status: Approved\nt:\n    emit(text=\"started\")\ndefault: t\n",
       );
       await store.store(
         "session-end",
-        "# Skill: session-end\n# Status: Approved\nt:\n    ! ended\ndefault: t\n",
+        "# Skill: session-end\n# Status: Approved\nt:\n    emit(text=\"ended\")\ndefault: t\n",
       );
       const sched = new Scheduler({
         registry: new Registry(),

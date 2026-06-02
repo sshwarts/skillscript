@@ -108,7 +108,7 @@ describe("T6b dogfood — dashboard end-to-end", () => {
   it("3. Author + store skill; dashboard sees it via skill_list (v0.9.8 SkillCatalog)", async () => {
     await ctx.skillStore.store("heartbeat",
       "# Skill: heartbeat\n# Status: Draft\n# Triggers: cron: */1 * * * *\n" +
-      "emit:\n    ! heartbeat at $(EVENT.fired_at_unix)\ndefault: emit\n",
+      "emit:\n    emit(text=\"heartbeat at $(EVENT.fired_at_unix)\")\ndefault: emit\n",
     );
     // v0.9.8 — default status filter is "Approved"; heartbeat is Draft so
     // ask explicitly. audience=all surfaces headless (no `# Output:` decl).
@@ -170,7 +170,7 @@ describe("T6b dogfood — dashboard end-to-end", () => {
   it("8. Forced error surfaces with class + remediation in trace", async () => {
     await ctx.skillStore.store("broken",
       "# Skill: broken\n# Status: Approved\n" +
-      "fail:\n    @ unsafe echo \"requires enableUnsafeShell\"\ndefault: fail\n",
+      "fail:\n    shell(command=\"echo requires-enableUnsafeShell\", unsafe=true)\ndefault: fail\n",
     );
     // Dispatch without enableUnsafeShell (default false) — should error.
     const result = await ctx.scheduler.dispatchSkill("broken");

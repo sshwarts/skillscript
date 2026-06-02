@@ -36,8 +36,8 @@ describe("T5 dogfood pass — cron-fired heartbeat skill", () => {
 # Triggers: cron: */5 * * * *
 
 emit:
-    @ echo heartbeat at $(EVENT.fired_at_unix) -> STAMP
-    ! got stamp: $(STAMP)
+    shell(command="echo heartbeat at $(EVENT.fired_at_unix)") -> STAMP
+    emit(text="got stamp: $(STAMP)")
 
 default: emit
 `;
@@ -106,7 +106,7 @@ default: emit
 # Status: Approved
 # Timeout: 1
 slow-target:
-    @ sleep 5
+    shell(command="sleep 5")
 
 default: slow-target
 `;
@@ -115,7 +115,7 @@ default: slow-target
       const result = await sched.dispatchSkill("slow");
       expect(result).not.toBeNull();
       expect(result!.errors.length).toBe(1);
-      expect(result!.errors[0]!.opKind).toBe("@");
+      expect(result!.errors[0]!.opKind).toBe("shell");
       expect(result!.errors[0]!.message).toMatch(/timed out after 1000ms/);
     } finally {
       cleanup();
@@ -128,9 +128,9 @@ default: slow-target
       const src = `# Skill: error-prone
 # Status: Approved
 fetch:
-    @ false
+    shell(command="false")
 else:
-    ! fetch failed gracefully — falling back
+    emit(text="fetch failed gracefully — falling back")
 
 default: fetch
 `;
@@ -141,7 +141,7 @@ default: fetch
       // The op failed but `else:` caught it; result.errors[] still records
       // the op-error for telemetry surfaces.
       expect(result!.errors.length).toBe(1);
-      expect(result!.errors[0]!.opKind).toBe("@");
+      expect(result!.errors[0]!.opKind).toBe("shell");
       expect(result!.emissions).toEqual(["fetch failed gracefully — falling back"]);
     } finally {
       cleanup();

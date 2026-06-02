@@ -19,7 +19,7 @@ import { CallbackMcpConnector } from "../src/connectors/mcp.js";
 
 describe("v0.4.1 item 8 — foreach over parsed-JSON arrays", () => {
   it("foreach over a $ json_parse-bound array iterates the parsed array", async () => {
-    const src = `# Skill: t\n# Status: Approved\n# Vars: RAW=[10,20,30]\nrun:\n    $ json_parse $(RAW) -> P\n    foreach I in $(P):\n        ! item: $(I)\ndefault: run\n`;
+    const src = `# Skill: t\n# Status: Approved\n# Vars: RAW=[10,20,30]\nrun:\n    $ json_parse $(RAW) -> P\n    foreach I in $(P):\n        emit(text="item: $(I)")\ndefault: run\n`;
     const home = mkdtempSync(join(tmpdir(), "v041-fe-jp-"));
     const wired = bootstrap({ skillsDir: join(home, "skills"), traceDir: join(home, "traces") });
     const compiled = await compile(src);
@@ -33,7 +33,7 @@ describe("v0.4.1 item 8 — foreach over parsed-JSON arrays", () => {
     // wraps as [val] (single-element array of the string).
     // Post-v0.4.1: foreach tries JSON.parse on string-typed values and
     // uses the parsed array if successful.
-    const src = `# Skill: t\n# Status: Approved\n# Vars: RAW=[1,2,3]\nrun:\n    foreach I in $(RAW):\n        ! item: $(I)\ndefault: run\n`;
+    const src = `# Skill: t\n# Status: Approved\n# Vars: RAW=[1,2,3]\nrun:\n    foreach I in $(RAW):\n        emit(text="item: $(I)")\ndefault: run\n`;
     const home = mkdtempSync(join(tmpdir(), "v041-fe-str-"));
     const wired = bootstrap({ skillsDir: join(home, "skills"), traceDir: join(home, "traces") });
     const compiled = await compile(src);
@@ -43,7 +43,7 @@ describe("v0.4.1 item 8 — foreach over parsed-JSON arrays", () => {
   });
 
   it("regression: foreach over a literal list expression still works", async () => {
-    const src = `# Skill: t\n# Status: Approved\nrun:\n    foreach I in [a, b, c]:\n        ! got $(I)\ndefault: run\n`;
+    const src = `# Skill: t\n# Status: Approved\nrun:\n    foreach I in [a, b, c]:\n        emit(text="got $(I)")\ndefault: run\n`;
     const home = mkdtempSync(join(tmpdir(), "v041-fe-lit-"));
     const wired = bootstrap({ skillsDir: join(home, "skills"), traceDir: join(home, "traces") });
     const compiled = await compile(src);
@@ -53,7 +53,7 @@ describe("v0.4.1 item 8 — foreach over parsed-JSON arrays", () => {
   });
 
   it("regression: foreach over non-JSON-parseable string still wraps as [val]", async () => {
-    const src = `# Skill: t\n# Status: Approved\n# Vars: X=hello\nrun:\n    foreach I in $(X):\n        ! got $(I)\ndefault: run\n`;
+    const src = `# Skill: t\n# Status: Approved\n# Vars: X=hello\nrun:\n    foreach I in $(X):\n        emit(text="got $(I)")\ndefault: run\n`;
     const home = mkdtempSync(join(tmpdir(), "v041-fe-bare-"));
     const wired = bootstrap({ skillsDir: join(home, "skills"), traceDir: join(home, "traces") });
     const compiled = await compile(src);
@@ -72,7 +72,7 @@ describe("v0.4.1 item 7 — unknown-connector lint auto-wires from runtime regis
     // Skill references an UNKNOWN connector — runtime knows about "known"
     // but not "unknown_conn"; lint_skill should now fire unknown-connector
     // automatically (pre-v0.4.1 was silent because mcpConnectorNames wasn't auto-derived).
-    const src = `# Skill: t\n# Status: Approved\nrun:\n    $ unknown_conn.do_thing -> R\n    ! $(R)\ndefault: run\n`;
+    const src = `# Skill: t\n# Status: Approved\nrun:\n    $ unknown_conn.do_thing -> R\n    emit(text="$(R)")\ndefault: run\n`;
     const resp = await wired.mcpServer.handle({
       jsonrpc: "2.0",
       id: 1,
@@ -102,7 +102,7 @@ describe("v0.4.1 item 7 — unknown-connector lint auto-wires from runtime regis
       ["safe_tool"],
     );
 
-    const src = `# Skill: t\n# Status: Approved\nrun:\n    $ tooler.disallowed_one -> R\n    ! $(R)\ndefault: run\n`;
+    const src = `# Skill: t\n# Status: Approved\nrun:\n    $ tooler.disallowed_one -> R\n    emit(text="$(R)")\ndefault: run\n`;
     const resp = await wired.mcpServer.handle({
       jsonrpc: "2.0",
       id: 1,

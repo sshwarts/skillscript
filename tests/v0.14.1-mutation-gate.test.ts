@@ -48,7 +48,6 @@ describe("v0.14.1 — mutation gate runtime enforcement: $ data_write", () => {
     expect(result.errors[0]!.message).toMatch(/mutation op without author authorization/);
     expect(result.errors[0]!.remediation).toMatch(/approved=/);
     expect(result.errors[0]!.remediation).toMatch(/Autonomous/);
-    expect(result.errors[0]!.remediation).toMatch(/ask\(/);
 
     // Bridge was never called — store stays empty.
     const rows = await store.query({ query: "should not land", limit: 5, mode: "fts" });
@@ -83,18 +82,15 @@ describe("v0.14.1 — mutation gate runtime enforcement: $ data_write", () => {
     store.close();
   });
 
-  it("preceding `ask(...)` authorizes subsequent mutation in same target (sawConfirm path)", async () => {
+  it("v0.16.0: `approved=` kwarg authorizes mutation (sawConfirm path retired with ask removal)", async () => {
     const { store, wired } = wireRuntime();
-    const src = `# Skill: t\n# Status: Approved\nrun:\n    ask(prompt="proceed?") -> ANS\n    $ data_write content="confirmed mutation" -> R\ndefault: run\n`;
+    const src = `# Skill: t\n# Status: Approved\nrun:\n    $ data_write content="confirmed mutation" approved="user confirmed" -> R\ndefault: run\n`;
     const compiled = await compile(src, { registry: wired.registry });
     const result = await execute(
       compiled.parsed,
       compiled.resolvedVariables,
       compiled.targetOrder,
-      {
-        registry: wired.registry,
-        askUser: async () => "yes",
-      },
+      { registry: wired.registry },
     );
 
     expect(result.errors).toEqual([]);

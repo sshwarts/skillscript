@@ -1,5 +1,5 @@
 # Skill: ok
 # Vars: X=hi
 t:
-    ! $(X)
+    emit(text="$(X)")
 default: t

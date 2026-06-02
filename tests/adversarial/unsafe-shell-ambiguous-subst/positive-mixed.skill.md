@@ -1,5 +1,5 @@
 # Skill: bad
 # Vars: SOURCE=/etc/config
 t:
-    @ unsafe cp $(SOURCE) /tmp/backup-$(date +%s)-$(undeclared_var)
+    shell(command="cp $(SOURCE) /tmp/backup-$(date +%s)-$(undeclared_var)", unsafe=true)
 default: t

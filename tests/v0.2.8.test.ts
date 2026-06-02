@@ -86,7 +86,7 @@ describe("v0.2.8 — help MCP tool", () => {
     expect(content).toMatch(/# Skill:/);
     expect(content).toMatch(/# Status:/);
     expect(content).toMatch(/# Triggers:/);
-    expect(content).toMatch(/# Delivery-context:/);
+    expect(content).toMatch(/# Event-type:/);
   });
 
   it("topic=examples returns 3 canonical worked skills", async () => {
@@ -151,7 +151,7 @@ describe("v0.2.8 — execute_skill MCP tool", () => {
   it("executes a stored skill end-to-end", async () => {
     const wired = bootstrap({ skillsDir: join(home, "skills"), traceDir: join(home, "traces") });
     await wired.skillStore.store("hello",
-      "# Skill: hello\n# Status: Approved\n# Vars: WHO=world\ngreet:\n    ! Hello, $(WHO)!\ndefault: greet\n");
+      "# Skill: hello\n# Status: Approved\n# Vars: WHO=world\ngreet:\n    emit(text=\"Hello, $(WHO)!\")\ndefault: greet\n");
     const result = await callTool(wired.mcpServer, "execute_skill", { skill_name: "hello" });
     expect(result["skill_name"]).toBe("hello");
     expect((result["transcript"] as string[]).join("\n")).toMatch(/Hello, world!/);
@@ -162,7 +162,7 @@ describe("v0.2.8 — execute_skill MCP tool", () => {
   it("honors inputs override on # Vars:", async () => {
     const wired = bootstrap({ skillsDir: join(home, "skills"), traceDir: join(home, "traces") });
     await wired.skillStore.store("hello",
-      "# Skill: hello\n# Status: Approved\n# Vars: WHO=world\ngreet:\n    ! Hello, $(WHO)!\ndefault: greet\n");
+      "# Skill: hello\n# Status: Approved\n# Vars: WHO=world\ngreet:\n    emit(text=\"Hello, $(WHO)!\")\ndefault: greet\n");
     const result = await callTool(wired.mcpServer, "execute_skill", { skill_name: "hello", inputs: { WHO: "Perry" } });
     expect((result["transcript"] as string[]).join("\n")).toMatch(/Hello, Perry!/);
   });
@@ -170,7 +170,7 @@ describe("v0.2.8 — execute_skill MCP tool", () => {
   it("mechanical: true previews dispatch without firing real ops", async () => {
     const wired = bootstrap({ skillsDir: join(home, "skills"), traceDir: join(home, "traces") });
     await wired.skillStore.store("mech-preview",
-      "# Skill: mech-preview\n# Status: Approved\nstep:\n    ~ prompt=\"hi\" -> R\n    ! Result: $(R)\ndefault: step\n");
+      "# Skill: mech-preview\n# Status: Approved\nstep:\n    $ llm prompt=\"hi\" -> R\n    emit(text=\"Result: $(R)\")\ndefault: step\n");
     const result = await callTool(wired.mcpServer, "execute_skill", { skill_name: "mech-preview", mechanical: true });
     expect(result["mechanical"]).toBe(true);
     expect(result["errors"]).toEqual([]);
@@ -209,9 +209,9 @@ describe("v0.2.8 — $ execute_skill in-skill composition", () => {
   it("parent skill composes a child skill via $ execute_skill", async () => {
     const wired = bootstrap({ skillsDir: join(home, "skills"), traceDir: join(home, "traces") });
     await wired.skillStore.store("child",
-      "# Skill: child\n# Status: Approved\n# Vars: GREETING=hi\nm:\n    ! From child: $(GREETING)\ndefault: m\n");
+      "# Skill: child\n# Status: Approved\n# Vars: GREETING=hi\nm:\n    emit(text=\"From child: $(GREETING)\")\ndefault: m\n");
     await wired.skillStore.store("parent",
-      "# Skill: parent\n# Status: Approved\nm:\n    $ execute_skill skill_name=\"child\" GREETING=\"hello\" -> R\n    ! Parent done\ndefault: m\n");
+      "# Skill: parent\n# Status: Approved\nm:\n    $ execute_skill skill_name=\"child\" GREETING=\"hello\" -> R\n    emit(text=\"Parent done\")\ndefault: m\n");
 
     const result = await callTool(wired.mcpServer, "execute_skill", { skill_name: "parent" });
     expect(result["errors"]).toEqual([]);
@@ -228,9 +228,9 @@ describe("v0.2.8 — $ execute_skill in-skill composition", () => {
     // parent-op errors). We verify the marker shows up anywhere in the
     // serialized result tree.
     await wired.skillStore.store("a",
-      "# Skill: a\n# Status: Approved\nm:\n    $ execute_skill skill_name=\"b\" -> R\n    ! a-done\ndefault: m\n");
+      "# Skill: a\n# Status: Approved\nm:\n    $ execute_skill skill_name=\"b\" -> R\n    emit(text=\"a-done\")\ndefault: m\n");
     await wired.skillStore.store("b",
-      "# Skill: b\n# Status: Approved\nm:\n    $ execute_skill skill_name=\"a\" -> R\n    ! b-done\ndefault: m\n");
+      "# Skill: b\n# Status: Approved\nm:\n    $ execute_skill skill_name=\"a\" -> R\n    emit(text=\"b-done\")\ndefault: m\n");
 
     const result = await callTool(wired.mcpServer, "execute_skill", { skill_name: "a" });
     // Serialize the entire result tree and grep for the recursion marker.
@@ -241,10 +241,10 @@ describe("v0.2.8 — $ execute_skill in-skill composition", () => {
   it("v0.2.9 fix: $ execute_skill inputs={...} JSON kwarg propagates to child", async () => {
     const wired = bootstrap({ skillsDir: join(home, "skills"), traceDir: join(home, "traces") });
     await wired.skillStore.store("hello",
-      "# Skill: hello\n# Status: Approved\n# Vars: WHO=world\ngreet:\n    ! Hello, $(WHO)!\ndefault: greet\n");
+      "# Skill: hello\n# Status: Approved\n# Vars: WHO=world\ngreet:\n    emit(text=\"Hello, $(WHO)!\")\ndefault: greet\n");
     // Style 2 — Perry's repro syntax (thread 64445b4f). Was silently dropped in v0.2.8.
     await wired.skillStore.store("parent",
-      "# Skill: parent\n# Status: Approved\n# Vars: TARGET_NAME=Perry\nm:\n    $ execute_skill skill_name=\"hello\" inputs={\"WHO\": \"$(TARGET_NAME)\"} -> R\n    ! Child WHO: $(R.final_vars.WHO)\ndefault: m\n");
+      "# Skill: parent\n# Status: Approved\n# Vars: TARGET_NAME=Perry\nm:\n    $ execute_skill skill_name=\"hello\" inputs={\"WHO\": \"$(TARGET_NAME)\"} -> R\n    emit(text=\"Child WHO: $(R.final_vars.WHO)\")\ndefault: m\n");
 
     const result = await callTool(wired.mcpServer, "execute_skill", { skill_name: "parent" });
     expect(result["errors"]).toEqual([]);
@@ -254,10 +254,10 @@ describe("v0.2.8 — $ execute_skill in-skill composition", () => {
   it("v0.2.9 fix: $ execute_skill bare-kwarg style continues to propagate inputs", async () => {
     const wired = bootstrap({ skillsDir: join(home, "skills"), traceDir: join(home, "traces") });
     await wired.skillStore.store("hello",
-      "# Skill: hello\n# Status: Approved\n# Vars: WHO=world\ngreet:\n    ! Hello, $(WHO)!\ndefault: greet\n");
+      "# Skill: hello\n# Status: Approved\n# Vars: WHO=world\ngreet:\n    emit(text=\"Hello, $(WHO)!\")\ndefault: greet\n");
     // Style 1 — bare kwarg, natural skill grammar
     await wired.skillStore.store("parent",
-      "# Skill: parent\n# Status: Approved\n# Vars: TARGET_NAME=Scott\nm:\n    $ execute_skill skill_name=\"hello\" WHO=\"$(TARGET_NAME)\" -> R\n    ! Child WHO: $(R.final_vars.WHO)\ndefault: m\n");
+      "# Skill: parent\n# Status: Approved\n# Vars: TARGET_NAME=Scott\nm:\n    $ execute_skill skill_name=\"hello\" WHO=\"$(TARGET_NAME)\" -> R\n    emit(text=\"Child WHO: $(R.final_vars.WHO)\")\ndefault: m\n");
 
     const result = await callTool(wired.mcpServer, "execute_skill", { skill_name: "parent" });
     expect(result["errors"]).toEqual([]);
@@ -283,9 +283,9 @@ describe("v0.2.8 — $ execute_skill in-skill composition", () => {
     const connectors = wired.registry.listMcpConnectors();
     expect(connectors.some((c) => c.name === "llm")).toBe(false);
     await wired.skillStore.store("alpha",
-      "# Skill: alpha\n# Status: Approved\nm:\n    ! alpha-out\ndefault: m\n");
+      "# Skill: alpha\n# Status: Approved\nm:\n    emit(text=\"alpha-out\")\ndefault: m\n");
     await wired.skillStore.store("beta",
-      "# Skill: beta\n# Status: Approved\nm:\n    $ execute_skill skill_name=\"alpha\" -> R\n    ! beta done\ndefault: m\n");
+      "# Skill: beta\n# Status: Approved\nm:\n    $ execute_skill skill_name=\"alpha\" -> R\n    emit(text=\"beta done\")\ndefault: m\n");
 
     const result = await callTool(wired.mcpServer, "execute_skill", { skill_name: "beta" });
     expect(result["errors"]).toEqual([]);

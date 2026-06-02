@@ -1,4 +1,4 @@
 # Skill: caller
 t:
-    & voice-guide
+    inline(skill="voice-guide")
 default: t

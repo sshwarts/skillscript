@@ -2,5 +2,5 @@
 # Status: Draft
 # Triggers: cron: */5 * * * *
 t:
-    ! hi
+    emit(text="hi")
 default: t

@@ -174,7 +174,7 @@ describe("v0.4.0 — bootstrap wires connectors.json", () => {
 
 describe("v0.4.0 — unknown-connector lint", () => {
   it("fires tier-1 on $ name.tool where name is not registered", async () => {
-    const src = `# Skill: t\n# Status: Approved\nrun:\n    $ youtrack.search_issues query="for: me" -> R\n    ! $(R)\ndefault: run\n`;
+    const src = `# Skill: t\n# Status: Approved\nrun:\n    $ youtrack.search_issues query="for: me" -> R\n    emit(text="$(R)")\ndefault: run\n`;
     const r = await lint(src, { mcpConnectorNames: [] });
     const finding = r.findings.find((f) => f.rule === "unknown-connector");
     expect(finding).toBeDefined();
@@ -183,14 +183,14 @@ describe("v0.4.0 — unknown-connector lint", () => {
   });
 
   it("does not fire when connector IS registered", async () => {
-    const src = `# Skill: t\n# Status: Approved\nrun:\n    $ youtrack.search_issues query="for: me" -> R\n    ! $(R)\ndefault: run\n`;
+    const src = `# Skill: t\n# Status: Approved\nrun:\n    $ youtrack.search_issues query="for: me" -> R\n    emit(text="$(R)")\ndefault: run\n`;
     const r = await lint(src, { mcpConnectorNames: ["youtrack"] });
     const finding = r.findings.find((f) => f.rule === "unknown-connector");
     expect(finding).toBeUndefined();
   });
 
   it("silent when mcpConnectorNames is undefined (caller doesn't know what's wired)", async () => {
-    const src = `# Skill: t\n# Status: Approved\nrun:\n    $ youtrack.search_issues query="for: me" -> R\n    ! $(R)\ndefault: run\n`;
+    const src = `# Skill: t\n# Status: Approved\nrun:\n    $ youtrack.search_issues query="for: me" -> R\n    emit(text="$(R)")\ndefault: run\n`;
     const r = await lint(src);
     const finding = r.findings.find((f) => f.rule === "unknown-connector");
     expect(finding).toBeUndefined();
@@ -199,7 +199,7 @@ describe("v0.4.0 — unknown-connector lint", () => {
   it("derives connector names from Registry when only registry is passed", async () => {
     const registry = new Registry();
     registry.registerMcpConnector("foo", new CallbackMcpConnector(async () => ({})));
-    const src = `# Skill: t\n# Status: Approved\nrun:\n    $ bar.x -> R\n    ! $(R)\ndefault: run\n`;
+    const src = `# Skill: t\n# Status: Approved\nrun:\n    $ bar.x -> R\n    emit(text="$(R)")\ndefault: run\n`;
     const r = await lint(src, { registry });
     const finding = r.findings.find((f) => f.rule === "unknown-connector");
     expect(finding).toBeDefined();
@@ -209,7 +209,7 @@ describe("v0.4.0 — unknown-connector lint", () => {
 
 describe("v0.4.0 — unknown-connector-class lint (Perry's sibling addition)", () => {
   it("re-surfaces loader 'unknown connector class' errors as lint findings", async () => {
-    const src = `# Skill: t\n# Status: Approved\nrun:\n    ! hi\ndefault: run\n`;
+    const src = `# Skill: t\n# Status: Approved\nrun:\n    emit(text="hi")\ndefault: run\n`;
     const r = await lint(src, {
       connectorConfigErrors: [
         `connectors.json: entry 'youtrack' references unknown connector class 'RemoteMcpConnector'. Known classes: CallbackMcpConnector.`,
@@ -222,7 +222,7 @@ describe("v0.4.0 — unknown-connector-class lint (Perry's sibling addition)", (
   });
 
   it("does not fire for non-class config errors", async () => {
-    const src = `# Skill: t\n# Status: Approved\nrun:\n    ! hi\ndefault: run\n`;
+    const src = `# Skill: t\n# Status: Approved\nrun:\n    emit(text="hi")\ndefault: run\n`;
     const r = await lint(src, {
       connectorConfigErrors: [
         `connectors.json: malformed JSON in 'x.json': Unexpected token`,

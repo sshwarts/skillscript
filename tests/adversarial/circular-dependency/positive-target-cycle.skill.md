@@ -1,6 +1,6 @@
 # Skill: bad
 a: b
-    ! a
+    emit(text="a")
 b: a
-    ! b
+    emit(text="b")
 default: a

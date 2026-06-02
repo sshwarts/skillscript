@@ -1,5 +1,107 @@
 # Changelog
 
+## 0.16.0 — 2026-06-02 — Language-surface canonicalization
+
+Theme: structural discipline applied to source-level dispatch surfaces. Two
+classes of dual-surface ambiguity collapsed simultaneously so downstream
+audit + maintenance work has a single canonical surface to reason about.
+
+### Breaking changes (pre-adoption window — no external adopters)
+
+**Sub-charter A: bare-form / named-form discipline for MCP dispatch.** Bare
+`$ <tool>` no longer falls back to the `primary` connector. Bare form is
+reserved for runtime intrinsics (`execute_skill`, `json_parse`) and the
+typed-contract name-match pattern (`$ <name>` where `<name>` matches a
+wired MCP connector, e.g. `$ llm prompt=...` against the `llm` bridge).
+Substrate-specific MCP dispatch now requires named form `$ <connector>.<tool>`.
+
+This closes the silent-failure mode where cron-fired skills using bare-form
+substrate-specific tools (`$ amp_olsen_task`, `$ github_create_issue`)
+errored at dispatch time because `primary` wasn't registered — no transcript,
+no fallback, just a missing-connector error. With v0.16.0, the lint surface
+and runtime error both direct adopters to named form with explicit
+remediation copy.
+
+**Sub-charter B: legacy symbol-form ops eliminated.** The six legacy symbol
+forms (`~`, `>`, `@`, `!`, `??`, `&`) now produce parse errors with
+canonical-form remediation. Only the function-call canonical surface
+survives at source level. AST kinds renamed in lockstep
+(`!`→`emit`, `@`→`shell`, `&`→`inline`); the legacy
+`~`/`>` AST kinds + their dedicated runtime paths deleted entirely (the
+canonical replacements `$ llm` and `$ data_read` dispatch through the
+LocalModelMcpConnector + DataStoreMcpConnector bridges).
+
+**Sub-charter C: `ask` runtime-intrinsic removed.** `ask(prompt="...")` was
+removed entirely (not renamed). The op conflated two unrelated concerns:
+(1) user-surfacing, which requires an interactive channel the runtime
+can't guarantee for cron/event-fired skills, and (2) mutation-gating,
+which is already covered by per-op `approved="reason"` kwarg +
+skill-level `# Autonomous: true`. The mutation-gate "preceding `ask`
+authorizes following mutations" rule (`sawConfirm` path) is retired —
+authorization now flows only through `approved=` and `# Autonomous:`.
+For input-collection workflows, use `emit(text="...")` and have the
+caller handle the round-trip. `InteractiveOpInAutonomousModeError` class
+deleted (now unreachable).
+
+The `deprecated-symbol-op` lint rule, the `unknown-retrieval-arg` lint rule,
+the `model-contention` lint rule, and the `sourceForm` AST marker were
+deleted as part of this collapse — all served the grace-period machinery
+that no longer applies.
+
+### Parity fix: `$` dispatch closes the discipline-only-contract gap
+
+While analyzing the legacy elimination, we surfaced that the canonical
+`$ llm` and `$ data_read` dispatch paths had been declared as parity
+replacements for legacy `~` and `>` but lacked two semantics the legacy
+forms supported:
+
+- **Per-op `timeout=N` kwarg** — legacy `~` accepted `timeoutSeconds=N`
+  in its structured-params bag; the generic `$` dispatch had no equivalent.
+  v0.16.0 adds `timeout=N` as a reserved op-level kwarg on every `$` op
+  (intercepted at runtime before forwarding to the connector).
+
+- **Fallback-on-empty** — the doc at `parser.ts:84-91` claimed `$` fallback
+  fires "on throw or empty result", matching legacy `~`/`>` semantics, but
+  the code only handled throw. v0.16.0 fixes the code to match the doc:
+  fallback fires on empty string (after trim), empty array, or
+  `null`/`undefined` result in addition to throw.
+
+These were latent gaps since v0.7.2. Adopters who migrated from `~`/`>` to
+`$ llm`/`$ data_read` lost per-op timeout + empty-result fallback silently —
+v0.16.0 makes the canonical surface match the documented contract.
+
+### Migration mapping (mechanical)
+
+| Legacy (parse error) | Canonical |
+|---|---|
+| `! text` | `emit(text="text")` |
+| `?? "prompt" -> R` | (removed — `ask` op deleted; use `emit(text="...")` + caller round-trip, or `approved="reason"` for mutation gating) |
+| `@ cmd args` | `shell(command="cmd args")` |
+| `@ unsafe cmd` | `shell(command="cmd", unsafe=true)` |
+| `& skill-name` | `inline(skill="skill-name")` |
+| `~ prompt="..." -> R` | `$ llm prompt="..." -> R` |
+| `> mode=... query=... -> R` | `$ data_read mode=... query=... -> R` |
+| Bare `$ <substrate_tool>` | `$ <connector>.<substrate_tool>` |
+
+### Bundled examples + docs updated
+
+`hello-world.skill.md`, `skill-store-roundtrip.skill.md`, and
+`data-store-roundtrip.skill.md` use canonical function-call syntax
+throughout. Help content + lint code references swept for legacy-form
+mentions.
+
+### Internal
+
+- ~550 LOC removed from narrow core (parser + lint + runtime shrink)
+- `OpKind` type union narrows from 14 to 11 (delete `~`, `>`, `ask`; rename three)
+- `SkillOp` interface drops `localModelParams`, `retrievalParams`,
+  `sourceForm` fields
+- `RUNTIME_INTRINSIC_FN_NAMES` shrinks to 7 (delete `ask`)
+- `MutationAuthState.sawConfirm` field removed; mutation gate now relies
+  solely on `op.approved` + `skillAutonomous`
+- `InteractiveOpInAutonomousModeError` class deleted
+- LocalModelMcpConnector bridge auto-wired as `llm` connector unchanged
+
 ## 0.15.7 — 2026-06-01 — `|json` filter idempotent on already-JSON strings
 
 One-rule fix in `src/filters.ts`. Phase 6 cold-adopter finding surfaced

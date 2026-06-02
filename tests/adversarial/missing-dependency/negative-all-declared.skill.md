@@ -1,6 +1,6 @@
 # Skill: ok
 a:
-    ! a
+    emit(text="a")
 b: a
-    ! b
+    emit(text="b")
 default: b

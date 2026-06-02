@@ -1,5 +1,5 @@
 # Skill: ok
 # Vars: X=hi
 t:
-    ! $(X|url)
+    emit(text="$(X|url)")
 default: t

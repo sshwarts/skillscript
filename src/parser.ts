@@ -2,25 +2,24 @@
 // no resolution against external state. Semantic analysis (variable resolution,
 // data-skill inlining, topo-sort) lives in compile.ts.
 
-export type OpKind = "$" | "$set" | "$append" | "?" | "@" | "!" | "??" | "foreach" | "if" | ">" | "~" | "&" | "file_read" | "file_write" | "notify";
+export type OpKind = "$" | "$set" | "$append" | "?" | "shell" | "emit" | "foreach" | "if" | "inline" | "file_read" | "file_write" | "notify";
 
 /**
- * v0.7.0 — runtime-intrinsic function-call names. Closed set of ops the
- * language implements directly (no MCP dispatch). Function-call grammar:
+ * Runtime-intrinsic function-call names. Closed set of ops the language
+ * implements directly (no MCP dispatch). Function-call grammar:
  * `verb(kwarg=value, ...) [-> BINDING]`.
  *
  * Anything else with function-call shape is rejected by parser with a
  * remediation pointing at `$ tool args -> R` for MCP dispatch.
  */
 export const RUNTIME_INTRINSIC_FN_NAMES = [
-  "emit",          // → ! (output to skill consumer)
-  "ask",           // → ?? (prompt user)
-  "inline",        // → & (compile-time skill composition)
-  "execute_skill", // → $ execute_skill (runtime skill invocation)
-  "shell",         // → @ (local subprocess)
+  "emit",          // output to skill consumer
+  "inline",        // compile-time skill composition
+  "execute_skill", // runtime skill invocation (dispatches via $ execute_skill)
+  "shell",         // local subprocess
   "file_read",     // read file contents at runtime
   "file_write",    // write file contents at runtime
-  "notify",        // v0.8.0 — mid-skill synchronous agent alert via AgentConnector(s)
+  "notify",        // mid-skill synchronous agent alert via AgentConnector(s)
 ] as const;
 
 export interface SkillOp {
@@ -28,40 +27,8 @@ export interface SkillOp {
   body: string;
   outputVar?: string;
   mcpConnector?: string;
-  retrievalParams?: {
-    mode: string;
-    query: string;
-    /** Integer literal OR a `$(VAR)`-style ref string. Runtime substitutes refs then parses to int. */
-    limit: number | string;
-    connector: string;
-    extra: Record<string, string>;
-    /**
-     * Op-level fallback (per language reference §9). When the retrieval
-     * throws or returns an empty array, runtime binds this value (string)
-     * to the output var instead of propagating the error.
-     */
-    fallback?: string;
-  };
-  localModelParams?: {
-    prompt: string;
-    model?: string;
-    /** Integer literal OR a `$(VAR)`-style ref string. Runtime substitutes refs then parses to int. */
-    maxTokens?: number | string;
-    /**
-     * Per-op timeout override in SECONDS (per decision 7 resolution chain).
-     * Integer literal OR `$(VAR)` ref. Per-op wins over skill `# Timeout:`
-     * header, connector default, and built-in fallback.
-     */
-    timeoutSeconds?: number | string;
-    /**
-     * Op-level fallback (per language reference §9). When the model call
-     * throws or returns an empty (trimmed) response, runtime binds this
-     * value to the output var instead of propagating the error.
-     */
-    fallback?: string;
-  };
   /**
-   * For `&` ops only: skill name + optional key=value args passed as inputs
+   * `inline` ops only: skill name + optional key=value args passed as inputs
    * when the target is procedural (runtime invocation), ignored when the
    * target is data-typed (compile-time inline). `outputVar` captures the
    * result of procedural invocations; absent for data inlines.
@@ -71,23 +38,18 @@ export interface SkillOp {
     args: Record<string, string>;
   };
   /**
-   * For `@` ops only: when the literal first token of the body is `unsafe`,
-   * the parser attaches `policy: "unsafe"` and strips the keyword from the
-   * body. Lint flags every `@ unsafe` (tier-2); runtime refuses unless
-   * `runtime.enable_unsafe_shell = true` (default false). Default `@` ops
-   * (without the keyword) route through the structured-spawn sandbox per
-   * decision 2 — one binary, no shell interpretation.
+   * `shell` ops only: when `unsafe=true` kwarg is set, the runtime routes
+   * through full-shell exec (vs default structured-spawn sandbox). Refused
+   * unless `runtime.enable_unsafe_shell = true` (default false). Default
+   * `shell(...)` ops route through structured spawn — one binary, no shell
+   * interpretation.
    */
   policy?: "unsafe";
   setName?: string;
   setValue?: string;
   /**
-   * Top-level fallback (per language reference §9, extended 2026-05-21
-   * for `$` ops via cold-agent corpus). On `$` throw or empty result,
-   * runtime binds this value to the output var instead of propagating
-   * the error. `~` and `>` ops carry fallback on their params bag for
-   * type-specific coercion; `$` returns are heterogeneous (objects,
-   * arrays, strings) so it lives at the op level.
+   * Op-level fallback. On op throw or empty result, runtime binds this value
+   * to the output var instead of propagating the error.
    */
   fallback?: string;
   foreachIter?: string;
@@ -96,47 +58,35 @@ export interface SkillOp {
   ifBranches?: Array<{ cond: string; body: SkillOp[] }>;
   ifElseBody?: SkillOp[];
   /**
-   * v0.7.0 — file_read / file_write op params. `path` is the filesystem path
+   * `file_read` / `file_write` op params. `path` is the filesystem path
    * (may contain `${VAR}` substitutions resolved at runtime). `content` is
    * the body to write (file_write only).
    */
   fileParams?: { path: string; content?: string };
   /**
-   * v0.8.0 — notify() op params. `agent` is the target agent identifier
-   * (required, may contain `${VAR}` substitutions resolved at runtime).
-   * `message` is the explicit message body (optional — runtime defaults to
-   * the joined accumulated emissions when absent). `connectors` is an
-   * optional restriction list — when present, only AgentConnectors whose
-   * registered name is in this list are dispatched to.
+   * `notify` op params. `agent` is the target agent identifier (required,
+   * may contain `${VAR}` substitutions resolved at runtime). `message` is
+   * the explicit message body (optional — runtime defaults to the joined
+   * accumulated emissions when absent). `connectors` is an optional
+   * restriction list — when present, only AgentConnectors whose registered
+   * name is in this list are dispatched to.
    */
   notifyParams?: {
     agent: string;
     message?: string;
     connectors?: string[];
-    /** v0.9.6 — adopter-defined routing vocab; flows to `meta.event_type`. */
+    /** Adopter-defined routing vocab; flows to `meta.event_type`. */
     event_type?: string;
-    /** v0.9.6 — reply-correlation primitive; flows to `meta.correlation_id`. */
+    /** Reply-correlation primitive; flows to `meta.correlation_id`. */
     correlation_id?: string;
   };
   /**
-   * v0.7.0 — inline `approved="reason"` kwarg captured on mutation-class
-   * function-call ops. Author intent marker; lint's `unconfirmed-mutation`
-   * rule accepts presence (any non-empty string) as per-op authorization
-   * when `# Autonomous: true` is not declared.
+   * Inline `approved="reason"` kwarg captured on mutation-class function-call
+   * ops. Author intent marker; lint's `unconfirmed-mutation` rule accepts
+   * presence (any non-empty string) as per-op authorization when
+   * `# Autonomous: true` is not declared.
    */
   approved?: string;
-  /**
-   * v0.7.1 — source-form marker. The parser collapses canonical
-   * function-call ops (`emit(text="...")`, `shell(command="...")`, etc.)
-   * to the same AST `kind` as the legacy symbol form (`! ...`, `@ ...`,
-   * etc.) so runtime/render/lint share one dispatch path. This field
-   * preserves which surface the author wrote so the `deprecated-symbol-op`
-   * lint can fire only on legacy-form occurrences.
-   *
-   * `"function-call"` = author wrote `verb(kwargs)` shape.
-   * `undefined` = author wrote symbol form (legacy).
-   */
-  sourceForm?: "function-call";
 }
 
 export interface SkillTarget {
@@ -279,8 +229,6 @@ export interface ParsedSkill {
 const REQUIRES_LINE = /^(user-var|system-var):([A-Za-z0-9_-]+)\s*(?:→|->)\s*([A-Za-z_][\w-]*)\s*(?:\(\s*fallback\s*:\s*(.+?)\s*\)\s*)?$/;
 /** Capability token: `connector_type.feature_flag`. Matches one space-separated token of a capability `# Requires:` line. */
 const CAPABILITY_TOKEN = /^[a-z_][a-z0-9_]*\.[a-z_][a-z0-9_]*$/;
-/** `&` op: `& skill-name [arg=value ...] [-> VARNAME]`. Skill names follow the same charset as filesystem-safe identifiers (alphanumeric, hyphen, underscore). */
-const AMPERSAND_OP_REGEX = /^&\s+([A-Za-z0-9][\w-]*)\s*(.*?)(?:\s*->\s*([A-Za-z_]\w*))?(?:\s+\(fallback\s*:\s*(.+?)\))?\s*$/s;
 // v0.7.2 — `(.*)` widened to `([\s\S]*)` so multi-line triple-quote
 // (`"""..."""`) values fold into a single $set value capture. Without the
 // dotall-equivalent, the `.` excludes newlines and the regex stops at the
@@ -317,24 +265,9 @@ function extractApprovedKwarg(body: string): string | undefined {
   if (m === null) return undefined;
   return m[1] ?? m[2] ?? "";
 }
-// v0.9.2 — P0.5 detect missing-space dispatch: `$<word> args` where `<word>`
-// isn't `set`/`append` (the only legitimate no-space `$`-prefix verbs).
+// P0.5 detect missing-space dispatch: `$<word> args` where `<word>` isn't
+// `set`/`append` (the only legitimate no-space `$`-prefix verbs).
 const NO_SPACE_DISPATCH_RE = /^\$(?!set\b|append\b)\w+\s/;
-/**
- * `>` and `~` ops accept optional trailing `(fallback: <value>)` per
- * language reference §9 (Error Handling, Layer 3). Fires when the op
- * throws or returns empty — runtime binds the fallback value to the
- * output var and continues without surfacing the error.
- *
- * Value is permissive (matching `# Requires:` cascade convention): bare
- * identifiers (`ip-based`), quoted strings (`"weather unavailable"`),
- * array literals (`[]`, `[a, b]`), and arbitrary text between the colon
- * and the closing paren are all accepted. Parser stores the raw form;
- * runtime applies `coerceLiteralValue` for `>` (binds array on `[...]`)
- * and the raw string for `~` (model response shape).
- */
-const RETRIEVAL_OP_REGEX = /^>\s+(.+?)\s+->\s+([A-Za-z_]\w*)(?:\s+\(fallback\s*:\s*(.+?)\))?\s*$/s;
-const LOCAL_MODEL_OP_REGEX = /^~\s+(.+?)\s+->\s+([A-Za-z_]\w*)(?:\s+\(fallback\s*:\s*(.+?)\))?\s*$/s;
 const MCP_CONNECTOR_PREFIX = /^([a-z_][a-z0-9_-]*)\.(?=[A-Za-z_])([\s\S]*)$/;
 
 // Narrow v1 condition grammar.
@@ -864,109 +797,6 @@ function splitMcpConnectorPrefix(body: string): { connector: string | undefined;
   const m = MCP_CONNECTOR_PREFIX.exec(body);
   if (m === null) return { connector: undefined, rest: body };
   return { connector: m[1]!, rest: m[2]! };
-}
-
-function parseRetrievalArgs(
-  argsStr: string,
-  targetName: string,
-): { params: NonNullable<SkillOp["retrievalParams"]>; errors: string[] } {
-  const errors: string[] = [];
-  const map: Record<string, string> = {};
-  const tokens = tokenizeKeywordArgs(argsStr);
-  for (const tok of tokens) {
-    const eq = tok.indexOf("=");
-    if (eq === -1) {
-      errors.push(`Malformed \`>\` arg '${tok}' in target '${targetName}' — expected key=value`);
-      continue;
-    }
-    const key = tok.slice(0, eq).trim();
-    const rawValue = tok.slice(eq + 1);
-    map[key] = processSetValue(rawValue);
-  }
-  for (const required of ["mode", "query", "limit"]) {
-    if (!(required in map) || map[required] === "") {
-      errors.push(`\`>\` op in target '${targetName}' missing required param '${required}'`);
-    }
-  }
-  // Defer integer validation when the value contains a `$(VAR)` ref — runtime
-  // substitutes + parses after the ref resolves. Literal numerics still
-  // validate at parse time.
-  let limit: number | string = 0;
-  const rawLimit = map["limit"] ?? "";
-  if (/\$[(\{]/.test(rawLimit)) {
-    limit = rawLimit;
-  } else {
-    const n = parseInt(rawLimit, 10);
-    if (!Number.isFinite(n) || n <= 0) {
-      errors.push(`\`>\` op in target '${targetName}': 'limit' must be a positive integer or a \`$(VAR)\` ref (got '${rawLimit}')`);
-    } else {
-      limit = n;
-    }
-  }
-  const extra: Record<string, string> = {};
-  for (const [k, v] of Object.entries(map)) {
-    if (k === "mode" || k === "query" || k === "limit" || k === "connector") continue;
-    extra[k] = v;
-  }
-  return {
-    params: {
-      mode: map["mode"] ?? "",
-      query: map["query"] ?? "",
-      limit,
-      connector: map["connector"] ?? "primary",
-      extra,
-    },
-    errors,
-  };
-}
-
-function parseLocalModelArgs(
-  argsStr: string,
-  targetName: string,
-): { params: NonNullable<SkillOp["localModelParams"]>; errors: string[] } {
-  const errors: string[] = [];
-  const map: Record<string, string> = {};
-  const tokens = tokenizeKeywordArgs(argsStr);
-  for (const tok of tokens) {
-    const eq = tok.indexOf("=");
-    if (eq === -1) {
-      errors.push(`Malformed \`~\` arg '${tok}' in target '${targetName}' — expected key=value`);
-      continue;
-    }
-    const key = tok.slice(0, eq).trim();
-    const rawValue = tok.slice(eq + 1);
-    map[key] = processSetValue(rawValue);
-  }
-  const recognized = new Set(["prompt", "model", "maxTokens", "timeoutSeconds"]);
-  for (const key of Object.keys(map)) {
-    if (!recognized.has(key)) {
-      errors.push(`\`~\` op in target '${targetName}': unrecognized param '${key}' — strict grammar allows prompt/model/maxTokens/timeoutSeconds only. Interpolate context into the prompt string via $(...) instead.`);
-    }
-  }
-  if (!("prompt" in map) || map["prompt"] === "") {
-    errors.push(`\`~\` op in target '${targetName}' missing required param 'prompt'`);
-  }
-  // Defer integer validation when the value contains a `$(VAR)` ref.
-  function deferInt(key: string): number | string | undefined {
-    if (!(key in map)) return undefined;
-    const raw = map[key]!;
-    if (/\$[(\{]/.test(raw)) return raw;
-    const n = parseInt(raw, 10);
-    if (!Number.isFinite(n) || n <= 0) {
-      errors.push(`\`~\` op in target '${targetName}': '${key}' must be a positive integer or a \`$(VAR)\` ref (got '${raw}')`);
-      return undefined;
-    }
-    return n;
-  }
-  const maxTokens = deferInt("maxTokens");
-  const timeoutSeconds = deferInt("timeoutSeconds");
-  const params: NonNullable<SkillOp["localModelParams"]> = {
-    prompt: map["prompt"] ?? "",
-  };
-  if ("model" in map && map["model"] !== "") params.model = map["model"]!;
-  if (maxTokens !== undefined) params.maxTokens = maxTokens;
-  if (timeoutSeconds !== undefined) params.timeoutSeconds = timeoutSeconds;
-  return { params, errors };
 }
 
 interface ScopeFrame {
@@ -1504,75 +1334,24 @@ export function parse(source: string): ParsedSkill {
       continue;
     }
     if (stripped0.startsWith("> ")) {
-      const match = RETRIEVAL_OP_REGEX.exec(stripped0);
-      if (!match) {
-        result.parseErrors.push(`Malformed \`>\` op in target '${currentTarget.name}' — expected \`> key=value ... -> VARNAME [(fallback: "value")]\``);
-        continue;
-      }
-      const [, argsStr, outputVar, fallback] = match;
-      const parsed = parseRetrievalArgs(argsStr!, currentTarget.name);
-      if (parsed.errors.length > 0) {
-        for (const e of parsed.errors) result.parseErrors.push(e);
-        continue;
-      }
-      if (fallback !== undefined) parsed.params.fallback = processSetValue(fallback);
-      opBucket.push({
-        kind: ">",
-        body: stripped0,
-        outputVar: outputVar!,
-        retrievalParams: parsed.params,
-      });
+      result.parseErrors.push(
+        `Legacy \`>\` retrieval op in target '${currentTarget.name}' is no longer supported. ` +
+        `Use \`$ data_read mode="fts|semantic|rerank" query="..." limit=N -> R\` (or qualify the connector: \`$ <connector>.data_read ...\`).`,
+      );
       continue;
     }
     if (stripped0.startsWith("~ ")) {
-      const match = LOCAL_MODEL_OP_REGEX.exec(stripped0);
-      if (!match) {
-        result.parseErrors.push(`Malformed \`~\` op in target '${currentTarget.name}' — expected \`~ key=value ... -> VARNAME [(fallback: "value")]\``);
-        continue;
-      }
-      const [, argsStr, outputVar, fallback] = match;
-      const parsed = parseLocalModelArgs(argsStr!, currentTarget.name);
-      if (parsed.errors.length > 0) {
-        for (const e of parsed.errors) result.parseErrors.push(e);
-        continue;
-      }
-      if (fallback !== undefined) parsed.params.fallback = processSetValue(fallback);
-      opBucket.push({
-        kind: "~",
-        body: stripped0,
-        outputVar: outputVar!,
-        localModelParams: parsed.params,
-      });
+      result.parseErrors.push(
+        `Legacy \`~\` LocalModel op in target '${currentTarget.name}' is no longer supported. ` +
+        `Use \`$ llm prompt="..." [maxTokens=N] [model="..."] -> R\` (op-level \`timeout=N\` kwarg and trailing \`(fallback: "value")\` are honored).`,
+      );
       continue;
     }
     if (stripped0.startsWith("& ")) {
-      const match = AMPERSAND_OP_REGEX.exec(stripped0);
-      if (!match) {
-        result.parseErrors.push(`Malformed \`&\` op in target '${currentTarget.name}' — expected \`& skill-name [key=value ...] [-> VARNAME]\``);
-        continue;
-      }
-      const [, skillName, argsStr, outputVar, ampFallback] = match;
-      const args: Record<string, string> = {};
-      const tokens = tokenizeKeywordArgs(argsStr ?? "");
-      let argError = false;
-      for (const tok of tokens) {
-        const eq = tok.indexOf("=");
-        if (eq === -1) {
-          result.parseErrors.push(`Malformed \`&\` arg '${tok}' in target '${currentTarget.name}' — expected key=value`);
-          argError = true;
-          continue;
-        }
-        args[tok.slice(0, eq).trim()] = processSetValue(tok.slice(eq + 1));
-      }
-      if (argError) continue;
-      const ampOp: SkillOp = {
-        kind: "&",
-        body: stripped0,
-        ampParams: { skillName: skillName!, args },
-      };
-      if (outputVar !== undefined) ampOp.outputVar = outputVar;
-      if (ampFallback !== undefined) ampOp.fallback = processSetValue(ampFallback);
-      opBucket.push(ampOp);
+      result.parseErrors.push(
+        `Legacy \`&\` inline op in target '${currentTarget.name}' is no longer supported. ` +
+        `Use \`inline(skill="...")\` for compile-time data-skill inlines, or \`execute_skill(name="...", ...) -> R\` for runtime composition.`,
+      );
       continue;
     }
     if (stripped0.startsWith("foreach ")) {
@@ -1666,34 +1445,21 @@ export function parse(source: string): ParsedSkill {
           }
           const text = kwArgs["text"] ?? "";
           opBucket.push({
-            kind: "!",
+            kind: "emit",
             body: text,
             ...(approved !== undefined ? { approved } : {}),
-            sourceForm: "function-call",
-          });
-          continue;
-        }
-        if (fnName === "ask") {
-          const prompt = kwArgs["prompt"] ?? "";
-          opBucket.push({
-            kind: "??",
-            body: prompt,
-            ...(outputVar !== undefined ? { outputVar } : {}),
-            ...(approved !== undefined ? { approved } : {}),
-            sourceForm: "function-call",
           });
           continue;
         }
         if (fnName === "inline") {
           const skill = kwArgs["skill"] ?? "";
           opBucket.push({
-            kind: "&",
+            kind: "inline",
             body: stripped0,
             ampParams: { skillName: skill, args: {} },
             ...(outputVar !== undefined ? { outputVar } : {}),
             ...(fallback !== undefined ? { fallback } : {}),
             ...(approved !== undefined ? { approved } : {}),
-            sourceForm: "function-call",
           });
           continue;
         }
@@ -1721,7 +1487,6 @@ export function parse(source: string): ParsedSkill {
             ...(outputVar !== undefined ? { outputVar } : {}),
             ...(fallback !== undefined ? { fallback } : {}),
             ...(approved !== undefined ? { approved } : {}),
-            sourceForm: "function-call",
           });
           continue;
         }
@@ -1729,13 +1494,12 @@ export function parse(source: string): ParsedSkill {
           const command = kwArgs["command"] ?? "";
           const unsafe = kwArgs["unsafe"] === "true";
           opBucket.push({
-            kind: "@",
+            kind: "shell",
             body: command,
             ...(unsafe ? { policy: "unsafe" as const } : {}),
             ...(outputVar !== undefined ? { outputVar } : {}),
             ...(fallback !== undefined ? { fallback } : {}),
             ...(approved !== undefined ? { approved } : {}),
-            sourceForm: "function-call",
           });
           continue;
         }
@@ -1747,7 +1511,6 @@ export function parse(source: string): ParsedSkill {
             fileParams: { path },
             ...(outputVar !== undefined ? { outputVar } : {}),
             ...(fallback !== undefined ? { fallback } : {}),
-            sourceForm: "function-call",
           });
           continue;
         }
@@ -1760,7 +1523,6 @@ export function parse(source: string): ParsedSkill {
             fileParams: { path, content },
             ...(outputVar !== undefined ? { outputVar } : {}),
             ...(approved !== undefined ? { approved } : {}),
-            sourceForm: "function-call",
           });
           continue;
         }
@@ -1810,7 +1572,6 @@ export function parse(source: string): ParsedSkill {
             ...(outputVar !== undefined ? { outputVar } : {}),
             ...(fallback !== undefined ? { fallback } : {}),
             ...(approved !== undefined ? { approved } : {}),
-            sourceForm: "function-call",
           });
           continue;
         }
@@ -1827,18 +1588,13 @@ export function parse(source: string): ParsedSkill {
     let kind: OpKind | null = null;
     let body = "";
     let mcpConnectorForOp: string | undefined = undefined;
-    let atPolicy: "unsafe" | undefined = undefined;
-    let atOutputVar: string | undefined = undefined;
-    let atFallback: string | undefined = undefined;
-    // Check `??` before `?`, `$set` before `$`.
+    // Check `??`/`$set` before bare `?`/`$`.
     if (stripped.startsWith("?? ") || stripped === "??") {
-      const tail = stripped.slice(3).trim();
-      const m = /^(.+?)\s+->\s+([A-Za-z_]\w*)\s*$/.exec(tail);
-      if (m !== null) {
-        opBucket.push({ kind: "??", body: m[1]!.trim(), outputVar: m[2]! });
-      } else {
-        opBucket.push({ kind: "??", body: tail });
-      }
+      result.parseErrors.push(
+        `Legacy \`??\` ask op in target '${currentTarget.name}' is no longer supported. ` +
+        `\`ask\` was removed in v0.16.0 — it conflated user-surfacing (which the runtime can't guarantee a channel for) with mutation-gating (already covered by \`approved="reason"\` per-op kwarg + \`# Autonomous: true\` skill flag). ` +
+        `For input, use \`emit(text="...")\` and have the caller handle the round-trip. For mutation authorization, use \`approved=\` or \`# Autonomous:\`.`,
+      );
       continue;
     } else if (stripped.startsWith("$set ") || stripped === "$set") {
       const match = SET_OP_REGEX.exec(stripped);
@@ -1923,42 +1679,25 @@ export function parse(source: string): ParsedSkill {
       kind = "?";
       body = stripped.slice(2).trim();
     } else if (stripped.startsWith("@ ") || stripped === "@") {
-      kind = "@";
-      let tail = stripped.slice(2).trim();
-      // Optional output binding: `-> VAR [(fallback: "...")]` at end of line.
-      // v0.2.4 Bug F: the trailing `(fallback: ...)` clause is now supported
-      // for parity with $/~/> ops — cold authors reach for op-level fallback
-      // as a defensive-coding posture and previously hit silent
-      // outputVar-not-bound failures.
-      const outMatch = /^(.+?)\s+->\s+([A-Za-z_]\w*)(?:\s+\(fallback\s*:\s*(.+?)\))?\s*$/.exec(tail);
-      if (outMatch !== null) {
-        atOutputVar = outMatch[2]!;
-        if (outMatch[3] !== undefined) atFallback = processSetValue(outMatch[3]);
-        tail = outMatch[1]!.trim();
-      }
-      // `@ unsafe <command>` — `unsafe` as literal first token signals
-      // opt-in full-shell exec (vs default structured-spawn sandbox).
-      const unsafeMatch = /^unsafe(?:\s+(.*))?$/.exec(tail);
-      if (unsafeMatch !== null) {
-        atPolicy = "unsafe";
-        body = (unsafeMatch[1] ?? "").trim();
-      } else {
-        body = tail;
-      }
+      result.parseErrors.push(
+        `Legacy \`@\` shell op in target '${currentTarget.name}' is no longer supported. ` +
+        `Use \`shell(command="...") [-> R] [(fallback: "...")]\` (add \`unsafe=true\` kwarg for full-shell exec; runtime opt-in still required).`,
+      );
+      continue;
     } else if (stripped.startsWith("! ") || stripped === "!") {
-      kind = "!";
-      body = stripped.slice(2).trim();
+      result.parseErrors.push(
+        `Legacy \`!\` emit op in target '${currentTarget.name}' is no longer supported. ` +
+        `Use \`emit(text="...")\`.`,
+      );
+      continue;
     }
     if (kind !== null) {
-      // v0.9.4 — N1 also extract `approved=` for the no-binding `$` op path
+      // N1: extract `approved=` for the no-binding `$` op path.
       const approvedKwarg = kind === "$" ? extractApprovedKwarg(body) : undefined;
       opBucket.push({
         kind,
         body,
         ...(mcpConnectorForOp !== undefined ? { mcpConnector: mcpConnectorForOp } : {}),
-        ...(atPolicy !== undefined ? { policy: atPolicy } : {}),
-        ...(atOutputVar !== undefined ? { outputVar: atOutputVar } : {}),
-        ...(atFallback !== undefined ? { fallback: atFallback } : {}),
         ...(approvedKwarg !== undefined ? { approved: approvedKwarg } : {}),
       });
       continue;
@@ -1976,7 +1715,7 @@ export function parse(source: string): ParsedSkill {
         `Unknown block-introducer '${keyword}:' in target '${currentTarget.name}'. ` +
         `Skillscript recognizes \`if COND:\`, \`elif COND:\`, \`else:\`, and \`foreach IT in $(LIST):\` ` +
         `at body scope (target-level \`else:\` is the error handler). ` +
-        `Composition is via \`& skill-name\` (data-skill inline) or \`$ execute_skill skill_name="..."\` (in-skill invocation), not block syntax.`,
+        `Composition is via \`inline(skill="...")\` (data-skill inline) or \`execute_skill(name="...")\` (in-skill invocation), not block syntax.`,
       );
       scopeStack.push({
         kind: "unknown-block",

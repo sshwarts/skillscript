@@ -11,22 +11,22 @@ describe("v0.7.2 — unquoted-substitution lint extended to @ ops", () => {
 # Status: Approved
 # Vars: REPORT=line one
 run:
-    @ printf %b \${REPORT}
+    shell(command="printf %b \${REPORT}")
 default: run
 `;
     const r = await lint(src);
     const um = r.findings.filter((f) => f.rule === "unquoted-substitution-in-kwarg-value");
     expect(um.length).toBeGreaterThanOrEqual(1);
     expect(um[0]!.message).toMatch(/word-splitting/);
-    expect(um[0]!.extras).toMatchObject({ op: "@" });
+    expect(um[0]!.extras).toMatchObject({ op: "shell" });
   });
 
-  it("fires on legacy `@ cmd $(VAR)` form", async () => {
+  it("fires on `shell(command=\"... $(VAR)\")` form (paren-style ref)", async () => {
     const src = `# Skill: t
 # Status: Approved
 # Vars: REPORT=multi word
 run:
-    @ printf %b $(REPORT)
+    shell(command="printf %b $(REPORT)")
 default: run
 `;
     const r = await lint(src);
@@ -39,7 +39,7 @@ default: run
 # Status: Approved
 # Vars: REPORT=line one
 run:
-    @ printf %b "\${REPORT}"
+    shell(command="printf %b \"\${REPORT}\"")
 default: run
 `;
     const r = await lint(src);
@@ -52,7 +52,7 @@ default: run
 # Status: Approved
 # Vars: NAME=alice
 run:
-    @ echo \${NAME}
+    shell(command="echo \${NAME}")
 default: run
 `;
     const r = await lint(src);
@@ -60,12 +60,12 @@ default: run
     expect(um).toEqual([]);
   });
 
-  it("fires on ~ op output bound then used in @ shell", async () => {
+  it("fires on `$ llm` op output bound then used in `shell(...)`", async () => {
     const src = `# Skill: t
 # Status: Approved
 run:
-    ~ prompt="generate a summary" -> SUMMARY
-    @ printf %b \${SUMMARY}
+    $ llm prompt="generate a summary" -> SUMMARY
+    shell(command="printf %b \${SUMMARY}")
 default: run
 `;
     const r = await lint(src);
@@ -78,8 +78,8 @@ default: run
 # Status: Approved
 # Vars: Q=multi word
 run:
-    @ tool1 \${Q}
-    @ tool2 \${Q}
+    shell(command="tool1 \${Q}")
+    shell(command="tool2 \${Q}")
 default: run
 `;
     const r = await lint(src);

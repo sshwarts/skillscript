@@ -50,21 +50,21 @@ import type { BootstrapResult } from "../src/bootstrap.js";
 
 describe("v0.2.11 Bug 4 — unsafe-shell-ambiguous-subst skips documented ambient refs", () => {
   it("EVENT.* dotted ref inside `@ unsafe` no longer fires the warning", async () => {
-    const src = "# Skill: t\n# Status: Approved\nsnap:\n    @ unsafe tar czf /tmp/snap-$(EVENT.fired_at_unix).tgz /tmp -> OUT\ndefault: snap\n";
+    const src = "# Skill: t\n# Status: Approved\nsnap:\n    shell(command=\"tar czf /tmp/snap-$(EVENT.fired_at_unix).tgz /tmp\", unsafe=true) -> OUT\ndefault: snap\n";
     const r = await lint(src);
     const subst = r.findings.find((f) => f.rule === "unsafe-shell-ambiguous-subst");
     expect(subst).toBeUndefined();
   });
 
   it("NOW bare ambient ref inside `@ unsafe` no longer fires the warning", async () => {
-    const src = "# Skill: t\n# Status: Approved\nsnap:\n    @ unsafe echo $(NOW) >> /tmp/log -> OUT\ndefault: snap\n";
+    const src = "# Skill: t\n# Status: Approved\nsnap:\n    shell(command=\"echo $(NOW) >> /tmp/log\", unsafe=true) -> OUT\ndefault: snap\n";
     const r = await lint(src);
     const subst = r.findings.find((f) => f.rule === "unsafe-shell-ambiguous-subst");
     expect(subst).toBeUndefined();
   });
 
   it("genuinely undeclared bare var inside `@ unsafe` still fires", async () => {
-    const src = "# Skill: t\n# Status: Approved\nsnap:\n    @ unsafe echo $(MYSTERY_VAR) -> OUT\ndefault: snap\n";
+    const src = "# Skill: t\n# Status: Approved\nsnap:\n    shell(command=\"echo $(MYSTERY_VAR)\", unsafe=true) -> OUT\ndefault: snap\n";
     const r = await lint(src);
     const subst = r.findings.find((f) => f.rule === "unsafe-shell-ambiguous-subst");
     expect(subst).toBeDefined();
@@ -74,17 +74,17 @@ describe("v0.2.11 Bug 4 — unsafe-shell-ambiguous-subst skips documented ambien
 
 describe("v0.2.11 Bug 5 — `@ unsafe` tier-1 when enableUnsafeShell:false", () => {
   it("compiles clean when enableUnsafeShell is undefined (unchanged backwards-compat)", async () => {
-    const src = "# Skill: t\n# Status: Approved\nrun:\n    @ unsafe ls /tmp\ndefault: run\n";
+    const src = "# Skill: t\n# Status: Approved\nrun:\n    shell(command=\"ls /tmp\", unsafe=true)\ndefault: run\n";
     await expect(compile(src)).resolves.toBeDefined();
   });
 
   it("fails tier-1 when enableUnsafeShell is explicitly false", async () => {
-    const src = "# Skill: t\n# Status: Approved\nrun:\n    @ unsafe ls /tmp\ndefault: run\n";
+    const src = "# Skill: t\n# Status: Approved\nrun:\n    shell(command=\"ls /tmp\", unsafe=true)\ndefault: run\n";
     await expect(compile(src, { enableUnsafeShell: false })).rejects.toThrow(/unsafe-shell-disabled/);
   });
 
   it("compiles clean when enableUnsafeShell is explicitly true (only tier-2 warning fires)", async () => {
-    const src = "# Skill: t\n# Status: Approved\nrun:\n    @ unsafe ls /tmp\ndefault: run\n";
+    const src = "# Skill: t\n# Status: Approved\nrun:\n    shell(command=\"ls /tmp\", unsafe=true)\ndefault: run\n";
     await expect(compile(src, { enableUnsafeShell: true })).resolves.toBeDefined();
     const r = await lint(src, { enableUnsafeShell: true });
     expect(r.findings.find((f) => f.rule === "unsafe-shell-disabled")).toBeUndefined();
@@ -92,7 +92,7 @@ describe("v0.2.11 Bug 5 — `@ unsafe` tier-1 when enableUnsafeShell:false", () 
   });
 
   it("does not fire on skills that don't use `@ unsafe`", async () => {
-    const src = "# Skill: t\n# Status: Approved\nrun:\n    @ ls /tmp\ndefault: run\n";
+    const src = "# Skill: t\n# Status: Approved\nrun:\n    shell(command=\"ls /tmp\")\ndefault: run\n";
     const r = await lint(src, { enableUnsafeShell: false });
     expect(r.findings.find((f) => f.rule === "unsafe-shell-disabled")).toBeUndefined();
   });
@@ -110,8 +110,8 @@ describe("v0.2.11 Bug 6 — unconfirmed-mutation catches archive/prune/deploy/et
     });
   }
 
-  it("does NOT fire when preceded by `??` confirmation", async () => {
-    const src = "# Skill: t\n# Status: Approved\nrun:\n    ?? confirm prune\n    $ prune_threads older_than=30d\ndefault: run\n";
+  it("does NOT fire when op carries `approved=\"...\"` kwarg", async () => {
+    const src = "# Skill: t\n# Status: Approved\nrun:\n    $ prune_threads older_than=30d approved=\"user confirmed\"\ndefault: run\n";
     const r = await lint(src);
     expect(r.findings.find((f) => f.rule === "unconfirmed-mutation")).toBeUndefined();
   });
@@ -122,7 +122,7 @@ describe("v0.2.11 Bug 7 — `$ execute_skill` validates skill_name like `&`", ()
   beforeAll(async () => {
     const home = mkdtempSync(join(tmpdir(), "v0211-bug7-"));
     wired = bootstrap({ skillsDir: join(home, "skills"), traceDir: join(home, "traces") });
-    await wired.skillStore.store("child-known", "# Skill: child-known\n# Status: Approved\nrun:\n    ! hi\ndefault: run\n");
+    await wired.skillStore.store("child-known", "# Skill: child-known\n# Status: Approved\nrun:\n    emit(text=\"hi\")\ndefault: run\n");
   });
 
   it("fires unknown-skill-reference for `$ execute_skill skill_name=<missing>`", async () => {
@@ -148,7 +148,7 @@ describe("v0.2.11 Bug 7 — `$ execute_skill` validates skill_name like `&`", ()
 
 describe("v0.2.11 Bug 10 — indent-tracker dedent back to outer scope after `else:`", () => {
   it("A-3 backup-rotator shape compiles (if/else then sibling `!` at outer indent)", async () => {
-    const src = "# Skill: backup-rotator\n# Status: Approved\n# Vars: TAR_OUT=ok\nverify:\n    if $(TAR_OUT) != \"snapshot failed\":\n        ! snapshot ok\n    else:\n        ! snapshot FAILED\n    ! next horizon: $(EVENT.fired_at_plus_1d_unix)\ndefault: verify\n";
+    const src = "# Skill: backup-rotator\n# Status: Approved\n# Vars: TAR_OUT=ok\nverify:\n    if $(TAR_OUT) != \"snapshot failed\":\n        emit(text=\"snapshot ok\")\n    else:\n        emit(text=\"snapshot FAILED\")\n    emit(text=\"next horizon: $(EVENT.fired_at_plus_1d_unix)\")\ndefault: verify\n";
     const r = await compile(src);
     expect(r.output).toMatch(/snapshot ok/);
     expect(r.output).toMatch(/snapshot FAILED/);
@@ -156,7 +156,7 @@ describe("v0.2.11 Bug 10 — indent-tracker dedent back to outer scope after `el
   });
 
   it("if/elif/else then sibling op at outer indent (compound chain)", async () => {
-    const src = "# Skill: t\n# Status: Approved\n# Vars: X=foo\nverify:\n    if $(X) == \"foo\":\n        ! a\n    elif $(X) == \"bar\":\n        ! b\n    else:\n        ! c\n    ! sibling\ndefault: verify\n";
+    const src = "# Skill: t\n# Status: Approved\n# Vars: X=foo\nverify:\n    if $(X) == \"foo\":\n        emit(text=\"a\")\n    elif $(X) == \"bar\":\n        emit(text=\"b\")\n    else:\n        emit(text=\"c\")\n    emit(text=\"sibling\")\ndefault: verify\n";
     const r = await compile(src);
     expect(r.output).toMatch(/sibling/);
   });
@@ -164,7 +164,7 @@ describe("v0.2.11 Bug 10 — indent-tracker dedent back to outer scope after `el
 
 describe("v0.2.11 Bug 14 — unknown-block-introducer diagnostic", () => {
   it("emits specific diagnostic for `parallel:`, not 'Mid-block indent change'", () => {
-    const src = "# Skill: t\n# Status: Approved\nclassify:\n    parallel:\n        branch a:\n            ! one\n        branch b:\n            ! two\ndefault: classify\n";
+    const src = "# Skill: t\n# Status: Approved\nclassify:\n    parallel:\n        branch a:\n            emit(text=\"one\")\n        branch b:\n            emit(text=\"two\")\ndefault: classify\n";
     const r = parse(src);
     const unk = r.parseErrors.find((m) => /Unknown block-introducer 'parallel:'/.test(m));
     expect(unk).toBeDefined();
@@ -172,14 +172,14 @@ describe("v0.2.11 Bug 14 — unknown-block-introducer diagnostic", () => {
   });
 
   it("emits specific diagnostic for `try:` / `catch X:`", () => {
-    const src = "# Skill: t\n# Status: Approved\nverdict:\n    try:\n        ! one\n    catch any as E:\n        ! two\ndefault: verdict\n";
+    const src = "# Skill: t\n# Status: Approved\nverdict:\n    try:\n        emit(text=\"one\")\n    catch any as E:\n        emit(text=\"two\")\ndefault: verdict\n";
     const r = parse(src);
     expect(r.parseErrors.find((m) => /Unknown block-introducer 'try:'/.test(m))).toBeDefined();
     expect(r.parseErrors.find((m) => /Unknown block-introducer 'catch:'/.test(m))).toBeDefined();
   });
 
   it("does NOT misfire on recognized block-introducers", () => {
-    const src = "# Skill: t\n# Status: Approved\n# Vars: X=foo\nrun:\n    if $(X) == \"foo\":\n        ! ok\n    elif $(X) == \"bar\":\n        ! ok2\n    else:\n        ! ok3\n    foreach IT in $(X):\n        ! item\ndefault: run\n";
+    const src = "# Skill: t\n# Status: Approved\n# Vars: X=foo\nrun:\n    if $(X) == \"foo\":\n        emit(text=\"ok\")\n    elif $(X) == \"bar\":\n        emit(text=\"ok2\")\n    else:\n        emit(text=\"ok3\")\n    foreach IT in $(X):\n        emit(text=\"item\")\ndefault: run\n";
     const r = parse(src);
     expect(r.parseErrors.find((m) => /Unknown block-introducer/.test(m))).toBeUndefined();
   });
@@ -191,10 +191,10 @@ describe("v0.2.11 docs — help() composition topic + 4th example", () => {
     expect(r.available_topics).toContain("composition");
   });
 
-  it("`help({topic: 'composition'})` returns content covering all three primitives", () => {
+  it("`help({topic: 'composition'})` returns content covering canonical primitives", () => {
     const r = helpResponse("composition", "0.2.11") as { content: string };
     expect(r.content).toMatch(/data-skill inline/i);
-    expect(r.content).toMatch(/invoke <skill-name>/i);
+    expect(r.content).toMatch(/inline\(skill=/);
     expect(r.content).toMatch(/execute_skill/);
     expect(r.content).toMatch(/depth-5|recursion/i);
     expect(r.content).toMatch(/unknown-skill-reference/);

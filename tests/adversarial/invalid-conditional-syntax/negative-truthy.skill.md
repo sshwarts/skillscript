@@ -2,5 +2,5 @@
 # Vars: X=hi
 t:
     if $(X):
-        ! truthy
+        emit(text="truthy")
 default: t

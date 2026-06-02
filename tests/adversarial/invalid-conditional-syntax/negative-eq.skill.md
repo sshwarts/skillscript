@@ -2,5 +2,5 @@
 # Vars: X=hi
 t:
     if $(X) == "hi":
-        ! eq
+        emit(text="eq")
 default: t

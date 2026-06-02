@@ -1,7 +1,7 @@
 # Skill: bad-cond
 t:
     if $(VERDICT) == "urgent":
-        ! urgent
+        emit(text="urgent")
     elif $(VERDICT) = "quiet":
-        ! quiet
+        emit(text="quiet")
 default: t

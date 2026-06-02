@@ -119,15 +119,15 @@ describe("skillfile CLI", () => {
 # Type: data
 
 t:
-    ! be concise
+    emit(text="be concise")
 
 default: t
 `));
     fs.writeFileSync(path.join(home, "skills", "caller.skill.md"), stampApprovalToken(`# Skill: caller
 # Status: Approved
 t:
-    & voice
-    ! ok
+    inline(skill="voice")
+    emit(text="ok")
 
 default: t
 `));
@@ -144,10 +144,10 @@ default: t
     const path = require("node:path") as typeof import("node:path");
     fs.writeFileSync(path.join(home, "skills", "multi.skill.md"), `# Skill: multi
 a:
-    ! a
+    emit(text="a")
 
 b: a
-    ! b
+    emit(text="b")
 
 default: b
 `);

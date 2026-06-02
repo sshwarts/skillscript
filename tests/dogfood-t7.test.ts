@@ -24,8 +24,8 @@ const REPO_ROOT = join(__dirname, "..");
 const PACKAGE_JSON = JSON.parse(readFileSync(join(REPO_ROOT, "package.json"), "utf8")) as Record<string, unknown>;
 
 describe("T7 — package.json polish", () => {
-  it("1. version is 0.15.7 (`|json` filter idempotent on already-JSON strings — Phase 6 finding)", () => {
-    expect(PACKAGE_JSON["version"]).toBe("0.15.7");
+  it("1. version is 0.16.0 (language-surface canonicalization — legacy symbol elimination + bare/named-form discipline)", () => {
+    expect(PACKAGE_JSON["version"]).toBe("0.16.0");
   });
 
   it("2. main + types + bin + engines.node ≥ 22.5 declared", () => {
@@ -272,7 +272,7 @@ describe.skipIf(process.env["ENABLE_T7_PACK_DOGFOOD"] !== "1")("T7 — pack + in
   it("16. round-trip skill through parse + compile + lint via fresh install", () => {
     const rtTest = `
       import { parse, compile, lint } from "skillscript-runtime";
-      const src = "# Skill: t7-dogfood\\n# Status: Draft\\ngreet:\\n    ! hello\\ndefault: greet\\n";
+      const src = "# Skill: t7-dogfood\\n# Status: Draft\\ngreet:\\n    emit(text=\"hello\")\\ndefault: greet\\n";
       const parsed = parse(src);
       if (parsed.targets.size !== 1) { console.error("FAIL parse — expected 1 target, got " + parsed.targets.size); process.exit(1); }
       const c = await compile(src);

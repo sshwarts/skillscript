@@ -6,7 +6,7 @@ const HELLO = `# Skill: hello
 # Vars: WHO=world
 
 greet:
-    ! Hello, $(WHO)!
+    emit(text="Hello, $(WHO)!")
 
 default: greet
 `;
@@ -31,7 +31,7 @@ describe("compile", () => {
 # Vars: NAME
 
 t:
-    ! hi $(NAME)
+    emit(text="hi $(NAME)")
 
 default: t
 `;
@@ -47,10 +47,10 @@ default: t
 
   it("warns on orphan targets", async () => {
     const src = `a:
-    ! a
+    emit(text="a")
 
 orphan:
-    ! never reached
+    emit(text="never reached")
 
 default: a
 `;
@@ -62,7 +62,7 @@ default: a
   it("rejects skills with parse errors via lint preflight", async () => {
     const src = `t:
     if $(A) && $(B):
-        ! both
+        emit(text="both")
 
 default: t
 `;

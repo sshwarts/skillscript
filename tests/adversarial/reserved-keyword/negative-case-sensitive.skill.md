@@ -2,5 +2,5 @@
 # Vars: Default=foo, If=bar
 
 t:
-    ! $(Default) $(If)
+    emit(text="$(Default) $(If)")
 default: t

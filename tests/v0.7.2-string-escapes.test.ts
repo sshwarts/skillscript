@@ -57,7 +57,7 @@ describe("v0.7.2 — processSetValue escape interpretation", () => {
 
 describe("v0.7.2 — escape interpretation in skill execution", () => {
   it("$set with \\n produces real newlines in emit output", async () => {
-    const src = '# Skill: t\n# Status: Approved\nrun:\n    $set REPORT = "line1\\nline2"\n    emit(text="${REPORT}")\ndefault: run\n';
+    const src = '# Skill: t\n# Status: Approved\nrun:\n    $set REPORT = "line1\\nline2"\n    emit(text=\"${REPORT}\")\ndefault: run\n';
     const result = await runSkill(src);
     expect(result.errors).toEqual([]);
     expect(result.emissions[0]).toBe("line1\nline2");

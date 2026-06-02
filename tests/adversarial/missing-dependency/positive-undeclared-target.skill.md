@@ -1,4 +1,4 @@
 # Skill: bad
 a: nonexistent
-    ! a
+    emit(text="a")
 default: a

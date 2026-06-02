@@ -1,5 +1,5 @@
 # Skill: good-cond
 t:
     if $(VERDICT) == "urgent":
-        ! urgent
+        emit(text="urgent")
 default: t

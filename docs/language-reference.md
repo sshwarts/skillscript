@@ -353,7 +353,6 @@ Closed list of language-intrinsic ops the runtime knows directly. Each is a func
 |---|---|---|---|
 | `emit` | `emit(text="...")` | none | Append to the skill's emission stream; consumed by the configured `# Output:` delivery channel. |
 | `notify` | `notify(agent="...", message="...", [event_type=...], [correlation_id=...]) -> ACK` | optional | Mid-skill agent alert; synchronous send via configured AgentConnector. |
-| `ask` | `ask(prompt="...") -> R` | required | Prompt user for input; binds response. Autonomous-mode fails fast (routes to `else:` / `# OnError:`). |
 | `inline` | `inline(skill="<data-skill-name>")` | none | Compile-time inline of an Approved `# Type: data` skill. Resolves at compile, records `content_hash` in provenance. |
 | `execute_skill` | `execute_skill(skill_name="...", inputs={...}) -> R` | optional | Composition primitive. Runtime-resolved. See Composition section. |
 | `shell` | `shell(command="...") -> R` / `shell(command="...", unsafe=true) -> R` | optional | Sandboxed shell exec (default) or full-shell exec (`unsafe=true`, gated by `runtime.enable_unsafe_shell`). stdout binds. |
@@ -390,17 +389,9 @@ Synchronous alert to a named agent via wired AgentConnector(s). **Contrast with 
 
 Returns ACK `{agent, dispatched: [{connector, ok, error?}]}` — fire-and-forget callers ignore the binding; check-delivery callers inspect ACK.
 
-### `ask` — interactive prompt
+### Removed in v0.16.0: `ask` runtime intrinsic
 
-```
-ask(prompt="Approve fix A+B?") -> APPROVED
-```
-
-**Autonomous mode** (cron/event-fired): `ask` fails fast — routes to `else:` or `# OnError:` fallback.
-
-**Interactive mode:** response binds to the output variable. **Decline semantics:** when the user response is "no" / "n" / falsey, dependent targets are skipped (treated as soft op-error so `else:` fires).
-
-`ask` also acts as a **mutation gate**: any mutation-classified op later in the same target is considered author-confirmed by the preceding `ask`, even without `# Autonomous: true` or per-op `approved="..."` kwarg.
+`ask(prompt="...")` was removed because it conflated two unrelated concerns: (1) surfacing a question to a user, which requires an interactive channel the runtime can't guarantee for cron/event-fired skills, and (2) acting as a mutation gate. The mutation-gate role is now covered by per-op `approved="reason"` kwarg + skill-level `# Autonomous: true`. For input-collection workflows, use `emit(text="...")` and have the caller handle the round-trip.
 
 ### `shell` — sandboxed or unsafe shell exec
 
@@ -521,10 +512,9 @@ Mutation ops require an authorization signal. The signal is per-op, not a mode b
 - `$ <connector> ...` against tools declared `mutating: false` (or unspecified, default false for query-shaped tools)
 - `$set`, `$append`
 
-**Authorization signals (any one suffices):**
+**Authorization signals (either suffices):**
 - `# Autonomous: true` in skill frontmatter — author-level: "this skill is authorized to mutate state during its run." Bypasses lint everywhere in the skill.
 - `approved="<reason>"` kwarg per-op — call-site-level: "this specific op is authorized." The string is required (forces author intent); value not parsed semantically — presence is what matters.
-- Preceding `ask(prompt="...")` call in the same target — gates any mutation op that follows.
 
 ```
 # Authorized via skill-level flag
@@ -546,16 +536,6 @@ deliver:
                approved="manual snapshot requested 2026-05-25")
 ```
 
-```
-# Authorized via inline ask gate
-# Skill: interactive-flush
-# Status: Approved
-
-flush:
-    ask(prompt="Flush cache? (y/n)") -> OK
-    shell(command="rm -rf /var/cache/foo")            # no approved= needed; ask gates it
-```
-
 ---
 
 ## Op grammar summary
@@ -566,7 +546,6 @@ flush:
 | Mutation | `$append` | `$append VAR <value>` (type-dispatched: list element / string concat) | VAR (no arrow) |
 | Runtime-intrinsic | `emit` | `emit(text="...")` | none |
 | Runtime-intrinsic | `notify` | `notify(agent="...", [message=...], [event_type=...], [correlation_id=...]) -> ACK` | optional |
-| Runtime-intrinsic | `ask` | `ask(prompt="...") -> R` | required |
 | Runtime-intrinsic | `inline` | `inline(skill="<name>")` | none (compile-time) |
 | Runtime-intrinsic | `execute_skill` | `execute_skill(skill_name="...", inputs={...}) -> R` | optional |
 | Runtime-intrinsic | `shell` | `shell(command="...", [unsafe=true], [approved="..."]) -> R` | optional |

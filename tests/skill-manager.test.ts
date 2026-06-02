@@ -34,7 +34,7 @@ const SAMPLE = `# Skill: hello
 # Status: Draft
 
 greet:
-    ! hi
+    emit(text="hi")
 
 default: greet
 `;

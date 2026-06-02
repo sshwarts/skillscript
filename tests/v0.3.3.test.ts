@@ -44,7 +44,7 @@ describe("v0.3.3 — |json_parse filter removed", () => {
 
 describe("v0.3.3 — $ json_parse op (parser)", () => {
   it("parses `$ json_parse $(VAR) -> P` as $ op with outputVar", () => {
-    const src = `# Skill: t\n# Status: Approved\n# Vars: PAYLOAD={"status":"ok"}\nrun:\n    $ json_parse $(PAYLOAD) -> P\n    ! status: $(P.status)\ndefault: run\n`;
+    const src = `# Skill: t\n# Status: Approved\n# Vars: PAYLOAD={"status":"ok"}\nrun:\n    $ json_parse $(PAYLOAD) -> P\n    emit(text="status: $(P.status)")\ndefault: run\n`;
     const r = parse(src);
     expect(r.parseErrors).toEqual([]);
     const run = r.targets.get("run")!;
@@ -70,7 +70,7 @@ async function runSkill(src: string): Promise<{ emissions: string[]; errors: unk
 
 describe("v0.3.3 — $ json_parse op (runtime)", () => {
   it("binds parsed object; dotted descent in emit works", async () => {
-    const src = `# Skill: t\n# Status: Approved\n# Vars: PAYLOAD={"status":"ok","count":3}\nrun:\n    $ json_parse $(PAYLOAD) -> P\n    ! status: $(P.status), count: $(P.count)\ndefault: run\n`;
+    const src = `# Skill: t\n# Status: Approved\n# Vars: PAYLOAD={"status":"ok","count":3}\nrun:\n    $ json_parse $(PAYLOAD) -> P\n    emit(text="status: $(P.status), count: $(P.count)")\ndefault: run\n`;
     const result = await runSkill(src);
     expect(result.errors).toEqual([]);
     expect(result.emissions).toContain("status: ok, count: 3");
@@ -78,21 +78,21 @@ describe("v0.3.3 — $ json_parse op (runtime)", () => {
 
   it("binds parsed object; dotted descent in conditions works (Perry's spec test case)", async () => {
     // af14b7d8: `if $(P.status) == "ok" and $(P.other)` — short-circuit aware.
-    const src = `# Skill: t\n# Status: Approved\n# Vars: PAYLOAD={"status":"ok","other":"yes"}\nrun:\n    $ json_parse $(PAYLOAD) -> P\n    if $(P.status) == "ok" and $(P.other) == "yes":\n        ! both checks passed\ndefault: run\n`;
+    const src = `# Skill: t\n# Status: Approved\n# Vars: PAYLOAD={"status":"ok","other":"yes"}\nrun:\n    $ json_parse $(PAYLOAD) -> P\n    if $(P.status) == "ok" and $(P.other) == "yes":\n        emit(text="both checks passed")\ndefault: run\n`;
     const result = await runSkill(src);
     expect(result.errors).toEqual([]);
     expect(result.emissions).toContain("both checks passed");
   });
 
   it("binds parsed array; iteration works", async () => {
-    const src = `# Skill: t\n# Status: Approved\n# Vars: RAW=[1,2,3]\nrun:\n    $ json_parse $(RAW) -> ITEMS\n    ! count: $(ITEMS|length)\ndefault: run\n`;
+    const src = `# Skill: t\n# Status: Approved\n# Vars: RAW=[1,2,3]\nrun:\n    $ json_parse $(RAW) -> ITEMS\n    emit(text="count: $(ITEMS|length)")\ndefault: run\n`;
     const result = await runSkill(src);
     expect(result.errors).toEqual([]);
     expect(result.emissions).toContain("count: 3");
   });
 
   it("throws structured error on malformed JSON input", async () => {
-    const src = `# Skill: t\n# Status: Approved\n# Vars: BAD={bad\nrun:\n    $ json_parse $(BAD) -> P\n    ! shouldn't reach\ndefault: run\n`;
+    const src = `# Skill: t\n# Status: Approved\n# Vars: BAD={bad\nrun:\n    $ json_parse $(BAD) -> P\n    emit(text="shouldn't reach")\ndefault: run\n`;
     const result = await runSkill(src);
     expect(result.errors.length).toBeGreaterThan(0);
     const msg = JSON.stringify(result.errors[0]);
@@ -110,7 +110,7 @@ describe("v0.3.3 — $ json_parse op (runtime)", () => {
 
 describe("v0.3.3 — unparsed-json-field-access advisory", () => {
   it("fires on `$(VAR|json_parse).field` in emit body", async () => {
-    const src = `# Skill: t\n# Status: Approved\n# Vars: PAYLOAD={"status":"ok"}\nrun:\n    ! status: $(PAYLOAD|json_parse).status\ndefault: run\n`;
+    const src = `# Skill: t\n# Status: Approved\n# Vars: PAYLOAD={"status":"ok"}\nrun:\n    emit(text="status: $(PAYLOAD|json_parse).status")\ndefault: run\n`;
     const r = await lint(src);
     const finding = r.findings.find((f) => f.rule === "unparsed-json-field-access");
     expect(finding).toBeDefined();
@@ -123,7 +123,7 @@ describe("v0.3.3 — unparsed-json-field-access advisory", () => {
     // remediation path is the updated invalid-conditional-syntax message
     // (Bug B), not the advisory. The advisory targets non-condition
     // contexts (emit, $set RHS, etc.) where the parser doesn't reject.
-    const src = `# Skill: t\n# Status: Approved\n# Vars: PAYLOAD={"status":"ok"}\nrun:\n    if $(PAYLOAD|json_parse).status == "ok":\n        ! ok\ndefault: run\n`;
+    const src = `# Skill: t\n# Status: Approved\n# Vars: PAYLOAD={"status":"ok"}\nrun:\n    if $(PAYLOAD|json_parse).status == "ok":\n        emit(text="ok")\ndefault: run\n`;
     const r = await lint(src);
     const condErr = r.findings.find((f) => f.rule === "invalid-conditional-syntax");
     expect(condErr).toBeDefined();
@@ -134,7 +134,7 @@ describe("v0.3.3 — unparsed-json-field-access advisory", () => {
     // Bare `$(X|json_parse)` is a separate concern — runtime applyFilter
     // will throw unknown-filter. The advisory targets the field-access
     // shape specifically.
-    const src = `# Skill: t\n# Status: Approved\nrun:\n    ! raw: $(PAYLOAD|json_parse)\ndefault: run\n`;
+    const src = `# Skill: t\n# Status: Approved\nrun:\n    emit(text="raw: $(PAYLOAD|json_parse)")\ndefault: run\n`;
     const r = await lint(src);
     const finding = r.findings.find((f) => f.rule === "unparsed-json-field-access");
     expect(finding).toBeUndefined();
@@ -143,7 +143,7 @@ describe("v0.3.3 — unparsed-json-field-access advisory", () => {
 
 describe("v0.3.3 — invalid-conditional-syntax message updates", () => {
   it("dropped stale 'v1 excludes AND/OR' text", async () => {
-    const src = `# Skill: t\n# Status: Approved\nrun:\n    if $(X|wat):\n        ! ok\ndefault: run\n`;
+    const src = `# Skill: t\n# Status: Approved\nrun:\n    if $(X|wat):\n        emit(text="ok")\ndefault: run\n`;
     const r = parse(src);
     // not a v0.3.3-introduced rejection; just sanity that the old text isn't there
     const allErrs = r.parseErrors.join(" ");
@@ -151,7 +151,7 @@ describe("v0.3.3 — invalid-conditional-syntax message updates", () => {
   });
 
   it("error text points at `$ json_parse` for the bad shape", async () => {
-    const src = `# Skill: t\n# Status: Approved\n# Vars: P={"x":1}\nrun:\n    if $(P|json_parse).x == "1":\n        ! ok\ndefault: run\n`;
+    const src = `# Skill: t\n# Status: Approved\n# Vars: P={"x":1}\nrun:\n    if $(P|json_parse).x == "1":\n        emit(text="ok")\ndefault: run\n`;
     const r = parse(src);
     const errs = r.parseErrors.join(" ");
     expect(errs).toMatch(/Unsupported condition/);
@@ -162,7 +162,7 @@ describe("v0.3.3 — invalid-conditional-syntax message updates", () => {
 describe("v0.3.3 — compile_skill warnings/advisories surface (Bug C)", () => {
   it("CompileResult carries tier-2 lint findings on warnings", async () => {
     // `?` op triggers deprecated-question (tier-2 warning).
-    const src = `# Skill: t\n# Status: Approved\nrun:\n    ? what should I do\n    ! decided\ndefault: run\n`;
+    const src = `# Skill: t\n# Status: Approved\nrun:\n    ? what should I do\n    emit(text="decided")\ndefault: run\n`;
     const result = await compile(src);
     expect(result.warnings.some((w) => w.startsWith("deprecated-question:"))).toBe(true);
   });
@@ -195,15 +195,15 @@ describe("v0.3.3 — indent cascade sanity (Bug D)", () => {
   };
 
   it("no indent cascade on rejected `$(X|filter).field == \"v\"` shape", () => {
-    expectCondErrorOnly(`# Skill: t\n# Status: Approved\n# Vars: P={"a":1}\nrun:\n    if $(P|json_parse).a == "1":\n        ! ok\ndefault: run\n`);
+    expectCondErrorOnly(`# Skill: t\n# Status: Approved\n# Vars: P={"a":1}\nrun:\n    if $(P|json_parse).a == "1":\n        emit(text="ok")\ndefault: run\n`);
   });
 
   it("no indent cascade on rejected `defined($(X))` shape", () => {
-    expectCondErrorOnly(`# Skill: t\n# Status: Approved\nrun:\n    if defined($(X)):\n        ! ok\ndefault: run\n`);
+    expectCondErrorOnly(`# Skill: t\n# Status: Approved\nrun:\n    if defined($(X)):\n        emit(text="ok")\ndefault: run\n`);
   });
 
   it("no indent cascade on rejected numeric-literal-LHS shape", () => {
-    expectCondErrorOnly(`# Skill: t\n# Status: Approved\nrun:\n    if "5" == $(N):\n        ! ok\ndefault: run\n`);
+    expectCondErrorOnly(`# Skill: t\n# Status: Approved\nrun:\n    if "5" == $(N):\n        emit(text="ok")\ndefault: run\n`);
   });
 });
 

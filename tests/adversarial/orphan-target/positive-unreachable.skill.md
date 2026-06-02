@@ -1,6 +1,6 @@
 # Skill: bad
 a:
-    ! a
+    emit(text="a")
 orphan:
-    ! never
+    emit(text="never")
 default: a

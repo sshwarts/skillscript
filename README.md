@@ -121,6 +121,28 @@ The kinds compose. A Headless monitor fires on cron, evaluates a condition, and 
 
 The three kinds describe the skill's *role* (who consumes the output). Orthogonal to that is the skill's *delivery channel* — the actual op that ships the result. Three channels are first-class: `emit(text="...")` for embedded prompt-context, `$ data_write content="..." addressed_to="<agent>"` for data handoff, and `file_write(path="...", content="...")` for file handoff. A single skill can use any combination. See the [Language Reference](docs/language-reference.md) §1 for the full taxonomy.
 
+### Local models as tools for the frontier
+
+Most agent systems treat local models as *substitutes* for frontier inference. Call them instead of the frontier when latency or cost matters. Skillscript treats them as something different: *delegation targets the frontier orchestrates*. The frontier composes the workflow; each LLM dispatch is the frontier handing off a bounded sub-task (classify a message, extract a field, judge whether two strings refer to the same thing, summarize a chunk, format a response) to a local or smaller model and consuming the result.
+
+In skillscript, this isn't a separate "local-model interplay" pattern adopters bolt on — it's just **MCP dispatch through a connector named whatever your substrate calls it**. `$ llm prompt="..." -> RESULT` (one shop wires `llm` pointing at Ollama; another wires `openai_chat` against the OpenAI API; another wires `claude_messages` against Anthropic) lives next to any other `$ tool args -> RESULT` in the skill body, with the same op-level discipline, the same trace surface, the same lint coverage. The language has no built-in LLM keyword — adopters wire their substrate.
+
+The cost shape that follows: routine work runs at local-model cost (free at scale, fast, private to the host); the frontier model intervenes only at orchestration boundaries and ambiguous cases. Customer data flowing through bounded sub-tasks never reaches an external API when the wired connector is local. The local-model layer becomes the privacy boundary, not a separate add-on.
+
+### Composition: skills calling skills
+
+A skill can invoke another skill via `execute_skill(...)`:
+
+```
+parent:
+    execute_skill(skill_name="extract-json-number", JSON_BLOB="${RAW}", FIELD_PATH="total_count") -> RESULT
+    emit(text="Extracted: ${RESULT.final_vars.VALUE|trim}")
+```
+
+The child skill runs to completion against the runtime's wired connectors, returns its full execution record (final vars, transcript, outputs), and binds to the parent's named variable. Field access on the bound result (`${RESULT.final_vars.X}`) lets the parent reach into whatever the child produced.
+
+Composition is what makes skill libraries accumulate. Utility skills (`extract-json-number`, `summarize-thread`, `classify-urgency`) get authored once and orchestrated forever. The composition primitive is symmetric across the MCP surface — `execute_skill({skill_name, inputs?, mechanical?})` works the same way at the runtime entry point as it does inside a skill body. `mechanical: true` previews the dispatch graph without firing real ops, propagating through nested composition calls. TestFlight your multi-skill chains before commitment.
+
 ### Waking agents
 
 Augmenting and Template skills don't just write somewhere; they deliver to a frontier agent through `AgentConnector`. The contract is substrate-neutral: a Headless monitor detects a condition, evaluates whether action is warranted, and either resolves silently or calls `AgentConnector.deliver(agent_id, payload)`. The implementation might write to a data store the agent reads at next session, post to a chat thread the agent monitors, send a push notification, write to a tmux pane, or invoke a webhook. All the adopter's call.
@@ -148,28 +170,6 @@ const runtime = new Runtime({
 Adopter impls can write to a data store, post to a chat thread, send a webhook, write to a tmux pane, or anything else that wakes the receiving agent.
 
 This is what makes *"Headless monitor → wake agent with context"* a real composition primitive, not just a pattern adopters bolt on. Skills don't know what substrate they're waking into; the substrate doesn't know what skill triggered it. The contract handles the seam.
-
-### Local models as tools for the frontier
-
-Most agent systems treat local models as *substitutes* for frontier inference. Call them instead of the frontier when latency or cost matters. Skillscript treats them as something different: *delegation targets the frontier orchestrates*. The frontier composes the workflow; each LLM dispatch is the frontier handing off a bounded sub-task (classify a message, extract a field, judge whether two strings refer to the same thing, summarize a chunk, format a response) to a local or smaller model and consuming the result.
-
-In skillscript, this isn't a separate "local-model interplay" pattern adopters bolt on — it's just **MCP dispatch through a connector named whatever your substrate calls it**. `$ llm prompt="..." -> RESULT` (one shop wires `llm` pointing at Ollama; another wires `openai_chat` against the OpenAI API; another wires `claude_messages` against Anthropic) lives next to any other `$ tool args -> RESULT` in the skill body, with the same op-level discipline, the same trace surface, the same lint coverage. The language has no built-in LLM keyword — adopters wire their substrate.
-
-The cost shape that follows: routine work runs at local-model cost (free at scale, fast, private to the host); the frontier model intervenes only at orchestration boundaries and ambiguous cases. Customer data flowing through bounded sub-tasks never reaches an external API when the wired connector is local. The local-model layer becomes the privacy boundary, not a separate add-on.
-
-### Composition: skills calling skills
-
-A skill can invoke another skill via `execute_skill(...)`:
-
-```
-parent:
-    execute_skill(skill_name="extract-json-number", JSON_BLOB="${RAW}", FIELD_PATH="total_count") -> RESULT
-    emit(text="Extracted: ${RESULT.final_vars.VALUE|trim}")
-```
-
-The child skill runs to completion against the runtime's wired connectors, returns its full execution record (final vars, transcript, outputs), and binds to the parent's named variable. Field access on the bound result (`${RESULT.final_vars.X}`) lets the parent reach into whatever the child produced.
-
-Composition is what makes skill libraries accumulate. Utility skills (`extract-json-number`, `summarize-thread`, `classify-urgency`) get authored once and orchestrated forever. The composition primitive is symmetric across the MCP surface — `execute_skill({skill_name, inputs?, mechanical?})` works the same way at the runtime entry point as it does inside a skill body. `mechanical: true` previews the dispatch graph without firing real ops, propagating through nested composition calls. TestFlight your multi-skill chains before commitment.
 
 ### Static vs dynamic skills
 
@@ -278,7 +278,7 @@ default: snapshot
 Three things to notice:
 
 1. **`# Triggers: cron:"..."`** — the runtime registers the cron schedule at load time; no external scheduler.
-2. **`# Autonomous: true`** — the skill-author's declaration that mutation ops (here `file_write`) are authorized to fire without per-call confirmation. Without this header, mutation ops require an inline `approved="<reason>"` kwarg on each call site, or a preceding `ask(...)` gate in the same target. Pick whichever fits.
+2. **`# Autonomous: true`** — the skill-author's declaration that mutation ops (here `file_write`) are authorized to fire without per-call confirmation. Without this header, mutation ops require an inline `approved="<reason>"` kwarg on each call site.
 3. **`${EVENT.fired_at_unix}` + `${NOW}`** — ambient refs the runtime substitutes per-fire. `EVENT.*` covers the trigger payload; `NOW` is the ISO timestamp at op dispatch. See [Language Reference §3](docs/language-reference.md) for the full ambient list.
 
 Swap in `$ ticketing_search`, `$ llm`, `$ data_write` once you've wired connectors, and the same skill shape becomes a real triage pipeline.
@@ -385,7 +385,6 @@ Curated example skills in [`examples/`](examples/), covering:
 - Multi-target DAG with `needs:` dependencies
 - Cron triggers with `# OnError:` fallback
 - Session-start `# Output: agent:` delivery
-- `ask(prompt=...)` interactive pattern
 - `# Requires:` cascade for compile-time data
 - `inline(skill=...)` skill composition
 - `execute_skill(...)` skill-to-skill composition

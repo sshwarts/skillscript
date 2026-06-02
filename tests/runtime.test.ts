@@ -3,6 +3,7 @@ import { compile } from "../src/compile.js";
 import { execute } from "../src/runtime.js";
 import { Registry } from "../src/connectors/registry.js";
 import { CallbackMcpConnector } from "../src/connectors/mcp.js";
+import { LocalModelMcpConnector } from "../src/connectors/local-model-mcp.js";
 import type { LocalModel, StaticCapabilities, ManifestInfo } from "../src/connectors/types.js";
 
 class SlowLocalModel implements LocalModel {
@@ -19,6 +20,14 @@ class SlowLocalModel implements LocalModel {
   }
 }
 
+function wireSlowLlmRegistry(delayMs: number): Registry {
+  const localModel = new SlowLocalModel(delayMs);
+  const registry = new Registry();
+  registry.registerLocalModel("default", localModel);
+  registry.registerMcpConnector("llm", new LocalModelMcpConnector(localModel));
+  return registry;
+}
+
 async function run(source: string, inputs: Record<string, string> = {}, registry = new Registry()) {
   // Tests in this file exercise runtime behavior directly; bypass the
   // tier-1 lint preflight so test sources that intentionally violate
@@ -33,7 +42,7 @@ describe("runtime", () => {
 # Vars: WHO=world
 
 greet:
-    ! Hello, $(WHO)!
+    emit(text="Hello, $(WHO)!")
 
 default: greet
 `;
@@ -46,7 +55,7 @@ default: greet
   it("threads $set into substitutions", async () => {
     const src = `t:
     $set X = hello
-    ! $(X) world
+    emit(text="$(X) world")
 
 default: t
 `;
@@ -58,7 +67,7 @@ default: t
     const src = `t:
     $set ITEMS = [a, b, c]
     foreach I in $(ITEMS):
-        ! item $(I)
+        emit(text="item $(I)")
 
 default: t
 `;
@@ -71,7 +80,7 @@ default: t
     $set ITEMS = [x]
     foreach I in $(ITEMS):
         $set Y = inside
-    ! $(I)
+    emit(text="$(I)")
 
 default: t
 `;
@@ -84,11 +93,11 @@ default: t
     const src = `t:
     $set MODE = slow
     if $(MODE) == "fast":
-        ! fast path
+        emit(text="fast path")
     elif $(MODE) == "slow":
-        ! slow path
+        emit(text="slow path")
     else:
-        ! default
+        emit(text="default")
 
 default: t
 `;
@@ -96,23 +105,9 @@ default: t
     expect(result.emissions).toEqual(["slow path"]);
   });
 
-  it("else: error handler fires on op failure", async () => {
-    const src = `t:
-    ?? this fails fast
-    ! never
-else:
-    ! handled
-
-default: t
-`;
-    const result = await run(src);
-    expect(result.errors.length).toBeGreaterThan(0);
-    expect(result.emissions).toContain("handled");
-  });
-
   it("executes `@` ops via structured-spawn sandbox", async () => {
     const src = `t:
-    @ echo hello
+    shell(command="echo hello")
 
 default: t
 `;
@@ -123,8 +118,8 @@ default: t
 
   it("`@` op binds stdout to -> VAR", async () => {
     const src = `t:
-    @ echo skillscript -> OUT
-    ! got $(OUT)
+    shell(command="echo skillscript") -> OUT
+    emit(text="got $(OUT)")
 
 default: t
 `;
@@ -135,19 +130,19 @@ default: t
 
   it("`@` op non-zero exit surfaces stderr in op-error", async () => {
     const src = `t:
-    @ false
+    shell(command="false")
 
 default: t
 `;
     const result = await run(src);
     expect(result.errors.length).toBe(1);
-    expect(result.errors[0]!.opKind).toBe("@");
+    expect(result.errors[0]!.opKind).toBe("shell");
     expect(result.errors[0]!.message).toMatch(/exited with code/);
   });
 
   it("`@ unsafe` refused when enableUnsafeShell is false (default)", async () => {
     const src = `t:
-    @ unsafe echo "should fail"
+    shell(command="echo \"should fail\"", unsafe=true)
 
 default: t
 `;
@@ -161,7 +156,7 @@ default: t
 
   it("`@ unsafe` runs via bash when enableUnsafeShell is true", async () => {
     const src = `t:
-    @ unsafe echo "shell features: $$(echo hi)"
+    shell(command="echo \"shell features: $$(echo hi)\"", unsafe=true)
 
 default: t
 `;
@@ -178,7 +173,7 @@ default: t
     const src = `# Skill: t
 # Timeout: 1
 t:
-    @ sleep 5
+    shell(command="sleep 5")
 
 default: t
 `;
@@ -187,7 +182,7 @@ default: t
       registry: new Registry(),
     });
     expect(result.errors.length).toBe(1);
-    expect(result.errors[0]!.opKind).toBe("@");
+    expect(result.errors[0]!.opKind).toBe("shell");
     expect(result.errors[0]!.message).toMatch(/timed out after 1000ms/);
   });
 
@@ -197,12 +192,12 @@ default: t
     // binding the error text to the output var. Without this, skills mask
     // failures and continue.
     const registry = new Registry();
-    registry.registerMcpConnector("primary", new CallbackMcpConnector(async () => ({
+    registry.registerMcpConnector("backend", new CallbackMcpConnector(async () => ({
       isError: true,
       content: [{ type: "text", text: "boom" }],
     })));
     const src = `t:
-    $ failing_tool arg=x
+    $ backend.failing_tool arg=x
 
 default: t
 `;
@@ -215,12 +210,12 @@ default: t
 
   it("unwraps CallToolResult content[0].text", async () => {
     const registry = new Registry();
-    registry.registerMcpConnector("primary", new CallbackMcpConnector(async () => ({
+    registry.registerMcpConnector("backend", new CallbackMcpConnector(async () => ({
       content: [{ type: "text", text: JSON.stringify({ ok: true, count: 3 }) }],
     })));
     const src = `t:
-    $ some_tool -> RESULT
-    ! $(RESULT.count)
+    $ backend.some_tool -> RESULT
+    emit(text="$(RESULT.count)")
 
 default: t
 `;
@@ -230,110 +225,44 @@ default: t
     expect(result.emissions).toEqual(["3"]);
   });
 
-  it("`??` interactive mode binds response when user approves", async () => {
+  it("legacy `??` ask form is rejected with parse error (v0.16.0)", async () => {
     const src = `t:
-    ?? approve fix? -> APPROVED
-    ! got $(APPROVED)
+    ?? "confirm" -> R
 
 default: t
 `;
-    const compiled = await compile(src, { skipLintPreflight: true });
-    const result = await execute(compiled.parsed, compiled.resolvedVariables, compiled.targetOrder, {
-      registry: new Registry(),
-      askUser: async () => "yes",
-    });
-    expect(result.errors).toEqual([]);
-    expect(result.emissions).toEqual(["got yes"]);
+    await expect(compile(src, { skipLintPreflight: true })).rejects.toThrow(/Legacy `\?\?`/);
   });
 
-  it("`??` decline ('no') binds response AND short-circuits dependent target via else:", async () => {
-    // Footgun #20: decline binds the value AND throws soft op-error so
-    // `else:` fires. Closes the silent-fall-through to subsequent `apply:`.
-    const src = `apply:
-    ?? proceed? -> CONFIRMED
-    ! applying $(CONFIRMED)
-else:
-    ! declined, no-op
-
-default: apply
-`;
-    const compiled = await compile(src, { skipLintPreflight: true });
-    const result = await execute(compiled.parsed, compiled.resolvedVariables, compiled.targetOrder, {
-      registry: new Registry(),
-      askUser: async () => "no",
-    });
-    expect(result.errors.length).toBe(1);
-    expect(result.errors[0]!.opKind).toBe("??");
-    expect(result.errors[0]!.message).toMatch(/User declined/);
-    expect(result.emissions).toEqual(["declined, no-op"]);
-    expect(result.finalVars["CONFIRMED"]).toBe("no");
-  });
-
-  it("`??` decline treats empty/n/false/0 as falsey", async () => {
-    const declineInputs = ["", "n", "no", "NO", "false", "0", "  "];
-    for (const input of declineInputs) {
-      const src = `t:
-    ?? confirm -> R
-else:
-    ! declined
-
-default: t
-`;
-      const compiled = await compile(src, { skipLintPreflight: true });
-      const result = await execute(compiled.parsed, compiled.resolvedVariables, compiled.targetOrder, {
-        registry: new Registry(),
-        askUser: async () => input,
-      });
-      expect(result.errors.length, `decline expected for input ${JSON.stringify(input)}`).toBe(1);
-      expect(result.emissions, `else: expected to fire for input ${JSON.stringify(input)}`).toEqual(["declined"]);
-    }
-  });
-
-  it("`??` without askUser still fails fast in autonomous mode", async () => {
-    const src = `t:
-    ?? prompt -> R
-
-default: t
-`;
-    const compiled = await compile(src, { skipLintPreflight: true });
-    const result = await execute(compiled.parsed, compiled.resolvedVariables, compiled.targetOrder, {
-      registry: new Registry(),
-    });
-    expect(result.errors.length).toBe(1);
-    expect(result.errors[0]!.message).toMatch(/autonomous execution/);
-  });
-
-  it("`# Timeout:` skill header fires on slow `~` op", async () => {
+  it("`# Timeout:` skill header fires on slow `$ llm` op", async () => {
     const src = `# Skill: t
 # Timeout: 1
 
 t:
-    ~ prompt="hi" -> R
+    $ llm prompt="hi" -> R
 
 default: t
 `;
-    const registry = new Registry();
-    registry.registerLocalModel("default", new SlowLocalModel(3000));
+    const registry = wireSlowLlmRegistry(3000);
     const compiled = await compile(src, { skipLintPreflight: true });
     const result = await execute(compiled.parsed, compiled.resolvedVariables, compiled.targetOrder, {
       registry,
     });
     expect(result.errors.length).toBe(1);
-    expect(result.errors[0]!.opKind).toBe("~");
+    expect(result.errors[0]!.opKind).toBe("$");
     expect(result.errors[0]!.message).toMatch(/timed out after 1000ms/);
   });
 
-  it("per-op `timeoutSeconds` kwarg overrides skill header", async () => {
+  it("per-op `timeout` kwarg overrides skill header", async () => {
     const src = `# Skill: t
 # Timeout: 30
 
 t:
-    ~ prompt="hi" timeoutSeconds=1 -> R
+    $ llm prompt="hi" timeout=1 -> R
 
 default: t
 `;
-    const registry = new Registry();
-    registry.registerLocalModel("default", new SlowLocalModel(3000));
+    const registry = wireSlowLlmRegistry(3000);
     const compiled = await compile(src, { skipLintPreflight: true });
     const result = await execute(compiled.parsed, compiled.resolvedVariables, compiled.targetOrder, {
       registry,
@@ -348,12 +277,11 @@ default: t
 # Timeout: $(TIMEOUT_SECS)
 
 t:
-    ~ prompt="hi" -> R
+    $ llm prompt="hi" -> R
 
 default: t
 `;
-    const registry = new Registry();
-    registry.registerLocalModel("default", new SlowLocalModel(3000));
+    const registry = wireSlowLlmRegistry(3000);
     const compiled = await compile(src, { skipLintPreflight: true });
     const result = await execute(compiled.parsed, compiled.resolvedVariables, compiled.targetOrder, {
       registry,
@@ -364,12 +292,11 @@ default: t
 
   it("absoluteTimeoutMs ctx override fires when no skill/op timeout present", async () => {
     const src = `t:
-    ~ prompt="hi" -> R
+    $ llm prompt="hi" -> R
 
 default: t
 `;
-    const registry = new Registry();
-    registry.registerLocalModel("default", new SlowLocalModel(3000));
+    const registry = wireSlowLlmRegistry(3000);
     const compiled = await compile(src, { skipLintPreflight: true });
     const result = await execute(compiled.parsed, compiled.resolvedVariables, compiled.targetOrder, {
       registry,
@@ -379,24 +306,24 @@ default: t
     expect(result.errors[0]!.message).toMatch(/timed out after 500ms/);
   });
 
-  it("missing LocalModel connector surfaces clean error", async () => {
+  it("missing `llm` connector surfaces clean error", async () => {
     const src = `t:
-    ~ prompt="hi" model=nonexistent -> R
+    $ llm prompt="hi" -> R
 
 default: t
 `;
     const result = await run(src);
     expect(result.errors.length).toBe(1);
-    expect(result.errors[0]!.opKind).toBe("~");
-    expect(result.errors[0]!.message).toMatch(/nonexistent/);
+    expect(result.errors[0]!.opKind).toBe("$");
+    expect(result.errors[0]!.class).toBe("ConnectorNotFoundError");
   });
 
   it("foreach over empty array → zero iterations, downstream OK", async () => {
     const src = `t:
     $set ITEMS = []
     foreach I in $(ITEMS):
-        ! item $(I)
-    ! after loop
+        emit(text="item $(I)")
+    emit(text="after loop")
 
 default: t
 `;
@@ -409,9 +336,9 @@ default: t
     const src = `t:
     $set MODE = no
     if $(MODE) == "yes":
-        ! ran-true
+        emit(text="ran-true")
     else:
-        ! ran-else
+        emit(text="ran-else")
 
 default: t
 `;
@@ -424,14 +351,14 @@ default: t
     const src1 = `# Skill: a
 a:
     $set X = first
-    ! a-emission
+    emit(text="a-emission")
 
 default: a
 `;
     const src2 = `# Skill: b
 b:
     $set X = second
-    ! b-emission
+    emit(text="b-emission")
 
 default: b
 `;
@@ -457,16 +384,15 @@ default: t
     expect(result.errors[0]!.remediation).toMatch(/spelling/);
   });
 
-  it("OpTimeoutError fires + carries remediation for slow ~ op", async () => {
+  it("OpTimeoutError fires + carries remediation for slow `$ llm` op", async () => {
     const src = `# Skill: t
 # Timeout: 1
 t:
-    ~ prompt="hi" -> R
+    $ llm prompt="hi" -> R
 
 default: t
 `;
-    const registry = new Registry();
-    registry.registerLocalModel("default", new SlowLocalModel(3000));
+    const registry = wireSlowLlmRegistry(3000);
     const compiled = await compile(src, { skipLintPreflight: true });
     const result = await execute(compiled.parsed, compiled.resolvedVariables, compiled.targetOrder, {
       registry,
@@ -475,21 +401,9 @@ default: t
     expect(result.errors[0]!.remediation).toMatch(/timeoutSeconds|# Timeout:/);
   });
 
-  it("InteractiveOpInAutonomousModeError fires when `??` has no askUser callback + carries remediation", async () => {
-    const src = `t:
-    ?? "approve?" -> R
-
-default: t
-`;
-    const result = await run(src);
-    expect(result.errors[0]!.class).toBe("InteractiveOpInAutonomousModeError");
-    expect(result.errors[0]!.opKind).toBe("??");
-    expect(result.errors[0]!.remediation).toMatch(/# Vars:|# Requires:|askUser/);
-  });
-
   it("UnsafeShellDisabledError fires when `@ unsafe` runs without enableUnsafeShell + carries remediation", async () => {
     const src = `t:
-    @ unsafe echo "should fail"
+    shell(command="echo \"should fail\"", unsafe=true)
 
 default: t
 `;
@@ -519,7 +433,7 @@ default: t
   it("mechanical mode skips $/~/> dispatch", async () => {
     const src = `t:
     $ would_dispatch x=1
-    ! after
+    emit(text="after")
 
 default: t
 `;

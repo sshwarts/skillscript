@@ -1,4 +1,4 @@
 # Skill: ok
 t:
-    @ unsafe cp file.txt /tmp/backup-$$(date +%s)
+    shell(command="cp file.txt /tmp/backup-$$(date +%s)", unsafe=true)
 default: t

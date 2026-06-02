@@ -31,7 +31,7 @@ const HELLO_DRAFT = `# Skill: hello
 # Vars: WHO=world
 
 greet:
-    ! Hello, $(WHO)!
+    emit(text="Hello, $(WHO)!")
 
 default: greet
 `;
@@ -50,7 +50,7 @@ async function callTool(server: McpServer, name: string, args: Record<string, un
 describe("v0.9.0 — approval gate", () => {
   describe("token mechanics", () => {
     it("computes deterministic v1 CRC32 tokens", () => {
-      const body = "# Skill: x\n# Status: Approved\nm:\n    ! hi\ndefault: m\n";
+      const body = "# Skill: x\n# Status: Approved\nm:\n    emit(text=\"hi\")\ndefault: m\n";
       const a = computeApprovalToken(body, "v1");
       const b = computeApprovalToken(body, "v1");
       expect(a).toEqual(b);
@@ -59,8 +59,8 @@ describe("v0.9.0 — approval gate", () => {
     });
 
     it("excludes the # Status: line from the hash input", () => {
-      const draft = "# Skill: x\n# Status: Draft\nm:\n    ! hi\ndefault: m\n";
-      const approved = "# Skill: x\n# Status: Approved\nm:\n    ! hi\ndefault: m\n";
+      const draft = "# Skill: x\n# Status: Draft\nm:\n    emit(text=\"hi\")\ndefault: m\n";
+      const approved = "# Skill: x\n# Status: Approved\nm:\n    emit(text=\"hi\")\ndefault: m\n";
       // Different status lines, same body — tokens must be identical.
       expect(computeApprovalToken(draft).token).toEqual(computeApprovalToken(approved).token);
     });
@@ -74,13 +74,13 @@ describe("v0.9.0 — approval gate", () => {
     });
 
     it("verifyApprovalToken accepts a stamped body", () => {
-      const body = stampApprovalToken("# Skill: x\n# Status: Approved\nm:\n    ! hi\ndefault: m\n");
+      const body = stampApprovalToken("# Skill: x\n# Status: Approved\nm:\n    emit(text=\"hi\")\ndefault: m\n");
       const ext = extractStatusFromBody(body)!;
       expect(verifyApprovalToken(body, ext.approvalToken!).ok).toBe(true);
     });
 
     it("verifyApprovalToken rejects a tampered body", () => {
-      const body = stampApprovalToken("# Skill: x\n# Status: Approved\nm:\n    ! hi\ndefault: m\n");
+      const body = stampApprovalToken("# Skill: x\n# Status: Approved\nm:\n    emit(text=\"hi\")\ndefault: m\n");
       const tampered = body.replace("hi", "BYE");
       const ext = extractStatusFromBody(body)!;
       const v = verifyApprovalToken(tampered, ext.approvalToken!);
@@ -102,7 +102,7 @@ describe("v0.9.0 — approval gate", () => {
       const before = registeredApprovalVersions();
       registerApprovalFn("v999", () => "deterministic");
       expect(registeredApprovalVersions()).toContain("v999");
-      const body = "# Skill: x\n# Status: Approved\nm:\n    ! hi\ndefault: m\n";
+      const body = "# Skill: x\n# Status: Approved\nm:\n    emit(text=\"hi\")\ndefault: m\n";
       expect(computeApprovalToken(body, "v999").token).toBe("deterministic");
       // Cleanup for test isolation
       (registeredApprovalVersions().filter(v => v !== "v1")).forEach(v => {
@@ -126,7 +126,7 @@ describe("v0.9.0 — approval gate", () => {
     });
 
     it("rejects bodies with no # Status: header", () => {
-      const g = evaluateApprovalGate("# Skill: x\nm:\n    ! hi\ndefault: m\n");
+      const g = evaluateApprovalGate("# Skill: x\nm:\n    emit(text=\"hi\")\ndefault: m\n");
       expect(g.ok).toBe(false);
       if (!g.ok) expect(g.reason).toMatch(/no `# Status:`/);
     });
@@ -146,14 +146,14 @@ describe("v0.9.0 — approval gate", () => {
 
   describe("parser — token extraction", () => {
     it("captures the approval token from # Status: Approved v1:<token>", () => {
-      const body = "# Skill: x\n# Status: Approved v1:abc12345\nm:\n    ! hi\ndefault: m\n";
+      const body = "# Skill: x\n# Status: Approved v1:abc12345\nm:\n    emit(text=\"hi\")\ndefault: m\n";
       const parsed = parse(body);
       expect(parsed.status).toBe("Approved");
       expect(parsed.approvalToken).toBe("v1:abc12345");
     });
 
     it("rejects token on non-Approved status", () => {
-      const body = "# Skill: x\n# Status: Draft v1:abc12345\nm:\n    ! hi\ndefault: m\n";
+      const body = "# Skill: x\n# Status: Draft v1:abc12345\nm:\n    emit(text=\"hi\")\ndefault: m\n";
       const parsed = parse(body);
       expect(parsed.parseErrors.some((e) => /only 'Approved' may carry/.test(e))).toBe(true);
     });

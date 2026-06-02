@@ -22,8 +22,8 @@ const VOICE_GUIDE_V1 = `# Skill: voice-guide
 # Type: data
 
 t:
-    ! formal voice only
-    ! no emoji
+    emit(text="formal voice only")
+    emit(text="no emoji")
 
 default: t
 `;
@@ -32,16 +32,16 @@ const VOICE_GUIDE_V2 = `# Skill: voice-guide
 # Type: data
 
 t:
-    ! formal voice only
-    ! no emoji
-    ! short sentences
+    emit(text="formal voice only")
+    emit(text="no emoji")
+    emit(text="short sentences")
 
 default: t
 `;
 
 const SUPPORT = `# Skill: support-response-draft
 t:
-    & voice-guide
+    inline(skill="voice-guide")
 
 default: t
 `;
@@ -106,7 +106,7 @@ describe("audit — staleness detection (THE LOAD-BEARING DEMO)", () => {
   });
 
   it("clean audit when source skill had no data-skill refs", async () => {
-    const SIMPLE = `# Skill: simple\nt:\n    ! hi\ndefault: t\n`;
+    const SIMPLE = `# Skill: simple\nt:\n    emit(text="hi")\ndefault: t\n`;
     const compiled = await compile(SIMPLE, { skillStore: registry.getSkillStore() });
     const result = await audit(compiled.provenance, registry.getSkillStore());
     expect(result.is_stale).toBe(false);
@@ -130,7 +130,7 @@ describe("audit — staleness detection (THE LOAD-BEARING DEMO)", () => {
 describe("compile — provenance block", () => {
   it("includes source_skill identity when SkillStore knows the source", async () => {
     const store = registry.getSkillStore();
-    const SIMPLE = `# Skill: simple\nt:\n    ! hi\ndefault: t\n`;
+    const SIMPLE = `# Skill: simple\nt:\n    emit(text="hi")\ndefault: t\n`;
     await store.store("simple", SIMPLE);
     const compiled = await compile(SIMPLE, { skillStore: store });
     expect(compiled.provenance.source_skill.name).toBe("simple");
@@ -167,9 +167,9 @@ describe("compile — provenance block", () => {
 
 describe("compile — cycle detection diagnostic shape", () => {
   it("error carries cycle path as an array for agent parsing", async () => {
-    const A = `# Skill: a\n# Type: data\nt:\n    & b\ndefault: t\n`;
-    const B = `# Skill: b\n# Type: data\nt:\n    & a\ndefault: t\n`;
-    const CALLER = `# Skill: caller\nt:\n    & a\ndefault: t\n`;
+    const A = `# Skill: a\n# Type: data\nt:\n    inline(skill="b")\ndefault: t\n`;
+    const B = `# Skill: b\n# Type: data\nt:\n    inline(skill="a")\ndefault: t\n`;
+    const CALLER = `# Skill: caller\nt:\n    inline(skill="a")\ndefault: t\n`;
     const store = registry.getSkillStore();
     await store.store("a", A);
     await store.store("b", B);

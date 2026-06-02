@@ -1,5 +1,5 @@
 # Skill: bad
 t:
     if $(A) && $(B):
-        ! both
+        emit(text="both")
 default: t

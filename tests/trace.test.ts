@@ -141,7 +141,7 @@ describe("execute() with trace recording", () => {
       const src = `# Skill: traced
 t:
     $set X = "hello"
-    ! greeting: $(X)
+    emit(text="greeting: $(X)")
 
 default: t
 `;
@@ -161,7 +161,7 @@ default: t
       expect(rec.ops.length).toBe(2); // $set + !
       expect(rec.ops[0]!.op_kind).toBe("$set");
       expect(rec.ops[0]!.errored).toBe(false);
-      expect(rec.ops[1]!.op_kind).toBe("!");
+      expect(rec.ops[1]!.op_kind).toBe("emit");
       expect(rec.emissions).toEqual(["greeting: hello"]);
       expect(rec.duration_ms).toBeGreaterThanOrEqual(0);
     } finally {
@@ -175,7 +175,7 @@ default: t
       const store = new FilesystemTraceStore(dir);
       const src = `# Skill: silent
 t:
-    ! hi
+    emit(text="hi")
 
 default: t
 `;
@@ -198,7 +198,7 @@ default: t
       const store = new FilesystemTraceStore(dir);
       const src = `# Skill: failing
 t:
-    @ false
+    shell(command="false")
 
 default: t
 `;
@@ -216,7 +216,7 @@ default: t
       expect(rec.ops.length).toBe(1);
       expect(rec.ops[0]!.errored).toBe(true);
       expect(rec.errors.length).toBe(1);
-      expect(rec.errors[0]!.opKind).toBe("@");
+      expect(rec.errors[0]!.opKind).toBe("shell");
     } finally {
       cleanup();
     }
@@ -228,7 +228,7 @@ default: t
       const store = new FilesystemTraceStore(dir);
       const src = `# Skill: sampled
 t:
-    ! hi
+    emit(text="hi")
 
 default: t
 `;

@@ -121,7 +121,7 @@ describe("v0.4.1 — Registry stores + exposes allowedTools", () => {
 
 describe("v0.4.1 — disallowed-tool lint", () => {
   it("fires tier-1 on $ name.tool where tool is not in allowlist", async () => {
-    const src = `# Skill: t\n# Status: Approved\nrun:\n    $ youtrack.create_issue summary="bug" -> R\n    ! $(R)\ndefault: run\n`;
+    const src = `# Skill: t\n# Status: Approved\nrun:\n    $ youtrack.create_issue summary="bug" -> R\n    emit(text="$(R)")\ndefault: run\n`;
     const r = await lint(src, {
       mcpConnectorNames: ["youtrack"],
       mcpConnectorAllowedTools: new Map([["youtrack", ["search_issues", "get_issue"]]]),
@@ -134,7 +134,7 @@ describe("v0.4.1 — disallowed-tool lint", () => {
   });
 
   it("does not fire when tool IS in allowlist", async () => {
-    const src = `# Skill: t\n# Status: Approved\nrun:\n    $ youtrack.search_issues query="for: me" -> R\n    ! $(R)\ndefault: run\n`;
+    const src = `# Skill: t\n# Status: Approved\nrun:\n    $ youtrack.search_issues query="for: me" -> R\n    emit(text="$(R)")\ndefault: run\n`;
     const r = await lint(src, {
       mcpConnectorNames: ["youtrack"],
       mcpConnectorAllowedTools: new Map([["youtrack", ["search_issues"]]]),
@@ -144,7 +144,7 @@ describe("v0.4.1 — disallowed-tool lint", () => {
   });
 
   it("does not fire when no allowlist configured (allow-all)", async () => {
-    const src = `# Skill: t\n# Status: Approved\nrun:\n    $ youtrack.create_issue summary="bug" -> R\n    ! $(R)\ndefault: run\n`;
+    const src = `# Skill: t\n# Status: Approved\nrun:\n    $ youtrack.create_issue summary="bug" -> R\n    emit(text="$(R)")\ndefault: run\n`;
     const r = await lint(src, {
       mcpConnectorNames: ["youtrack"],
       // No mcpConnectorAllowedTools entry for youtrack → allow-all.
@@ -154,7 +154,7 @@ describe("v0.4.1 — disallowed-tool lint", () => {
   });
 
   it("empty allowlist [] → ALL tools disallowed", async () => {
-    const src = `# Skill: t\n# Status: Approved\nrun:\n    $ youtrack.search_issues query="x" -> R\n    ! $(R)\ndefault: run\n`;
+    const src = `# Skill: t\n# Status: Approved\nrun:\n    $ youtrack.search_issues query="x" -> R\n    emit(text="$(R)")\ndefault: run\n`;
     const r = await lint(src, {
       mcpConnectorNames: ["youtrack"],
       mcpConnectorAllowedTools: new Map([["youtrack", []]]),
@@ -167,7 +167,7 @@ describe("v0.4.1 — disallowed-tool lint", () => {
   it("derives allowedTools from Registry when only registry is passed", async () => {
     const registry = new Registry();
     registry.registerMcpConnector("youtrack", new CallbackMcpConnector(async () => ({})), ["search_issues"]);
-    const src = `# Skill: t\n# Status: Approved\nrun:\n    $ youtrack.create_issue summary="x" -> R\n    ! $(R)\ndefault: run\n`;
+    const src = `# Skill: t\n# Status: Approved\nrun:\n    $ youtrack.create_issue summary="x" -> R\n    emit(text="$(R)")\ndefault: run\n`;
     const r = await lint(src, { registry });
     const finding = r.findings.find((f) => f.rule === "disallowed-tool");
     expect(finding).toBeDefined();
@@ -187,7 +187,7 @@ describe("v0.4.1 — runtime defense-in-depth allowlist enforcement", () => {
 
     // Skill calls disallowed_tool — should fail at runtime even though
     // we bypass lint by going straight to execute.
-    const src = `# Skill: t\n# Status: Approved\nrun:\n    $ tooler.disallowed_tool -> R\n    ! got $(R)\ndefault: run\n`;
+    const src = `# Skill: t\n# Status: Approved\nrun:\n    $ tooler.disallowed_tool -> R\n    emit(text="got $(R)")\ndefault: run\n`;
     const compiled = await compile(src, { skipLintPreflight: true });
     const result = await execute(compiled.parsed, compiled.resolvedVariables, compiled.targetOrder, { registry: wired.registry });
     expect(result.errors.length).toBeGreaterThan(0);
@@ -203,7 +203,7 @@ describe("v0.4.1 — runtime defense-in-depth allowlist enforcement", () => {
       new CallbackMcpConnector(async (toolName) => ({ called: toolName })),
       ["safe_tool"],
     );
-    const src = `# Skill: t\n# Status: Approved\nrun:\n    $ tooler.safe_tool -> R\n    ! got safe\ndefault: run\n`;
+    const src = `# Skill: t\n# Status: Approved\nrun:\n    $ tooler.safe_tool -> R\n    emit(text="got safe")\ndefault: run\n`;
     const compiled = await compile(src, { skipLintPreflight: true });
     const result = await execute(compiled.parsed, compiled.resolvedVariables, compiled.targetOrder, { registry: wired.registry });
     expect(result.errors).toEqual([]);

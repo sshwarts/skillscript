@@ -1,4 +1,4 @@
 # Skill: bad
 t:
-    ! hello $(UNDECLARED)
+    emit(text="hello $(UNDECLARED)")
 default: t

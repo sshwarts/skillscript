@@ -151,7 +151,7 @@ describe("bootstrap — substrate dispatch", () => {
       connectorsConfigPath: cfg,
     });
     await wired.skillStore.store("via-sqlite",
-      "# Skill: via-sqlite\n# Status: Approved\nt:\n    ! hi\ndefault: t\n");
+      "# Skill: via-sqlite\n# Status: Approved\nt:\n    emit(text=\"hi\")\ndefault: t\n");
     const resp = await wired.mcpServer.handle({
       jsonrpc: "2.0",
       id: 1,
@@ -177,7 +177,7 @@ describe("bootstrap — substrate dispatch", () => {
     expect(wired.skillStore).toBeInstanceOf(SqliteSkillStore);
     // Write a skill — file should land at customDb.
     void wired.skillStore.store("a",
-      "# Skill: a\n# Status: Draft\nt:\n    ! hi\ndefault: t\n");
+      "# Skill: a\n# Status: Draft\nt:\n    emit(text=\"hi\")\ndefault: t\n");
     // Existence check via separate fs stat
     const { existsSync } = require("node:fs") as typeof import("node:fs");
     expect(existsSync(customDb)).toBe(true);
@@ -279,7 +279,7 @@ describe("substrate-aware error message — Concern 1 patch (Perry's `7b107241`)
         // No local_model in substrate; no connectors.json. Bare `$ llm` should fail.
       });
       await wired.skillStore.store("llm-probe",
-        "# Skill: llm-probe\n# Status: Approved\nt:\n    $ llm prompt=\"hi\" -> R\n    ! $(R)\ndefault: t\n");
+        "# Skill: llm-probe\n# Status: Approved\nt:\n    $ llm prompt=\"hi\" -> R\n    emit(text=\"$(R)\")\ndefault: t\n");
       const resp = await wired.mcpServer.handle({
         jsonrpc: "2.0",
         id: 1,

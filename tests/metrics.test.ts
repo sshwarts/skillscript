@@ -45,8 +45,8 @@ describe("healthMetrics", () => {
     const { store, cleanup } = withStore();
     try {
       const now = Date.now();
-      await store.write(makeTrace({ skill: "alpha", firedAt: now - 10_000, ops: [{ kind: "!", durationMs: 1 }] }));
-      await store.write(makeTrace({ skill: "alpha", firedAt: now - 8000, ops: [{ kind: "!", durationMs: 1 }] }));
+      await store.write(makeTrace({ skill: "alpha", firedAt: now - 10_000, ops: [{ kind: "emit", durationMs: 1 }] }));
+      await store.write(makeTrace({ skill: "alpha", firedAt: now - 8000, ops: [{ kind: "emit", durationMs: 1 }] }));
       await store.write(makeTrace({
         skill: "alpha",
         firedAt: now - 5000,
@@ -95,8 +95,8 @@ describe("healthMetrics", () => {
     const { store, cleanup } = withStore();
     try {
       const now = Date.now();
-      await store.write(makeTrace({ skill: "a", firedAt: now - 1000, ops: [{ kind: "!", durationMs: 1 }] }));
-      await store.write(makeTrace({ skill: "b", firedAt: now - 1000, ops: [{ kind: "!", durationMs: 1 }] }));
+      await store.write(makeTrace({ skill: "a", firedAt: now - 1000, ops: [{ kind: "emit", durationMs: 1 }] }));
+      await store.write(makeTrace({ skill: "b", firedAt: now - 1000, ops: [{ kind: "emit", durationMs: 1 }] }));
       const m = await healthMetrics(store, { skills: ["a"] });
       expect(m.totalFires).toBe(1);
       expect(m.perSkill["a"]).toBeDefined();
@@ -129,8 +129,8 @@ describe("healthMetrics", () => {
     const { store, cleanup } = withStore();
     try {
       const now = Date.now();
-      await store.write(makeTrace({ skill: "win", firedAt: now - 100_000, ops: [{ kind: "!", durationMs: 1 }] }));
-      await store.write(makeTrace({ skill: "win", firedAt: now - 50_000, ops: [{ kind: "!", durationMs: 1 }] }));
+      await store.write(makeTrace({ skill: "win", firedAt: now - 100_000, ops: [{ kind: "emit", durationMs: 1 }] }));
+      await store.write(makeTrace({ skill: "win", firedAt: now - 50_000, ops: [{ kind: "emit", durationMs: 1 }] }));
       const recent = await healthMetrics(store, { since_ms: now - 75_000 });
       expect(recent.totalFires).toBe(1);
     } finally {

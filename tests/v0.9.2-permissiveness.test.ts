@@ -174,7 +174,7 @@ default: m
 # Status: Approved
 
 just-data:
-    ! some content
+    emit(text="some content")
 `;
       const r = await lint(src);
       expect(r.findings.find((f) => f.rule === "missing-default-target")).toBeDefined();

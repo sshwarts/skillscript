@@ -1,4 +1,4 @@
 # Skill: bad-tabs
 t:
-	! hi
+	emit(text="hi")
 default: t

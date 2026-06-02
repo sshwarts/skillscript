@@ -17,7 +17,7 @@ describe("lint — baseline rules", async () => {
   it("reports invalid-conditional-syntax for malformed condition (no parse-error echo since v0.3.4)", async () => {
     const src = `t:
     if $(A) && $(B):
-        ! both
+        emit(text="both")
 
 default: t
 `;
@@ -55,7 +55,7 @@ describe("lint — unknown-capability rule (offline validation)", async () => {
 # Requires: data_store.supports_tag_filter
 
 t:
-    ! hi
+    emit(text="hi")
 
 default: t
 `;
@@ -81,7 +81,7 @@ default: t
 # Requires: data_store.supports_semantic
 
 t:
-    ! hi
+    emit(text="hi")
 
 default: t
 `;
@@ -101,7 +101,7 @@ default: t
 # Requires: local_model.supports_max_tokens local_model.supports_streaming
 
 t:
-    ! hi
+    emit(text="hi")
 
 default: t
 `;
@@ -118,7 +118,7 @@ default: t
 # Requires: local_model.supports_streaming
 
 t:
-    ! hi
+    emit(text="hi")
 
 default: t
 `;
@@ -135,7 +135,7 @@ default: t
 # Requires: local_model.supports_streaming
 
 t:
-    ! hi
+    emit(text="hi")
 
 default: t
 `;
@@ -149,7 +149,7 @@ default: t
 # Requires: data_store.supports_semantic
 
 t:
-    ! hi
+    emit(text="hi")
 
 default: t
 `;
@@ -163,7 +163,7 @@ default: t
 # Requires: data_store.supports_tag_filter
 
 t:
-    ! $(LOCATION)
+    emit(text="$(LOCATION)")
 
 default: t
 `;
@@ -183,7 +183,7 @@ default: t
     // from node:sqlite — but SQLite import happens at module load, not at
     // construct time, so this isn't a perfect side-effect proof. The
     // structural argument from reading lint.ts is what makes the claim airtight.)
-    const src = `# Requires: local_model.supports_max_tokens\nt:\n    ! ok\ndefault: t\n`;
+    const src = `# Requires: local_model.supports_max_tokens\nt:\n    emit(text="ok")\ndefault: t\n`;
     const r = await lint(src, { classes: [FilesystemSkillStore, SqliteDataStore, OllamaLocalModel, CallbackMcpConnector] });
     expect(r.errorCount).toBe(0);
   });

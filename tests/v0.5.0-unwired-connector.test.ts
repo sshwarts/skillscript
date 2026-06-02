@@ -25,7 +25,7 @@ import { join } from "node:path";
 
 describe("v0.5.0 item 5a — runtime hard error on unwired", () => {
   it("bare `$ TOOL` with no primary, no toolDispatch → throws", async () => {
-    const src = `# Skill: t\n# Status: Approved\nrun:\n    $ some_tool arg1 -> R\n    ! result=$(R)\ndefault: run\n`;
+    const src = `# Skill: t\n# Status: Approved\nrun:\n    $ some_tool arg1 -> R\n    emit(text="result=$(R)")\ndefault: run\n`;
     const home = mkdtempSync(join(tmpdir(), "v050-5a-"));
     const wired = bootstrap({ skillsDir: join(home, "skills"), traceDir: join(home, "traces") });
     // Compile path includes lint; with no registry context here it bypasses
@@ -39,7 +39,7 @@ describe("v0.5.0 item 5a — runtime hard error on unwired", () => {
   });
 
   it("bare `$ TOOL` with (fallback: ...) recovers", async () => {
-    const src = `# Skill: t\n# Status: Approved\nrun:\n    $ some_tool arg1 -> R (fallback: "n/a")\n    ! result=$(R)\ndefault: run\n`;
+    const src = `# Skill: t\n# Status: Approved\nrun:\n    $ some_tool arg1 -> R (fallback: "n/a")\n    emit(text="result=$(R)")\ndefault: run\n`;
     const home = mkdtempSync(join(tmpdir(), "v050-5a-fb-"));
     const wired = bootstrap({ skillsDir: join(home, "skills"), traceDir: join(home, "traces") });
     const compiled = await compile(src, { lint: { mcpConnectorNames: undefined } });
@@ -65,10 +65,10 @@ describe("v0.5.0 item 5b — lint: unwired-primary-connector", () => {
     expect(r.findings.find((x) => x.rule === "unwired-primary-connector")).toBeDefined();
   });
 
-  it("OK: bare op silent when 'primary' is wired", async () => {
+  it("v0.16.0: bare op STILL fires when only 'primary' is wired (primary fallback dropped)", async () => {
     const src = `# Skill: t\n# Status: Approved\nrun:\n    $ some_tool arg1 -> R\ndefault: run\n`;
     const r = await lint(src, { mcpConnectorNames: ["primary", "youtrack"] });
-    expect(r.findings.find((x) => x.rule === "unwired-primary-connector")).toBeUndefined();
+    expect(r.findings.find((x) => x.rule === "unwired-primary-connector")).toBeDefined();
   });
 
   it("OK: qualified `$ named.tool` op doesn't fire (covered by unknown-connector + disallowed-tool)", async () => {

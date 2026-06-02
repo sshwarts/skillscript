@@ -1,5 +1,5 @@
 # Skill: ok
 t:
     $set X = hi
-    ! $(X)
+    emit(text="$(X)")
 default: t

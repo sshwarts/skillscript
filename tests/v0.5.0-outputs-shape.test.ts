@@ -37,14 +37,14 @@ async function runSkill(src: string): Promise<{ outputs: Record<string, unknown>
 
 describe("v0.5.0 item 7 — outputs.text shape (programmatic surface default)", () => {
   it("emits-only skill (no var bound) → outputs.text is emissions array", async () => {
-    const src = `# Skill: t\n# Status: Approved\nrun:\n    ! line one\n    ! line two\n    ! line three\ndefault: run\n`;
+    const src = `# Skill: t\n# Status: Approved\nrun:\n    emit(text="line one")\n    emit(text="line two")\n    emit(text="line three")\ndefault: run\n`;
     const result = await runSkill(src);
     expect(result.errors).toEqual([]);
     expect(result.outputs.text).toEqual(["line one", "line two", "line three"]);
   });
 
   it("emits + $set bind → outputs.text is the bound value (structured)", async () => {
-    const src = `# Skill: t\n# Status: Approved\nrun:\n    ! prelude\n    $set RESULT = "structured"\n    ! coda\ndefault: run\n`;
+    const src = `# Skill: t\n# Status: Approved\nrun:\n    emit(text="prelude")\n    $set RESULT = "structured"\n    emit(text="coda")\ndefault: run\n`;
     const result = await runSkill(src);
     expect(result.errors).toEqual([]);
     // Last-bound var wins — outputs.text is "structured" (the var value),
@@ -64,7 +64,7 @@ describe("v0.5.0 item 7 — outputs.text shape (programmatic surface default)", 
 
 describe("v0.5.0 item 7 — outputs.text vs human-readable kinds", () => {
   it("# Output: agent: agent → joined emissions string (not lastBoundVar)", async () => {
-    const src = `# Skill: t\n# Status: Approved\n# Output: agent: assistant\nrun:\n    ! prelude\n    $set RESULT = "structured"\n    ! coda\ndefault: run\n`;
+    const src = `# Skill: t\n# Status: Approved\n# Output: agent: assistant\nrun:\n    emit(text="prelude")\n    $set RESULT = "structured"\n    emit(text="coda")\ndefault: run\n`;
     const result = await runSkill(src);
     expect(result.errors).toEqual([]);
     expect(result.outputs["agent:assistant"]).toBe("prelude\ncoda");
@@ -73,7 +73,7 @@ describe("v0.5.0 item 7 — outputs.text vs human-readable kinds", () => {
   });
 
   it("# Output: text + # Output: agent: same skill → both shapes coexist", async () => {
-    const src = `# Skill: t\n# Status: Approved\n# Output: text\n# Output: agent: assistant\nrun:\n    ! prelude\n    $set RESULT = "structured"\n    ! coda\ndefault: run\n`;
+    const src = `# Skill: t\n# Status: Approved\n# Output: text\n# Output: agent: assistant\nrun:\n    emit(text="prelude")\n    $set RESULT = "structured"\n    emit(text="coda")\ndefault: run\n`;
     const result = await runSkill(src);
     expect(result.errors).toEqual([]);
     expect(result.outputs.text).toBe("structured");

@@ -152,8 +152,8 @@ describe("v0.7.0 — parser rejects unknown function-call ops", () => {
   });
 });
 
-describe("v0.7.0 — legacy + new ops mix in same skill", () => {
-  it("emit(...) function-call coexists with ! symbol form", async () => {
+describe("v0.16.0 — legacy `!` symbol form rejected", () => {
+  it("legacy `! text` produces parse error", async () => {
     const src = [
       `# Skill: t`,
       `# Status: Approved`,
@@ -163,9 +163,8 @@ describe("v0.7.0 — legacy + new ops mix in same skill", () => {
       `default: run`,
       ``,
     ].join("\n");
-    const result = await runSkill(src);
-    expect(result.errors).toEqual([]);
-    expect(result.emissions).toEqual(["from-fn", "from-symbol"]);
+    const parsed = parse(src);
+    expect(parsed.parseErrors.some((e) => e.includes("Legacy `!`"))).toBe(true);
   });
 });
 

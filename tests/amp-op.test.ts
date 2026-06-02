@@ -14,46 +14,44 @@ describe("Parser — & op", () => {
   it("parses bare reference", () => {
     const src = `# Skill: caller
 t:
-    & voice-guide
+    inline(skill="voice-guide")
 
 default: t
 `;
     const p = parse(src);
     expect(p.parseErrors).toEqual([]);
     const op = p.targets.get("t")!.ops[0]!;
-    expect(op.kind).toBe("&");
+    expect(op.kind).toBe("inline");
     expect(op.ampParams).toEqual({ skillName: "voice-guide", args: {} });
     expect(op.outputVar).toBeUndefined();
   });
 
-  it("parses reference with key=value args + output binding", () => {
+  it("parses execute_skill with kwargs + output binding", () => {
     const src = `# Skill: caller
 t:
-    & summarize style=formal max_words=100 -> RESULT
+    execute_skill(name="summarize", style="formal", max_words=100) -> RESULT
 
 default: t
 `;
     const p = parse(src);
     expect(p.parseErrors).toEqual([]);
     const op = p.targets.get("t")!.ops[0]!;
-    expect(op.kind).toBe("&");
-    expect(op.ampParams).toEqual({
-      skillName: "summarize",
-      args: { style: "formal", max_words: "100" },
-    });
+    expect(op.kind).toBe("$");
+    expect(op.body).toMatch(/^execute_skill skill_name="summarize"/);
+    expect(op.body).toContain('style="formal"');
+    expect(op.body).toContain('max_words="100"');
     expect(op.outputVar).toBe("RESULT");
   });
 
-  it("rejects malformed & (missing skill name)", () => {
+  it("rejects legacy `&` symbol op with parse error", () => {
     const src = `# Skill: caller
 t:
-    &
+    & legacy-skill
 
 default: t
 `;
     const p = parse(src);
-    // Bare `&` doesn't match the regex; parser silently drops per existing
-    // convention (the leading `&` isn't followed by a space + name).
+    expect(p.parseErrors.join("\n")).toMatch(/Legacy `&` inline op/);
     expect(p.targets.get("t")!.ops).toHaveLength(0);
   });
 
@@ -62,11 +60,11 @@ default: t
 t:
     $set ITEMS = [a, b]
     foreach I in $(ITEMS):
-        & voice-guide
+        inline(skill="voice-guide")
     if $(MODE) == "formal":
-        & formal-tone
+        inline(skill="formal-tone")
     else:
-        & casual-tone
+        inline(skill="casual-tone")
 
 default: t
 `;
@@ -79,22 +77,22 @@ default: t
 
 describe("Parser — # Type: header", () => {
   it("defaults to procedural when header absent", () => {
-    const p = parse(`# Skill: t\nt:\n    ! hi\ndefault: t\n`);
+    const p = parse(`# Skill: t\nt:\n    emit(text="hi")\ndefault: t\n`);
     expect(p.type).toBe("procedural");
   });
 
   it("parses # Type: data", () => {
-    const p = parse(`# Skill: voice-guide\n# Type: data\nt:\n    ! content body\ndefault: t\n`);
+    const p = parse(`# Skill: voice-guide\n# Type: data\nt:\n    emit(text="content body")\ndefault: t\n`);
     expect(p.type).toBe("data");
   });
 
   it("parses # Type: procedural explicitly", () => {
-    const p = parse(`# Skill: t\n# Type: procedural\nt:\n    ! hi\ndefault: t\n`);
+    const p = parse(`# Skill: t\n# Type: procedural\nt:\n    emit(text="hi")\ndefault: t\n`);
     expect(p.type).toBe("procedural");
   });
 
   it("rejects unknown # Type: values", () => {
-    const p = parse(`# Skill: t\n# Type: bogus\nt:\n    ! hi\ndefault: t\n`);
+    const p = parse(`# Skill: t\n# Type: bogus\nt:\n    emit(text="hi")\ndefault: t\n`);
     expect(p.parseErrors.length).toBeGreaterThan(0);
     expect(p.parseErrors[0]).toMatch(/must be 'procedural' or 'data'/);
   });
@@ -102,14 +100,14 @@ describe("Parser — # Type: header", () => {
 
 describe("extractReferences — T3 grammar produces real edges", () => {
   it("returns empty for skill with no & ops", () => {
-    expect(extractReferences(`t:\n    ! hi\ndefault: t\n`)).toEqual([]);
+    expect(extractReferences(`t:\n    emit(text="hi")\ndefault: t\n`)).toEqual([]);
   });
 
   it("returns sorted deduplicated refs", () => {
     const src = `t:
-    & beta
-    & alpha
-    & beta
+    inline(skill="beta")
+    inline(skill="alpha")
+    inline(skill="beta")
 
 default: t
 `;
@@ -118,10 +116,10 @@ default: t
 
   it("walks across all targets, not just the entry target", () => {
     const src = `helper:
-    & helper-skill
+    inline(skill="helper-skill")
 
 t:
-    & main-skill
+    inline(skill="main-skill")
 
 default: t
 `;
@@ -148,14 +146,14 @@ describe("T2 integration — reference index lights up via T3 grammar", () => {
 # Type: data
 
 t:
-    ! formal tone, technical accuracy, second-person
+    emit(text="formal tone, technical accuracy, second-person")
 
 default: t
 `;
     const SUPPORT = `# Skill: support-response
 t:
-    & voice-guide
-    ! generate response
+    inline(skill="voice-guide")
+    emit(text="generate response")
 
 default: t
 `;
@@ -184,8 +182,8 @@ describe("Runtime — & op rejects unresolved execution", () => {
   it("throws clear error when an & op reaches the runtime", async () => {
     const src = `# Skill: caller
 t:
-    & voice-guide
-    ! after
+    inline(skill="voice-guide")
+    emit(text="after")
 
 default: t
 `;
@@ -200,7 +198,7 @@ default: t
     // The `&` op should error; the subsequent `!` should not execute
     // because the op chain bails on the error.
     expect(result.errors.length).toBe(1);
-    expect(result.errors[0]!.opKind).toBe("&");
+    expect(result.errors[0]!.opKind).toBe("inline");
     // v0.3.1: the runtime now throws MissingSkillReferenceError for
     // unresolved `&` ops (was a generic "compile() bypassed" error
     // pre-v0.3.1). New message asks whether it's a forward-ref or typo.
@@ -231,9 +229,9 @@ describe("Data-skill inlining — THE LOAD-BEARING DEMO", () => {
 # Type: data
 
 content:
-    ! Always use second-person perspective.
-    ! Lead with technical accuracy over marketing tone.
-    ! No emoji.
+    emit(text="Always use second-person perspective.")
+    emit(text="Lead with technical accuracy over marketing tone.")
+    emit(text="No emoji.")
 
 default: content
 `;
@@ -241,8 +239,8 @@ default: content
 # Vars: QUERY=hello
 
 build:
-    & voice-guide
-    ! Now respond to: $(QUERY)
+    inline(skill="voice-guide")
+    emit(text="Now respond to: $(QUERY)")
 
 default: build
 `;
@@ -269,14 +267,14 @@ default: build
 # Type: data
 
 content:
-    ! formal tone
+    emit(text="formal tone")
 
 default: content
 `;
     const CALLER = `# Skill: caller
 t:
-    & voice-guide -> GUIDE
-    ! using $(GUIDE)
+    inline(skill="voice-guide") -> GUIDE
+    emit(text="using $(GUIDE)")
 
 default: t
 `;
@@ -292,13 +290,13 @@ default: t
   it("procedural-skill & ref stays as runtime invocation (not inlined)", async () => {
     const PROC = `# Skill: summarizer
 t:
-    ! summarize logic
+    emit(text="summarize logic")
 
 default: t
 `;
     const CALLER = `# Skill: caller
 t:
-    & summarizer -> RESULT
+    inline(skill="summarizer") -> RESULT
 
 default: t
 `;
@@ -318,7 +316,7 @@ default: t
 # Type: data
 
 t:
-    ! formal voice only
+    emit(text="formal voice only")
 
 default: t
 `;
@@ -326,14 +324,14 @@ default: t
 # Type: data
 
 t:
-    & tone
-    ! plus: no emoji
+    inline(skill="tone")
+    emit(text="plus: no emoji")
 
 default: t
 `;
     const CALLER = `# Skill: caller
 t:
-    & voice-guide
+    inline(skill="voice-guide")
 
 default: t
 `;
@@ -354,7 +352,7 @@ default: t
 # Type: data
 
 t:
-    & b
+    inline(skill="b")
 
 default: t
 `;
@@ -362,13 +360,13 @@ default: t
 # Type: data
 
 t:
-    & a
+    inline(skill="a")
 
 default: t
 `;
     const CALLER = `# Skill: caller
 t:
-    & a
+    inline(skill="a")
 
 default: t
 `;
@@ -388,16 +386,16 @@ default: t
 # Type: data
 
 t:
-    ! rule one
-    ! rule two
-    ! rule three
+    emit(text="rule one")
+    emit(text="rule two")
+    emit(text="rule three")
 
 default: t
 `;
     const CALLER = `# Skill: caller
 t:
-    & voice-guide
-    ! after
+    inline(skill="voice-guide")
+    emit(text="after")
 
 default: t
 `;
@@ -412,11 +410,11 @@ default: t
     // Not joined with embedded newlines.
     expect(compiled.output).not.toMatch(/Tell the user: rule one\nrule two/);
 
-    // AST inspection: parent's target should now have 4 `!` ops (3 inlined + 1 original).
+    // AST inspection: parent's target should now have 4 `emit` ops (3 inlined + 1 original).
     const callerTarget = compiled.parsed.targets.get("t")!;
-    const bangOps = callerTarget.ops.filter((op) => op.kind === "!");
-    expect(bangOps).toHaveLength(4);
-    expect(bangOps.map((op) => op.body)).toEqual(["rule one", "rule two", "rule three", "after"]);
+    const emitOps = callerTarget.ops.filter((op) => op.kind === "emit");
+    expect(emitOps).toHaveLength(4);
+    expect(emitOps.map((op) => op.body)).toEqual(["rule one", "rule two", "rule three", "after"]);
   });
 
   it("inlined data-skill compiled artifact has no & op in the AST", async () => {
@@ -424,26 +422,26 @@ default: t
 # Type: data
 
 t:
-    ! data content
+    emit(text="data content")
 
 default: t
 `;
     const CALLER = `# Skill: caller
 t:
-    & voice-guide
+    inline(skill="voice-guide")
 
 default: t
 `;
     await registry.getSkillStore().store("voice-guide", VOICE_GUIDE);
     const compiled = await compile(CALLER, { skillStore: registry.getSkillStore() });
 
-    // The parsed AST has been mutated by inlining — no & ops should remain.
-    const remainingAmpOps = Array.from(compiled.parsed.targets.values())
+    // The parsed AST has been mutated by inlining — no inline ops should remain.
+    const remainingInlineOps = Array.from(compiled.parsed.targets.values())
       .flatMap((t) => t.ops)
-      .filter((op) => op.kind === "&");
-    expect(remainingAmpOps).toEqual([]);
+      .filter((op) => op.kind === "inline");
+    expect(remainingInlineOps).toEqual([]);
 
-    // Runtime now succeeds on the inlined AST (no & op to reject).
+    // Runtime now succeeds on the inlined AST (no inline op to reject).
     const result = await execute(compiled.parsed, compiled.resolvedVariables, compiled.targetOrder, {
       registry,
     });

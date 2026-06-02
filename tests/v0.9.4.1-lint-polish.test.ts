@@ -95,7 +95,7 @@ describe("v0.9.4.1 — forward-reference dedup", () => {
 # Status: Approved
 
 m:
-    & missing-skill -> A
+    inline(skill="missing-skill") -> A
     $ execute_skill skill_name="missing-skill" -> B
     emit(text="\${A} \${B}")
 
@@ -104,8 +104,8 @@ default: m
     const r = await lint(src, { skillStore: store });
     const findings = r.findings.filter((f) => f.rule === "unknown-skill-reference");
     expect(findings).toHaveLength(1);
-    expect(findings[0]!.message).toMatch(/`&`.*`\$ execute_skill`|`\$ execute_skill`.*`&`/);
-    expect(findings[0]!.extras?.vias).toEqual(expect.arrayContaining(["&", "$ execute_skill"]));
+    expect(findings[0]!.message).toMatch(/`inline`.*`\$ execute_skill`|`\$ execute_skill`.*`inline`/);
+    expect(findings[0]!.extras?.vias).toEqual(expect.arrayContaining(["inline", "$ execute_skill"]));
   });
 
   it("emits N findings for N missing skills (no over-dedup)", async () => {
@@ -113,8 +113,8 @@ default: m
 # Status: Approved
 
 m:
-    & missing-a -> A
-    & missing-b -> B
+    inline(skill="missing-a") -> A
+    inline(skill="missing-b") -> B
     emit(text="\${A} \${B}")
 
 default: m
@@ -131,7 +131,7 @@ default: m
 # Status: Approved
 
 m:
-    & missing-skill -> A
+    inline(skill="missing-skill") -> A
     emit(text="\${A}")
 
 default: m
@@ -147,9 +147,9 @@ default: m
 # Status: Approved
 
 m:
-    & missing-a -> A1
+    inline(skill="missing-a") -> A1
     $ execute_skill skill_name="missing-a" -> A2
-    & missing-b -> B1
+    inline(skill="missing-b") -> B1
     $ execute_skill skill_name="missing-b" -> B2
     emit(text="\${A1} \${A2} \${B1} \${B2}")
 

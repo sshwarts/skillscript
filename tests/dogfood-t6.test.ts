@@ -44,7 +44,7 @@ describe("T6 dogfood pass — observability end-to-end", () => {
 # Triggers: cron: */1 * * * *
 
 emit:
-    ! heartbeat at $(EVENT.fired_at_unix)
+    emit(text="heartbeat at $(EVENT.fired_at_unix)")
 
 default: emit
 `;
@@ -101,7 +101,7 @@ default: emit
       const src = `# Skill: t6-metrics
 # Status: Approved
 emit:
-    ! ping
+    emit(text="ping")
 default: emit
 `;
       await skillStore.store("t6-metrics", src);
@@ -138,7 +138,7 @@ default: emit
       const src = `# Skill: t6-error
 # Status: Approved
 fail:
-    @ unsafe echo "this fails"
+    shell(command="echo \"this fails\"", unsafe=true)
 default: fail
 `;
       await skillStore.store("t6-error", src);
@@ -173,7 +173,7 @@ default: fail
       const src = `# Skill: t6-silent
 # Status: Approved
 t:
-    ! silent
+    emit(text="silent")
 default: t
 `;
       await skillStore.store("t6-silent", src);

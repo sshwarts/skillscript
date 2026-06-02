@@ -1,5 +1,5 @@
 # Skill: ok
 # Vars: NAME=world
 t:
-    ! hello $(NAME)
+    emit(text="hello $(NAME)")
 default: t

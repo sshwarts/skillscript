@@ -206,8 +206,8 @@ export class ConnectorNotFoundError extends OpError {
       remediation =
         `Configure the connector via the registry (\`registry.register${connectorType.replace(/_./g, (m) => m[1]!.toUpperCase())}\` API), ` +
         `or check the spelling against the registered connector names. ` +
-        `Bare \`${opKind} ...\` routes through the 'primary'/'default' connector; ` +
-        `\`${opKind} <name>.<tool>\` routes through the named instance.`;
+        `Bare \`${opKind} ...\` is reserved for typed-contract / runtime-intrinsic ops (\`execute_skill\`, \`json_parse\`, or a tool name that matches a wired connector). ` +
+        `Use named form \`${opKind} <connector>.<tool>\` for substrate-specific MCP dispatch.`;
     }
     super(message, opKind, remediation, target);
     this.name = "ConnectorNotFoundError";
@@ -245,20 +245,6 @@ export class OpTimeoutError extends OpError {
   }
 }
 
-/** A `??` ask-user op fired in autonomous mode (no `askUser` callback wired). */
-export class InteractiveOpInAutonomousModeError extends OpError {
-  constructor(
-    public readonly prompt: string,
-    target?: string,
-  ) {
-    const message = `\`??\` ask-user encountered in autonomous execution: ${prompt}`;
-    const remediation =
-      `Restructure the skill to take the value as an input (\`# Vars:\`) or via \`# Requires:\` cascade, ` +
-      `or invoke from an interactive context that wires the \`askUser\` callback on ExecuteContext.`;
-    super(message, "??", remediation, target);
-    this.name = "InteractiveOpInAutonomousModeError";
-  }
-}
 
 /** An `@ unsafe` op fired with `runtime.enable_unsafe_shell = false` (default). */
 export class UnsafeShellDisabledError extends OpError {
@@ -295,7 +281,7 @@ export class MissingSkillReferenceError extends OpError {
   constructor(
     public readonly missingSkillName: string,
     opKind: string,
-    public readonly viaOp: "&" | "$ execute_skill" | "# Templates",
+    public readonly viaOp: "inline" | "$ execute_skill" | "# Templates",
     target?: string,
   ) {
     const message =

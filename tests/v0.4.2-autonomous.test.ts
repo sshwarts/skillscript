@@ -12,28 +12,28 @@ import { lint } from "../src/lint.js";
 
 describe("v0.4.2 — # Autonomous header parser recognition", () => {
   it("# Autonomous: true sets parsed.autonomous === true", () => {
-    const src = `# Skill: t\n# Status: Approved\n# Autonomous: true\nrun:\n    ! hi\ndefault: run\n`;
+    const src = `# Skill: t\n# Status: Approved\n# Autonomous: true\nrun:\n    emit(text="hi")\ndefault: run\n`;
     const r = parse(src);
     expect(r.parseErrors).toEqual([]);
     expect(r.autonomous).toBe(true);
   });
 
   it("# Autonomous: false sets parsed.autonomous === false", () => {
-    const src = `# Skill: t\n# Status: Approved\n# Autonomous: false\nrun:\n    ! hi\ndefault: run\n`;
+    const src = `# Skill: t\n# Status: Approved\n# Autonomous: false\nrun:\n    emit(text="hi")\ndefault: run\n`;
     const r = parse(src);
     expect(r.parseErrors).toEqual([]);
     expect(r.autonomous).toBe(false);
   });
 
   it("absent header → parsed.autonomous === null (lint treats as default-interactive)", () => {
-    const src = `# Skill: t\n# Status: Approved\nrun:\n    ! hi\ndefault: run\n`;
+    const src = `# Skill: t\n# Status: Approved\nrun:\n    emit(text="hi")\ndefault: run\n`;
     const r = parse(src);
     expect(r.parseErrors).toEqual([]);
     expect(r.autonomous).toBeNull();
   });
 
   it("invalid value → parse error", () => {
-    const src = `# Skill: t\n# Status: Approved\n# Autonomous: yes\nrun:\n    ! hi\ndefault: run\n`;
+    const src = `# Skill: t\n# Status: Approved\n# Autonomous: yes\nrun:\n    emit(text="hi")\ndefault: run\n`;
     const r = parse(src);
     expect(r.parseErrors[0]).toMatch(/`# Autonomous:` value must be 'true' or 'false'/);
   });
@@ -42,7 +42,7 @@ describe("v0.4.2 — # Autonomous header parser recognition", () => {
 describe("v0.4.2 — unconfirmed-mutation conditional on Autonomous", () => {
   const mutationSkill = (autonomous: string | null) => {
     const header = autonomous === null ? "" : `# Autonomous: ${autonomous}\n`;
-    return `# Skill: t\n# Status: Approved\n${header}run:\n    $ datastore.write_thing key=value\n    ! done\ndefault: run\n`;
+    return `# Skill: t\n# Status: Approved\n${header}run:\n    $ datastore.write_thing key=value\n    emit(text="done")\ndefault: run\n`;
   };
 
   it("absent header → unconfirmed-mutation fires (existing v0.2.11+ behavior)", async () => {
@@ -64,8 +64,8 @@ describe("v0.4.2 — unconfirmed-mutation conditional on Autonomous", () => {
     expect(finding).toBeDefined();
   });
 
-  it("# Autonomous: true with preceding ?? confirmation → still silent (header dominates)", async () => {
-    const src = `# Skill: t\n# Status: Approved\n# Autonomous: true\nrun:\n    ?? proceed\n    $ datastore.write_thing key=value\ndefault: run\n`;
+  it("# Autonomous: true + bare mutation → still silent (header dominates)", async () => {
+    const src = `# Skill: t\n# Status: Approved\n# Autonomous: true\nrun:\n    $ datastore.write_thing key=value\ndefault: run\n`;
     const r = await lint(src);
     const finding = r.findings.find((f) => f.rule === "unconfirmed-mutation");
     expect(finding).toBeUndefined();

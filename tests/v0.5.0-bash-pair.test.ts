@@ -29,35 +29,35 @@ async function runSkill(src: string): Promise<{ emissions: string[]; errors: unk
 
 describe("v0.5.0 item 3 — $set bind-time interpolation", () => {
   it("$set X = \"$(REF)\" resolves REF at bind time", async () => {
-    const src = `# Skill: t\n# Status: Approved\n# Vars: USER=admin\nrun:\n    $set GREETING = "Hello, $(USER)!"\n    ! $(GREETING)\ndefault: run\n`;
+    const src = `# Skill: t\n# Status: Approved\n# Vars: USER=admin\nrun:\n    $set GREETING = "Hello, $(USER)!"\n    emit(text="$(GREETING)")\ndefault: run\n`;
     const result = await runSkill(src);
     expect(result.errors).toEqual([]);
     expect(result.emissions).toEqual(["Hello, admin!"]);
   });
 
   it("$set X = \"plain literal\" still works", async () => {
-    const src = `# Skill: t\n# Status: Approved\nrun:\n    $set X = "static-value"\n    ! $(X)\ndefault: run\n`;
+    const src = `# Skill: t\n# Status: Approved\nrun:\n    $set X = "static-value"\n    emit(text="$(X)")\ndefault: run\n`;
     const result = await runSkill(src);
     expect(result.errors).toEqual([]);
     expect(result.emissions).toEqual(["static-value"]);
   });
 
   it("$set X interpolates multiple refs in one string", async () => {
-    const src = `# Skill: t\n# Status: Approved\n# Vars: A=foo, B=bar\nrun:\n    $set COMBINED = "$(A) and $(B)"\n    ! $(COMBINED)\ndefault: run\n`;
+    const src = `# Skill: t\n# Status: Approved\n# Vars: A=foo, B=bar\nrun:\n    $set COMBINED = "$(A) and $(B)"\n    emit(text="$(COMBINED)")\ndefault: run\n`;
     const result = await runSkill(src);
     expect(result.errors).toEqual([]);
     expect(result.emissions).toEqual(["foo and bar"]);
   });
 
   it("$set X interpolates dotted field refs", async () => {
-    const src = `# Skill: t\n# Status: Approved\n# Vars: PAYLOAD={"name":"admin","email":"x@y.com"}\nrun:\n    $ json_parse $(PAYLOAD) -> P\n    $set GREETING = "Hello $(P.name) (<$(P.email)>)"\n    ! $(GREETING)\ndefault: run\n`;
+    const src = `# Skill: t\n# Status: Approved\n# Vars: PAYLOAD={"name":"admin","email":"x@y.com"}\nrun:\n    $ json_parse $(PAYLOAD) -> P\n    $set GREETING = "Hello $(P.name) (<$(P.email)>)"\n    emit(text="$(GREETING)")\ndefault: run\n`;
     const result = await runSkill(src);
     expect(result.errors).toEqual([]);
     expect(result.emissions).toEqual(["Hello admin (<x@y.com>)"]);
   });
 
   it("$set X = \"$(MISSING)\" is caught at lint (undeclared-var) — even better than runtime error", async () => {
-    const src = `# Skill: t\n# Status: Approved\nrun:\n    $set GREETING = "Hello, $(NOT_DEFINED)!"\n    ! $(GREETING)\ndefault: run\n`;
+    const src = `# Skill: t\n# Status: Approved\nrun:\n    $set GREETING = "Hello, $(NOT_DEFINED)!"\n    emit(text="$(GREETING)")\ndefault: run\n`;
     // Bind-time substitution means the ref is now a real ref the linter
     // sees — tier-1 lint catches it before compile, mirroring how $(REF)
     // typos are caught elsewhere. This is the intended UX.
@@ -65,14 +65,14 @@ describe("v0.5.0 item 3 — $set bind-time interpolation", () => {
   });
 
   it("$set X = integer literal still binds as number", async () => {
-    const src = `# Skill: t\n# Status: Approved\nrun:\n    $set COUNT = 42\n    ! count: $(COUNT)\ndefault: run\n`;
+    const src = `# Skill: t\n# Status: Approved\nrun:\n    $set COUNT = 42\n    emit(text="count: $(COUNT)")\ndefault: run\n`;
     const result = await runSkill(src);
     expect(result.errors).toEqual([]);
     expect(result.emissions).toEqual(["count: 42"]);
   });
 
   it("$set X = [list] still binds as list", async () => {
-    const src = `# Skill: t\n# Status: Approved\nrun:\n    $set ITEMS = [a, b, c]\n    foreach I in $(ITEMS):\n        ! item $(I)\ndefault: run\n`;
+    const src = `# Skill: t\n# Status: Approved\nrun:\n    $set ITEMS = [a, b, c]\n    foreach I in $(ITEMS):\n        emit(text="item $(I)")\ndefault: run\n`;
     const result = await runSkill(src);
     expect(result.errors).toEqual([]);
     expect(result.emissions).toEqual(["item a", "item b", "item c"]);
@@ -81,14 +81,14 @@ describe("v0.5.0 item 3 — $set bind-time interpolation", () => {
 
 describe("v0.5.0 item 2 — string-typed $append", () => {
   it("$append to empty string concatenates", async () => {
-    const src = `# Skill: t\n# Status: Approved\nrun:\n    $set BUF = ""\n    $append BUF "hello"\n    $append BUF " world"\n    ! $(BUF)\ndefault: run\n`;
+    const src = `# Skill: t\n# Status: Approved\nrun:\n    $set BUF = ""\n    $append BUF "hello"\n    $append BUF " world"\n    emit(text="$(BUF)")\ndefault: run\n`;
     const result = await runSkill(src);
     expect(result.errors).toEqual([]);
     expect(result.emissions).toEqual(["hello world"]);
   });
 
   it("$append builds multi-line string via foreach (R3 minion 4 pattern)", async () => {
-    const src = `# Skill: t\n# Status: Approved\n# Vars: ITEMS=[apple, banana, cherry]\nrun:\n    $set REPORT = "Fruits:\\n"\n    foreach I in $(ITEMS):\n        $append REPORT "- $(I)\\n"\n    ! $(REPORT)\ndefault: run\n`;
+    const src = `# Skill: t\n# Status: Approved\n# Vars: ITEMS=[apple, banana, cherry]\nrun:\n    $set REPORT = "Fruits:\\n"\n    foreach I in $(ITEMS):\n        $append REPORT "- $(I)\\n"\n    emit(text="$(REPORT)")\ndefault: run\n`;
     const result = await runSkill(src);
     expect(result.errors).toEqual([]);
     // v0.7.2 — escape interpretation in double-quoted strings means \n
@@ -99,7 +99,7 @@ describe("v0.5.0 item 2 — string-typed $append", () => {
   });
 
   it("$append to list still pushes (regression)", async () => {
-    const src = `# Skill: t\n# Status: Approved\nrun:\n    $set ITEMS = []\n    $append ITEMS "first"\n    $append ITEMS "second"\n    ! count: $(ITEMS|length)\ndefault: run\n`;
+    const src = `# Skill: t\n# Status: Approved\nrun:\n    $set ITEMS = []\n    $append ITEMS "first"\n    $append ITEMS "second"\n    emit(text="count: $(ITEMS|length)")\ndefault: run\n`;
     const result = await runSkill(src);
     expect(result.errors).toEqual([]);
     expect(result.emissions).toEqual(["count: 2"]);
@@ -117,7 +117,7 @@ describe("v0.5.0 — bash-shaped composition cross-feature", () => {
   it("$set with interpolation + $append concat closes the R3 minion-4 pattern", async () => {
     // Build a multi-line detail string from a list of issues, mirroring
     // the YouTrack morning-sweep authoring shape.
-    const src = `# Skill: t\n# Status: Approved\n# Vars: USER=admin, ISSUES=[BUG-1, BUG-2, BUG-3]\nrun:\n    $set DETAIL = "Open issues for $(USER):\\n"\n    foreach I in $(ISSUES):\n        $append DETAIL "- $(I)\\n"\n    ! $(DETAIL)\ndefault: run\n`;
+    const src = `# Skill: t\n# Status: Approved\n# Vars: USER=admin, ISSUES=[BUG-1, BUG-2, BUG-3]\nrun:\n    $set DETAIL = "Open issues for $(USER):\\n"\n    foreach I in $(ISSUES):\n        $append DETAIL "- $(I)\\n"\n    emit(text="$(DETAIL)")\ndefault: run\n`;
     const result = await runSkill(src);
     expect(result.errors).toEqual([]);
     expect(result.emissions[0]).toContain("Open issues for admin:");

@@ -12,7 +12,7 @@
 // - Layer B (regression guard): `execOpInner` re-checks at the `$` and
 //   `file_write` dispatch sites. Same predicate, same authState — defense
 //   against a future caller that bypasses execOps. The fail-closed default
-//   authState (`{ skillAutonomous: false, sawConfirm: false }`) ensures any
+//   authState (`{ skillAutonomous: false }`) ensures any
 //   bypass throws instead of silently passing.
 
 import type { SkillOp } from "./parser.js";
@@ -71,37 +71,30 @@ export function classifyMutation(op: SkillOp): MutationClassification | null {
 
 /**
  * Per-target authorization state. `skillAutonomous` is set once from the
- * skill's `# Autonomous: true` header. `sawConfirm` flips when a `??` /
- * `ask()` op fires earlier in the same target — `??` is the in-script
- * confirmation gate that authorizes subsequent mutation ops.
+ * skill's `# Autonomous: true` header.
  *
- * Pass-by-reference: the same authState object threads through `execOps`
- * + nested recursive calls (foreach/if/else bodies) so `sawConfirm`
- * propagates correctly across nesting. Runtime scope is "this target's
- * execution"; reset per-target at the top-level call in `execute()`.
+ * v0.16.0: the `sawConfirm` path (legacy `??` / `ask()` gating) was retired
+ * alongside the `ask` op removal. Authorization is now signaled only by
+ * per-op `approved=` kwarg + skill-level `# Autonomous: true`.
  */
 export interface MutationAuthState {
   skillAutonomous: boolean;
-  sawConfirm: boolean;
 }
 
 /**
- * The three authorization paths the spec defines. Predicate parity with
- * the lint `unconfirmed-mutation` rule — runtime uses this to enforce
- * what lint warns about.
+ * The two authorization paths the spec defines. Predicate parity with the
+ * lint `unconfirmed-mutation` rule — runtime uses this to enforce what
+ * lint warns about.
  *
  * - `op.approved` truthy: per-op kwarg signaling author intent for this
  *   specific op. Any non-empty string accepts (presence is what matters;
  *   value not parsed semantically).
  * - `skillAutonomous`: `# Autonomous: true` skill header — declares the
  *   whole skill as unattended-by-design; no per-op confirmation required.
- * - `sawConfirm`: a `??` / `ask()` fired earlier in the same target's
- *   execution authorized subsequent mutation ops in iteration order.
  */
 export function authorizationGranted(op: SkillOp, authState: MutationAuthState): boolean {
   if (typeof op.approved === "string" && op.approved.length > 0) return true;
   if (authState.skillAutonomous) return true;
-  if (authState.sawConfirm) return true;
   return false;
 }
 
@@ -116,9 +109,8 @@ export function buildAuthorizationSuggestion(classification: MutationClassificat
     : classification.kind === "mutating_tool" ? `$ ${classification.detail}`
     : `file_write(path="${classification.detail}")`;
   return (
-    `Authorize this \`${opPhrase}\` op via one of three paths: ` +
+    `Authorize this \`${opPhrase}\` op via one of two paths: ` +
     `(1) add \`approved="reason"\` kwarg on the op itself; ` +
-    `(2) precede with \`??\` / \`ask(prompt="...")\` confirmation in the same target; ` +
-    `(3) declare \`# Autonomous: true\` at the skill header for cron/agent-fired skills.`
+    `(2) declare \`# Autonomous: true\` at the skill header for cron/agent-fired skills.`
   );
 }
