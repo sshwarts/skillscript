@@ -24,8 +24,8 @@ const REPO_ROOT = join(__dirname, "..");
 const PACKAGE_JSON = JSON.parse(readFileSync(join(REPO_ROOT, "package.json"), "utf8")) as Record<string, unknown>;
 
 describe("T7 — package.json polish", () => {
-  it("1. version is 0.16.2 (P0 fix — $ llm model= registry-alias resolution)", () => {
-    expect(PACKAGE_JSON["version"]).toBe("0.16.2");
+  it("1. version is 0.16.3 (substrate-general manifest exposure on runtime_capabilities)", () => {
+    expect(PACKAGE_JSON["version"]).toBe("0.16.3");
   });
 
   it("2. main + types + bin + engines.node ≥ 22.5 declared", () => {

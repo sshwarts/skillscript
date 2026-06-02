@@ -70,7 +70,14 @@ registry.registerAgentConnector("primary", agentConnector);
 // bridge handles its multi-verb surface via toolName discrimination;
 // register the same instance under each connector name so bare-form
 // name-match resolution picks the right route.
-registry.registerMcpConnector("llm", new LocalModelMcpConnector(openai));
+// Pass the registry handle so `$ llm prompt="..." model="X"` resolves
+// X to a registered LocalModel alias when X matches one. Without the
+// registry, `model=X` falls through as an upstream hint to OpenAI's
+// own model field — useful for picking between gpt-4o-mini, gpt-4o,
+// etc. With the registry, an adopter who registers multiple LocalModels
+// (e.g., one OpenAI + one Ollama under different aliases) can target
+// either via `model="<alias>"` from the skill body.
+registry.registerMcpConnector("llm", new LocalModelMcpConnector(openai, registry));
 const dataBridge = new DataStoreMcpConnector(dataStore);
 registry.registerMcpConnector("data_read", dataBridge);
 registry.registerMcpConnector("data_write", dataBridge);

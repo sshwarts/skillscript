@@ -95,7 +95,10 @@ registry.registerSkillStore("primary", skillStore);
 // discrimination; register the same instance under each connector name so
 // bare-form name-match resolution picks the right route.
 //   import { LocalModelMcpConnector, DataStoreMcpConnector, SkillStoreMcpConnector } from "skillscript-runtime";
-//   registry.registerMcpConnector("llm", new LocalModelMcpConnector(registry.getLocalModel("default")));
+//   // Pass the registry handle so `$ llm prompt="..." model="X"` resolves
+//   // X to a registered LocalModel alias. Without it, model= falls through
+//   // as an upstream hint to the default LocalModel's substrate (e.g., Ollama tag).
+//   registry.registerMcpConnector("llm", new LocalModelMcpConnector(registry.getLocalModel("default"), registry));
 //   const ms = registry.listDataStores().find((e) => e.name === "primary");
 //   if (ms !== undefined) {
 //     const dataBridge = new DataStoreMcpConnector(ms.instance);

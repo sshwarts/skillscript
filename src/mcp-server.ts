@@ -1,4 +1,4 @@
-import type { SkillStore, SkillStatus, SkillListFilter, StaticCapabilities } from "./connectors/types.js";
+import type { SkillStore, SkillStatus, SkillListFilter, StaticCapabilities, ManifestInfo } from "./connectors/types.js";
 import { VALID_SKILL_STATUSES, isSkillStatus } from "./connectors/types.js";
 import { buildSkillCatalog } from "./skill-catalog.js";
 import type { Scheduler, ResolvableTriggerSource, TriggerRegistration } from "./scheduler.js";
@@ -834,16 +834,16 @@ export class McpServer {
     if (want("runtimeVersion")) out["runtimeVersion"] = this.version;
     if (want("runtimeMode")) out["runtimeMode"] = this.deps.runtimeMode ?? "dashboard";
     if (want("triggersFilePath")) out["triggersFilePath"] = this.deps.triggersFilePath ?? null;
-    if (want("skillStores")) out["skillStores"] = reg ? reg.listSkillStores().map((e) => describeEntry(e)) : [];
-    if (want("dataStores")) out["dataStores"] = reg ? reg.listDataStores().map((e) => describeEntry(e)) : [];
-    if (want("localModels")) out["localModels"] = reg ? reg.listLocalModels().map((e) => describeEntry(e)) : [];
+    if (want("skillStores")) out["skillStores"] = reg ? await Promise.all(reg.listSkillStores().map((e) => describeEntry(e))) : [];
+    if (want("dataStores")) out["dataStores"] = reg ? await Promise.all(reg.listDataStores().map((e) => describeEntry(e))) : [];
+    if (want("localModels")) out["localModels"] = reg ? await Promise.all(reg.listLocalModels().map((e) => describeEntry(e))) : [];
     if (want("mcpConnectors")) {
       // v0.4.1 — surface `allowed_tools` per connector (or null when allow-all).
       out["mcpConnectors"] = reg
-        ? reg.listMcpConnectors().map((e) => ({
-            ...describeEntry(e),
+        ? await Promise.all(reg.listMcpConnectors().map(async (e) => ({
+            ...(await describeEntry(e)),
             allowed_tools: e.allowedTools ?? null,
-          }))
+          })))
         : [];
     }
     if (want("mcpConnectorClasses")) {
@@ -854,7 +854,7 @@ export class McpServer {
       // CHANGELOG-tracked runtime releases.
       out["mcpConnectorClasses"] = listKnownConnectorClasses();
     }
-    if (want("agentConnectors")) out["agentConnectors"] = reg ? reg.listAgentConnectors().map((e) => describeEntry(e)) : [];
+    if (want("agentConnectors")) out["agentConnectors"] = reg ? await Promise.all(reg.listAgentConnectors().map((e) => describeEntry(e))) : [];
     if (want("shellExecution")) {
       // The runtime has no fixed command allowlist — `shell(command=...)` ops
       // are structurally sandboxed via direct spawn (no shell expansion). Bash
@@ -882,9 +882,27 @@ function severityToTier(severity: "error" | "warning" | "info"): 1 | 2 | 3 {
   }
 }
 
-function describeEntry<C extends { staticCapabilities(): StaticCapabilities }>(
-  entry: { name: string; ctor: C },
-): { name: string; implementation: string; contract_version: string; connector_type: string; features: Record<string, boolean> } {
+// v0.16.3 — three states for the `manifest` field:
+//   1. Working: `manifest: {...}` (probed via instance.manifest())
+//   2. Runtime failure: `manifest: null, manifest_error: "<message>"` (manifest() threw)
+//   3. Structural absence: `manifest: null, manifest_unsupported: true` (contract has no manifest())
+// AgentConnector is the structural-absence case per v0.9.6 audit (no manifest() on the contract);
+// the distinction matters so dashboards can differentiate "instance broken, ping operator" from
+// "kind doesn't support, by design". Per Perry's `d5bba09f`.
+type DescribeEntryResult = {
+  name: string;
+  implementation: string;
+  contract_version: string;
+  connector_type: string;
+  features: Record<string, boolean>;
+  manifest: ManifestInfo | null;
+  manifest_error?: string;
+  manifest_unsupported?: true;
+};
+
+async function describeEntry<C extends { staticCapabilities(): StaticCapabilities }>(
+  entry: { name: string; ctor: C; instance?: unknown },
+): Promise<DescribeEntryResult> {
   let caps: StaticCapabilities;
   try {
     caps = entry.ctor.staticCapabilities();
@@ -895,15 +913,28 @@ function describeEntry<C extends { staticCapabilities(): StaticCapabilities }>(
       contract_version: "unknown",
       connector_type: "unknown",
       features: {},
+      manifest: null,
+      manifest_error: "staticCapabilities() threw",
     };
   }
-  return {
+  const base = {
     name: entry.name,
     implementation: caps.implementation,
     contract_version: caps.contract_version,
     connector_type: caps.connector_type,
     features: caps.features,
   };
+  const maybeManifest = (entry.instance as { manifest?: unknown } | undefined)?.manifest;
+  if (typeof maybeManifest !== "function") {
+    return { ...base, manifest: null, manifest_unsupported: true };
+  }
+  try {
+    const manifest = (await (maybeManifest as () => Promise<ManifestInfo>).call(entry.instance)) as ManifestInfo;
+    return { ...base, manifest };
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    return { ...base, manifest: null, manifest_error: message };
+  }
 }
 
 function errorResponse(id: number | string | null, code: number, message: string): JsonRpcErrorResponse {

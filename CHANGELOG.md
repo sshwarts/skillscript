@@ -1,5 +1,97 @@
 # Changelog
 
+## 0.16.3 — 2026-06-02 — Substrate-general manifest exposure on `runtime_capabilities`
+
+**Discovery surface fix.** Closes the structural-half of v0.16.2's P0 (the
+routing fix shipped without the discovery half: `runtime_capabilities`
+returned byte-identical entries for distinct LocalModel instances, so
+adopters had no way to inspect which underlying model each alias was
+bound to). Empirically scoped via warm-adopter audit: the discovery-
+opacity pattern was uniform across **every** substrate slot, not just
+LocalModel. SkillStore/DataStore/LocalModel/McpConnector all exposed only
+their static capabilities; the dynamic `manifest()` payload — endpoint,
+default_model, supported_filters, root_dir, tools_available, etc. — was
+unreadable from `runtime_capabilities`.
+
+**Fix:** `runtime_capabilities` now folds each registered connector
+instance's `manifest()` payload into its entry, alongside the existing
+`features` field. One structural fix, applied uniformly across all
+slots.
+
+**Three observable states per entry:**
+
+1. **Working** — `manifest: {capabilities_version, manifest:{...}}`
+   probed via `instance.manifest()`.
+2. **Runtime failure** — `manifest: null, manifest_error: "<message>"`
+   when `instance.manifest()` throws (substrate unreachable, parse
+   error, etc.). Distinct from #3 so dashboards can differentiate
+   "instance broken, ping operator" from "by design".
+3. **Structural absence** — `manifest: null, manifest_unsupported: true`
+   for AgentConnector entries. The v0.9.6 audit excluded `manifest()`
+   from the `AgentConnector` contract; the type system enforces this
+   (`ManifestInfo` is `Exclude<ConnectorType, "agent_connector">`).
+   Separate sentinel preserves the structural-absence vs. runtime-
+   failure distinction.
+
+**Bridge wraps convention rides through.** The bundled bridge connectors
+(`LocalModelMcpConnector`, `DataStoreMcpConnector`, `SkillStoreMcpConnector`)
+already implement a `manifest().wraps` convention that re-exposes the
+underlying substrate's full manifest. Capabilities now reads this — a
+bridge entry's `manifest.manifest.wraps` carries the full inner-substrate
+manifest. Adopters writing custom bridges get this automatically by
+returning `{kind, wraps: await innerSubstrate.manifest()}` from their
+`manifest()`.
+
+### Why this scope vs. a LocalModel-only patch
+
+The warm-adopter audit (`bfd776a9`) ran the manifest-vs-capabilities
+diff across all four supported substrate slots and found the same
+discovery-opacity pattern in every one. Patching LocalModel only would
+have left three substrate slots opaque + introduced a "fix-one-then-
+retrofit-three" pattern. The structural fix closes all of them in one
+pass.
+
+### Internal
+
+- `describeEntry` in `src/mcp-server.ts:885` becomes async + probes
+  `instance.manifest()` per entry with try/catch error handling. Five
+  call sites in `runtimeCapabilities()` lines 837-857 awaited.
+- `manifest`/`manifest_error`/`manifest_unsupported` typed in new
+  `DescribeEntryResult` return shape; AgentConnector entries get the
+  `manifest_unsupported:true` sentinel via the runtime check on
+  `entry.instance.manifest` not being a function (the type system
+  already enforces the absence on `AgentConnector`).
+- `src/index.ts` re-exports bridge classes (`LocalModelMcpConnector`,
+  `DataStoreMcpConnector`, `SkillStoreMcpConnector`) from root so the
+  `examples/custom-bootstrap.example.ts` reference comment resolves
+  without a sub-path import. Adopter-facing first-touch carry-over from
+  `e152851e`.
+- `examples/onboarding-scaffold/bootstrap.ts` + `examples/custom-bootstrap.example.ts`
+  thread `Registry` into the `LocalModelMcpConnector` constructor +
+  comment-document the registry-alias resolution.
+- +8 tests in `tests/v0.16.3-manifest-exposure.test.ts` covering all
+  three states across every substrate slot. 1434 tests passing
+  (was 1426 at v0.16.2).
+
+### Counting
+
+This is the 10th instance of the discipline-only-contracts class closed
+since `d0fb1375`. v0.16 series total: 5 closures
+(canonicalization / trust-boundary / parity / bridge-routing / manifest-exposure).
+
+### Process note — checkpoint-before-code
+
+This ring validated the cold-pickup checkpoint discipline. Prior session
+ran out of context with v0.16.3 scoped but uncoded; this session
+reconstructed the plan from durable banks + filed it back for sign-off
+before any code. Surfaced two contract details that would otherwise have
+shipped wrong-shape: (a) AgentConnector has no `manifest()` per v0.9.6,
+which invalidated the original "include 5 slots for symmetry" sign-off
+assumption; (b) field-shape decision (separate `manifest_unsupported`
+sentinel vs. unified `manifest_error`) needed an explicit choice for
+dashboard consumers. Banked as a feedback memory; pattern continues to
+earn its keep.
+
 ## 0.16.2 — 2026-06-02 — P0 fix: `$ llm model=X` registry-alias resolution
 
 **P0 bug fix.** v0.16.1 documented `$ llm prompt="..." model="X"` as the
