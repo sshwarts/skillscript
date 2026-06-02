@@ -204,7 +204,10 @@ export function defaultRegistry(opts: DefaultRegistryOpts): { registry: Registry
   // Adopters override by re-registering the bridge name post-bootstrap OR
   // by adding entries to connectors.json (which loads after defaultRegistry).
   if (registry.hasLocalModel("default")) {
-    registry.registerMcpConnector("llm", new LocalModelMcpConnector(registry.getLocalModel("default")));
+    // Pass the registry handle so `$ llm prompt="..." model="X"` resolves
+    // X to a registered LocalModel alias when X matches one. Falls through
+    // to the default LocalModel when X is unset or doesn't resolve.
+    registry.registerMcpConnector("llm", new LocalModelMcpConnector(registry.getLocalModel("default"), registry));
   }
   if (dataStore !== undefined) {
     // v0.8.0 — register the SAME bridge instance under both names so

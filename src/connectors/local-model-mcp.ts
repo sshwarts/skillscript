@@ -22,6 +22,7 @@
 // by re-registering "llm" with their own bridge instance OR a different
 // MCP connector entirely.
 
+import type { Registry } from "./registry.js";
 import type {
   McpConnector,
   McpDispatchCtx,
@@ -47,8 +48,8 @@ export class LocalModelMcpConnector implements McpConnector {
   }
 
   /**
-   * v0.9.1 — declared tool surface. The bridge dispatches a single
-   * canonical entry point: the `prompt` tool, taking a `prompt` kwarg.
+   * Declared tool surface. The bridge dispatches a single canonical
+   * entry point: the `prompt` tool, taking a `prompt` kwarg.
    * Bare-form `$ llm prompt=...` name-matches and bypasses this surface;
    * qualified `$ llm.prompt prompt=...` validates against this list.
    * Qualified `$ llm.tweet_post ...` etc. fails lint with `unknown-tool-on-connector`.
@@ -57,7 +58,18 @@ export class LocalModelMcpConnector implements McpConnector {
     return ["prompt"];
   }
 
-  constructor(private readonly localModel: LocalModel) {}
+  /**
+   * Bridge accepts a default LocalModel (the registered "default" instance,
+   * by convention) AND optionally the Registry. When the Registry is
+   * threaded through, `model=X` resolves to `registry.getLocalModel(X)` so
+   * skills can target any registered LocalModel by alias. Without the
+   * Registry (back-compat construction), `model=X` falls through as an
+   * upstream hint to the default LocalModel's `.run()` (e.g., Ollama tag).
+   */
+  constructor(
+    private readonly localModel: LocalModel,
+    private readonly registry?: Registry,
+  ) {}
 
   async call(
     _toolName: string,
@@ -76,9 +88,28 @@ export class LocalModelMcpConnector implements McpConnector {
       const n = parseInt(rawMaxTokens, 10);
       if (Number.isFinite(n) && n > 0) opts.maxTokens = n;
     }
+    // Model selection: when a Registry handle is available, try to
+    // resolve `model=X` to a registered LocalModel alias. On hit, dispatch
+    // through THAT instance and DON'T forward `model=` further (the
+    // resolved LocalModel IS the target — passing model= as upstream
+    // hint would re-route inside the substrate). On miss (or no registry),
+    // fall through to the default LocalModel with `model=X` as an upstream
+    // hint for substrate-internal interpretation (Ollama tag, etc.).
+    let target: LocalModel = this.localModel;
     const rawModel = args["model"];
-    if (typeof rawModel === "string" && rawModel !== "") opts.model = rawModel;
-    return this.localModel.run(prompt, opts);
+    if (typeof rawModel === "string" && rawModel !== "") {
+      if (this.registry !== undefined) {
+        try {
+          target = this.registry.getLocalModel(rawModel);
+        } catch {
+          // Alias didn't resolve — pass through as upstream hint.
+          opts.model = rawModel;
+        }
+      } else {
+        opts.model = rawModel;
+      }
+    }
+    return target.run(prompt, opts);
   }
 
   async manifest(): Promise<ManifestInfo<"mcp_connector">> {

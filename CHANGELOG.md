@@ -1,5 +1,64 @@
 # Changelog
 
+## 0.16.2 — 2026-06-02 — P0 fix: `$ llm model=X` registry-alias resolution
+
+**P0 bug fix.** v0.16.1 documented `$ llm prompt="..." model="X"` as the
+way to dispatch to a non-default LocalModel, but the bridge silently
+ignored `model=` and routed every call to the default LocalModel
+regardless of value. Empirically caught by the warm-adopter dogfood —
+`/api/ps` showed gemma2:9b handling a request explicitly marked
+`model="qwen"`. Worst case is dangerous in combination with a
+fast-fragile default model: production skills that explicitly chose a
+larger/slower model for accuracy silently downgrade to the default with
+no error.
+
+**Root cause:** `LocalModelMcpConnector` constructor took one
+`LocalModel` instance reference (the default), then forwarded
+`opts.model` to that single instance's `.run()` — the LocalModel
+backend (Ollama in the bundled case) interpreted `model=` as its own
+upstream model tag, not as a skillscript-registered alias. Bridge had
+no Registry handle, so it couldn't dispatch to a different registered
+LocalModel.
+
+**Fix:** thread `Registry` through the bridge constructor as an optional
+second argument. When the Registry is available, `model=X` resolves to
+`registry.getLocalModel(X)` and dispatch goes through THAT instance
+(with `model=` NOT forwarded — the resolved LocalModel is the target,
+not a hint). Fallthrough when X doesn't resolve: pass `model=X` as an
+upstream hint to the default LocalModel's `.run()` (back-compat for
+Ollama-tag-style usage). Bootstrap now threads the Registry into the
+default bridge construction.
+
+**Three-test discipline applied** per the warm-adopter framing:
+- Runtime test: `$ llm model="qwen"` against a registered `qwen`
+  LocalModel dispatches to qwen, not default.
+- E2E test: model-distinguishing observable (each test LocalModel
+  returns its own identity in the response) confirms which instance
+  handled the request.
+- Lint coverage (`unknown-llm-model`) deferred to v0.16.3 alongside the
+  rest of the typed-contract kwarg lints — model-name typos vs.
+  routing correctness are independent failure modes.
+
+### Internal
+
+- `LocalModelMcpConnector` constructor: second `Registry?` arg
+  (optional for back-compat — existing test fixtures and adopter forks
+  constructing with one arg continue working unchanged).
+- `bootstrap.ts:207` threads `registry` into the auto-wired `llm`
+  bridge.
+- +6 runtime tests in `tests/local-model-mcp-model-routing.test.ts`
+  covering: alias resolution, default fallthrough, no-forward when
+  resolved, fallthrough as upstream hint on unresolved name, back-compat
+  no-registry path, kwarg pass-through with `maxTokens`.
+- 1426 tests passing (was 1420 at v0.16.1).
+
+### Counting
+
+This is the 9th instance of the discipline-only-contracts class closed
+since `d0fb1375`. Pattern continues — the documented `model=` surface
+was named in vocabulary but unenforced in code. The runtime mismatch
+surfaced empirically through Perry's warm-adopter probe.
+
 ## 0.16.1 — 2026-06-02 — Trust-boundary discipline + parser hardening
 
 Theme: closes the 7-finding code-smell audit banked in v0.16.0's §32
