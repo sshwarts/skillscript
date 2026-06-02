@@ -7,8 +7,8 @@
  *
  * Usage: node scripts/stamp-examples.mjs
  */
-import { readFileSync, writeFileSync, readdirSync } from "node:fs";
-import { join, resolve } from "node:path";
+import { readFileSync, writeFileSync, readdirSync, statSync } from "node:fs";
+import { join, resolve, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const __dirname = fileURLToPath(new URL(".", import.meta.url));
@@ -52,25 +52,35 @@ function stampBody(body) {
 
 const SCAN_DIRS = ["examples", "scaffold/examples"];
 
+function* walkSkillFiles(absDir) {
+  let entries;
+  try {
+    entries = readdirSync(absDir, { withFileTypes: true });
+  } catch {
+    return;
+  }
+  for (const entry of entries) {
+    const p = join(absDir, entry.name);
+    if (entry.isDirectory()) {
+      yield* walkSkillFiles(p);
+    } else if (entry.isFile() && entry.name.endsWith(".skill.md")) {
+      yield p;
+    }
+  }
+}
+
 let count = 0;
 for (const rel of SCAN_DIRS) {
   const abs = join(repoRoot, rel);
-  let entries;
-  try {
-    entries = readdirSync(abs);
-  } catch {
-    continue;
-  }
-  for (const name of entries) {
-    if (!name.endsWith(".skill.md")) continue;
-    const p = join(abs, name);
+  try { statSync(abs); } catch { continue; }
+  for (const p of walkSkillFiles(abs)) {
     const src = readFileSync(p, "utf8");
     if (!/^\s*#\s*Status\s*:\s*Approved\b/m.test(src)) continue;
     const next = stampBody(src);
     if (next !== src) {
       writeFileSync(p, next, "utf8");
       count++;
-      console.log(`stamped ${rel}/${name}`);
+      console.log(`stamped ${relative(repoRoot, p)}`);
     }
   }
 }

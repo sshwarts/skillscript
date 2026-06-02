@@ -1,6 +1,6 @@
 # Skill: morning-brief
-# Status: Approved v1:091ae2ae
-# Description: Compose a daily morning brief from calendar, mailbox, and overnight data writes when the cron trigger fires at 7am. Delivers via the agent: lifecycle hook to the receiving agent, who decides whether to surface to Slack / Discord / etc.
+# Status: Approved v1:a08d0f21
+# Description: Compose a daily morning brief from calendar, mailbox, and overnight data writes when the cron trigger fires at 7am. Delivers via the agent: lifecycle hook to the receiving agent, who decides whether to surface to Slack / Discord / etc. The `model=qwen` value below is a representative alias — adopters register a LocalModel under whatever name fits their setup (the bundled bootstrap registers one as `default`).
 # Vars: AGENT, BRIEF_HORIZON_HOURS=24
 # Triggers: cron: 0 7 * * *
 # OnError: morning-brief-degraded
