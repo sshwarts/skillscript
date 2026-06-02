@@ -2,11 +2,12 @@
 
 A skeleton `McpConnector` implementation for adopters writing their own. Not runnable; every method throws a `TODO` error. Copy this directory, rename, fill in the substrate-specific work.
 
-**Most adopters don't need this template.** Four bundled impls already cover the common cases:
+**Most adopters don't need this template.** Bundled impls already cover the common cases:
 
 | Bundled impl | What it covers |
 |---|---|
-| `RemoteMcpConnector` | Stdio bridging to remote MCP servers (`npx mcp-remote ...`). YouTrack, GitHub, Linear, most adopter MCP wiring goes through this. JSON-configurable via `connectors.json`. |
+| `HttpMcpConnector` | Speaks Streamable HTTP MCP (JSON-RPC over HTTP + SSE) directly — no subprocess. Works against any compliant HTTP MCP server (Anthropic's hosted MCP, GitHub MCP, Linear MCP, etc.). JSON-configurable via `connectors.json`. |
+| `RemoteMcpConnector` | Stdio bridging to remote MCP servers (`npx mcp-remote ...`). For MCPs distributed as binaries you spawn (YouTrack, GitHub, Linear when run locally) or HTTP MCPs that need an HTTPS-to-stdio adapter. JSON-configurable. |
 | `CallbackMcpConnector` | Wraps a JS function. Test rigs + embedder-wired transports where the dispatch is local code. |
 | `LocalModelMcpConnector` | Bridges a registered `LocalModel` as `$ llm prompt=...`. Auto-wired when `substrate.local_model` is set. |
 | `DataStoreMcpConnector` | Bridges a registered `DataStore` as `$ data_read mode=...` + `$ data_write content=...`. Auto-wired when `substrate.data_store` is set. |
@@ -14,15 +15,15 @@ A skeleton `McpConnector` implementation for adopters writing their own. Not run
 
 **Fork this template only when none of those fit** — e.g.:
 
-- Direct HTTP MCP (JSON-RPC over HTTP, no child process) — for now; check the bundled `McpConnector` classes before forking, as a bundled `HttpMcpConnector` is on the near-term roadmap
 - WebSocket MCP
 - In-process MCP (call methods directly without IPC)
-- Custom transport that doesn't match stdio framing
+- Custom transport that doesn't match stdio framing or Streamable HTTP
 - Cross-thread / worker-pool dispatch
+- An HTTP MCP server that diverges from the spec (custom auth handshake, non-SSE response framing, tool-name normalization, etc.) in ways `HttpMcpConnector` doesn't expose
 
-If you're trying to wire a remote stdio MCP server like YouTrack or GitHub, **you want `RemoteMcpConnector` in `connectors.json`**, not this template. See `connectors.json.example` for the wiring pattern.
+If you're trying to wire a remote stdio MCP server like YouTrack or GitHub run locally, **you want `RemoteMcpConnector` in `connectors.json`**, not this template. See `connectors.json.example` for the wiring pattern.
 
-If you're trying to wire a Streamable HTTP MCP server (AMP, Anthropic's hosted MCP, etc.), the simplest path today is `RemoteMcpConnector` + `npx mcp-remote https://... --sse` (bridges HTTPS-SSE into stdio via a node subprocess). For lower overhead (no subprocess layer) check whether a bundled `HttpMcpConnector` is available in your installed runtime version — if so, declare an instance in `connectors.json` rather than forking this template.
+If you're trying to wire a Streamable HTTP MCP server (Anthropic's hosted MCP, GitHub MCP via HTTPS, etc.), **declare an `HttpMcpConnector` instance in `connectors.json`** — no subprocess, no implementation. See `docs/adopter-playbook.md` §Case 2 path (b) for the full shape.
 
 ## Forking workflow
 

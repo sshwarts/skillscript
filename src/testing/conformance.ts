@@ -365,6 +365,243 @@ export const AgentConnectorConformance = {
   },
 };
 
+// ─── runtime_capabilities ─────────────────────────────────────────────────
+//
+// v0.16.5 — Conformance suite for the `runtime_capabilities` discovery
+// surface. Different shape from the per-connector suites above: instead of
+// validating a single connector against its contract, this validates the
+// runtime AS A WHOLE — schema correctness across all five substrate slots +
+// the 3-state manifest schema (working / manifest_error / manifest_unsupported)
+// from v0.16.3 + adopter-supplied execution-path probes paired with the
+// capability flags they declare.
+//
+// Closes the long-running discipline-only-contracts pattern called out in
+// Perry's `adf47c0b`: every flag in `runtime_capabilities` must have a
+// matching execution-path probe test. Without lockstep enforcement, the
+// "lint passes, runtime fails" multi-layer-promise pattern keeps recurring
+// (5 instances pre-v0.15.4; now structurally closable).
+
+/**
+ * Minimal `mcpServer` surface the conformance fixture talks to. The wired
+ * runtime exposes far more than this — fixture only needs JSON-RPC handle()
+ * to call `runtime_capabilities` + `tools/list`.
+ */
+export interface RuntimeCapabilitiesFixtureRuntime {
+  mcpServer: {
+    handle(request: {
+      jsonrpc: "2.0";
+      id: number | string;
+      method: string;
+      params?: Record<string, unknown>;
+    }): Promise<unknown>;
+  };
+}
+
+/**
+ * Per-flag execution-path probe. Adopters provide a probe per capability
+ * flag they declare in `runtime_capabilities`. The probe exercises the
+ * runtime dispatch path that the flag claims to govern + throws if the
+ * declared discipline isn't actually honored.
+ *
+ * Flag paths use dot-notation matching the `runtime_capabilities` response
+ * shape: `shellExecution.unsafe_enabled`, `localModels[0].features.supports_streaming`,
+ * etc. Adopter chooses which flags to probe; the fixture's `requiredFlags`
+ * arg lets you enforce coverage on a specific subset.
+ */
+export type RuntimeCapabilityProbe = (runtime: RuntimeCapabilitiesFixtureRuntime) => Promise<void>;
+
+export interface RuntimeCapabilitiesFixture {
+  /**
+   * Build the wired runtime under test. Called once per generated
+   * ConformanceTest. Fixture is responsible for `teardown` cleanup if
+   * the runtime allocates resources (file handles, sqlite connections,
+   * etc.).
+   */
+  buildRuntime(): Promise<RuntimeCapabilitiesFixtureRuntime> | RuntimeCapabilitiesFixtureRuntime;
+  teardown?(runtime: RuntimeCapabilitiesFixtureRuntime): Promise<void> | void;
+  /**
+   * Per-flag execution-path probes. Map flag path → probe function. The
+   * fixture runs each probe + asserts no error thrown.
+   */
+  flagProbes?: Record<string, RuntimeCapabilityProbe>;
+  /**
+   * Flag paths that MUST appear in `flagProbes`. If any required flag has
+   * no probe, the coverage test fails — forces adopters to wire BOTH the
+   * capability declaration AND the dispatch-path probe in lockstep.
+   *
+   * This is the load-bearing piece per Perry's `adf47c0b`: it makes the
+   * discipline-only-contracts pattern structurally hard rather than
+   * relying on author diligence.
+   */
+  requiredFlags?: string[];
+}
+
+export const RuntimeCapabilitiesConformance = {
+  buildTests(fixture: RuntimeCapabilitiesFixture): ConformanceTest[] {
+    const tests: ConformanceTest[] = [];
+
+    // ─── Schema tests — verify the runtime_capabilities response shape ──
+    tests.push({
+      category: "return-type",
+      name: "runtime_capabilities returns a JSON object with runtimeVersion + runtimeMode",
+      run: withRuntime(fixture, async (runtime) => {
+        const caps = await callRuntimeCapabilities(runtime);
+        assert(typeof caps["runtimeVersion"] === "string", "runtimeVersion must be string");
+        assert(typeof caps["runtimeMode"] === "string", "runtimeMode must be string");
+      }),
+    });
+
+    tests.push({
+      category: "return-type",
+      name: "every substrate-slot entry has 5 required fields + the v0.16.3 manifest field",
+      run: withRuntime(fixture, async (runtime) => {
+        const caps = await callRuntimeCapabilities(runtime);
+        for (const slot of ["skillStores", "dataStores", "localModels", "mcpConnectors", "agentConnectors"] as const) {
+          const entries = caps[slot];
+          assert(Array.isArray(entries), `${slot} must be an array (got ${typeof entries})`);
+          for (const entry of entries as Array<Record<string, unknown>>) {
+            assert(typeof entry["name"] === "string", `${slot}[].name must be string`);
+            assert(typeof entry["implementation"] === "string", `${slot}[].implementation must be string`);
+            assert(typeof entry["contract_version"] === "string", `${slot}[].contract_version must be string`);
+            assert(typeof entry["connector_type"] === "string", `${slot}[].connector_type must be string`);
+            assert(typeof entry["features"] === "object", `${slot}[].features must be object`);
+            assert("manifest" in entry, `${slot}[].manifest field must be present (v0.16.3 schema)`);
+          }
+        }
+      }),
+    });
+
+    tests.push({
+      category: "return-type",
+      name: "every entry's manifest field is in exactly one of the three v0.16.3 states",
+      run: withRuntime(fixture, async (runtime) => {
+        const caps = await callRuntimeCapabilities(runtime);
+        for (const slot of ["skillStores", "dataStores", "localModels", "mcpConnectors", "agentConnectors"] as const) {
+          for (const entry of (caps[slot] as Array<Record<string, unknown>>) ?? []) {
+            const m = entry["manifest"];
+            const hasError = typeof entry["manifest_error"] === "string";
+            const isUnsupported = entry["manifest_unsupported"] === true;
+            if (m !== null && m !== undefined) {
+              // State 1: working manifest. Must be an object with capabilities_version.
+              assert(typeof m === "object", `${slot}[${String(entry["name"])}].manifest must be object when present (got ${typeof m})`);
+              assert(!hasError, `${slot}[${String(entry["name"])}] has both manifest data AND manifest_error — pick one`);
+              assert(!isUnsupported, `${slot}[${String(entry["name"])}] has both manifest data AND manifest_unsupported — pick one`);
+            } else {
+              // State 2 (manifest_error) or State 3 (manifest_unsupported) — exactly one must be set.
+              const stateCount = (hasError ? 1 : 0) + (isUnsupported ? 1 : 0);
+              assert(stateCount === 1, `${slot}[${String(entry["name"])}].manifest is null but neither manifest_error nor manifest_unsupported is set (or both are) — got ${stateCount} flags`);
+            }
+          }
+        }
+      }),
+    });
+
+    tests.push({
+      category: "return-type",
+      name: "AgentConnector entries use manifest_unsupported (never manifest_error) — v0.9.6 audit",
+      run: withRuntime(fixture, async (runtime) => {
+        const caps = await callRuntimeCapabilities(runtime);
+        for (const entry of (caps["agentConnectors"] as Array<Record<string, unknown>>) ?? []) {
+          assert(entry["manifest"] === null, `agentConnectors[${String(entry["name"])}].manifest must be null (contract has no manifest())`);
+          assert(entry["manifest_unsupported"] === true, `agentConnectors[${String(entry["name"])}] must set manifest_unsupported:true (structural absence per v0.9.6 audit)`);
+          assert(entry["manifest_error"] === undefined, `agentConnectors[${String(entry["name"])}] must NOT set manifest_error (it's a structural absence, not a runtime failure)`);
+        }
+      }),
+    });
+
+    tests.push({
+      category: "return-type",
+      name: "mcpConnectors entries include allowed_tools field (null or string[])",
+      run: withRuntime(fixture, async (runtime) => {
+        const caps = await callRuntimeCapabilities(runtime);
+        for (const entry of (caps["mcpConnectors"] as Array<Record<string, unknown>>) ?? []) {
+          assert("allowed_tools" in entry, `mcpConnectors[${String(entry["name"])}].allowed_tools field must be present`);
+          const at = entry["allowed_tools"];
+          assert(at === null || Array.isArray(at), `mcpConnectors[${String(entry["name"])}].allowed_tools must be null or string[]`);
+        }
+      }),
+    });
+
+    tests.push({
+      category: "feature-behavior",
+      name: "shellExecution surface declares mode + unsafe_enabled fields",
+      run: withRuntime(fixture, async (runtime) => {
+        const caps = await callRuntimeCapabilities(runtime);
+        const shell = caps["shellExecution"] as Record<string, unknown> | undefined;
+        assert(shell !== undefined, "shellExecution surface must be present");
+        assert(typeof shell["mode"] === "string", "shellExecution.mode must be string");
+        assert(typeof shell["unsafe_enabled"] === "boolean", "shellExecution.unsafe_enabled must be boolean");
+      }),
+    });
+
+    // ─── Flag-probe orchestration tests (the discipline-only-contracts close) ──
+    const flagProbes = fixture.flagProbes ?? {};
+    const requiredFlags = fixture.requiredFlags ?? [];
+
+    for (const [flagPath, probe] of Object.entries(flagProbes)) {
+      tests.push({
+        category: "feature-behavior",
+        name: `flag '${flagPath}': execution-path probe succeeds`,
+        run: withRuntime(fixture, async (runtime) => {
+          await probe(runtime);
+        }),
+      });
+    }
+
+    if (requiredFlags.length > 0) {
+      tests.push({
+        category: "feature-behavior",
+        name: "coverage: every required flag has an execution-path probe",
+        run: async () => {
+          const missing = requiredFlags.filter((f) => !(f in flagProbes));
+          assert(
+            missing.length === 0,
+            `Required flags missing execution-path probes: ${missing.join(", ")}. ` +
+              `Each capability flag in runtime_capabilities must have a matching dispatch-path probe so the ` +
+              `discipline-only-contracts class is structurally enforced. Add probe entries to fixture.flagProbes ` +
+              `for the listed flags, OR drop them from fixture.requiredFlags if they're aspirational.`,
+          );
+        },
+      });
+    }
+
+    return tests;
+  },
+};
+
+async function callRuntimeCapabilities(runtime: RuntimeCapabilitiesFixtureRuntime): Promise<Record<string, unknown>> {
+  const resp = await runtime.mcpServer.handle({
+    jsonrpc: "2.0",
+    id: 1,
+    method: "tools/call",
+    params: {
+      name: "runtime_capabilities",
+      arguments: {
+        include: ["runtimeVersion", "runtimeMode", "skillStores", "dataStores", "localModels", "mcpConnectors", "agentConnectors", "shellExecution"],
+      },
+    },
+  });
+  const r = resp as { result?: { content?: Array<{ text?: string }> }; error?: unknown };
+  assert(r.error === undefined, `runtime_capabilities returned JSON-RPC error: ${JSON.stringify(r.error)}`);
+  const text = r.result?.content?.[0]?.text;
+  assert(typeof text === "string", "runtime_capabilities reply must carry content[0].text");
+  return JSON.parse(text) as Record<string, unknown>;
+}
+
+function withRuntime(
+  fixture: RuntimeCapabilitiesFixture,
+  body: (runtime: RuntimeCapabilitiesFixtureRuntime) => Promise<void>,
+): () => Promise<void> {
+  return async () => {
+    const runtime = await fixture.buildRuntime();
+    try {
+      await body(runtime);
+    } finally {
+      if (typeof fixture.teardown === "function") await fixture.teardown(runtime);
+    }
+  };
+}
+
 // ─── Shared assertion helpers ─────────────────────────────────────────────
 
 function assert(condition: unknown, message: string): asserts condition {

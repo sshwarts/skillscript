@@ -14,6 +14,10 @@ These are features designed or anticipated but not yet implemented in the curren
 - **`while CONDITION:` loops** — today's iteration is `foreach IDENT in EXPR:` only. While loops are planned for ad-hoc orchestration patterns ("loop until response contains 'done'").
 - **Arithmetic in `$set`** — today accepts literals + `${VAR}` interpolation; no `+ - * /` operators. Planned alongside `while` for turn counters and orchestration bookkeeping.
 
+## Array aggregation primitives
+
+`|max`, `|min`, `|sum`, `|reduce` pipe-filters over arrays. Today the language tops out at "shape one record" — aggregating across an array requires `foreach` accumulator ceremony. Warm-agent Phase 3 weather skill (2026-06-01) couldn't do `Math.max(hourly.chanceofrain)` without the workaround. Planned as a design question: is `foreach` the deliberate ceiling for aggregation, or do we add primitives?
+
 ## Strings
 
 - **Multi-line / heredoc string literals** — today's `emit(text="...")` accepts single-line strings or `\n`-escaped multi-line. Planned: Python-style triple-quote `emit(text="""...""")` for ad-hoc prose blocks in template-kind skills.
@@ -47,10 +51,6 @@ $set NAME = value scope=session
 ```
 
 Scopes: skill-local (persists across fires of this skill, not visible to other skills), agent-global (visible to all skills of the same agent), session (alive for the duration of the current session, cleared at session end). Backed by a configured data-records connector.
-
-## Per-skill / per-op timeouts
-
-`# Timeout:` skill-level header + per-op `timeoutSeconds=N` kwarg + runtime defaults. Hung dispatches today have no timeout cap.
 
 ## Sensors as a language category
 
@@ -86,6 +86,7 @@ Most "right time" reasoning is relative, not wall-clock.
 - **Channel/locality awareness** — `$(CHANNEL_TYPE)`, `$(CHANNEL_PRIVACY)` ambient refs for routing decisions
 - **Introspection primitives** — `$(PROMPT_CONTEXT.size)`, `$(SKILLS_FIRED_RECENTLY.last-1h)`, `$(SELF.confidence-trend)`
 - **Capability declarations** — `# Requires-Capabilities: sensors=[mic, camera], tools=[...]` (audit surface for operators)
+- **`unknown-llm-arg` lint** — typo-catch for `$ llm` kwargs (today, unknown kwargs pass through silently to the connector). Sibling to the older `unknown-retrieval-arg` rule. Sharpening pass on `$ llm` typed-contract validation.
 
 ## When the language extends, this section shrinks
 
@@ -214,7 +215,7 @@ The following identifiers are reserved and cannot be used as variable names, tar
 
 **Mutation statements:** `$set`, `$append`
 
-**Runtime-intrinsic op names:** `emit`, `notify`, `ask`, `inline`, `execute_skill`, `shell`, `file_read`, `file_write` (the closed function-call list; see Ops Reference)
+**Runtime-intrinsic op names:** `emit`, `notify`, `inline`, `execute_skill`, `shell`, `file_read`, `file_write` (the closed function-call list; see Ops Reference)
 
 **Control flow:** `default`, `needs`, `if`, `elif`, `else`, `foreach`, `in`, `not`, `unsafe`
 
@@ -284,7 +285,7 @@ The op surface is three classes, each with its own grammar and resolution path.
 |---|---|---|
 | **Mutation statements** | `$set VAR = value`, `$append VAR <value>` | Reserved keywords (parser dispatches directly). |
 | **Runtime-intrinsic function-calls** | `verb(kwarg=value, ...) [-> BINDING]` | Closed built-in list (below). Unknown verb → tier-1 `unknown-runtime-op`. |
-| **External MCP dispatch** | `$ <connector>[.<tool>] kwarg=value, ... [-> BINDING]` | `connectors.json` resolution at compile. Unknown connector → tier-1 `unknown-connector`. See External MCP dispatch subsection below for flat vs dotted dispatch shape. |
+| **External MCP dispatch** | `$ <connector>.<tool> kwarg=value, ... [-> BINDING]` (substrate-specific) or `$ <tool> kwarg=value, ... [-> BINDING]` (typed-contract only) | `connectors.json` resolution at compile. Unknown connector → tier-1 `unknown-connector`. See External MCP dispatch subsection below for canonical form rules. |
 
 The `$` prefix is information-bearing: it marks **state-affecting ops** (mutation OR external dispatch). Function-call shape marks **language-intrinsic ops the runtime knows directly**. Parse-time discrimination is unambiguous — three grammars, three resolution paths, zero overlap.
 
@@ -359,7 +360,7 @@ Closed list of language-intrinsic ops the runtime knows directly. Each is a func
 | `file_read` | `file_read(path="...") -> R` | required | Read a file at `path`; binds string contents. |
 | `file_write` | `file_write(path="...", content="...")` | none | Write `content` to `path`. `mkdir -p` semantics for parent directories. Mutation-classified. |
 
-**Unknown op name** → tier-1 lint `unknown-runtime-op` with remediation pointing at MCP dispatch: "if this is an external tool, use `$ tool_name args -> R`."
+**Unknown op name** → tier-1 lint `unknown-runtime-op` with remediation pointing at MCP dispatch: "if this is an external tool, use `$ <connector>.<tool> args -> R`."
 
 ### `emit` — delivery-channel append
 
@@ -388,10 +389,6 @@ Synchronous alert to a named agent via wired AgentConnector(s). **Contrast with 
 - `connectors` — JSON array restricting which wired AgentConnector(s) receive the dispatch (optional)
 
 Returns ACK `{agent, dispatched: [{connector, ok, error?}]}` — fire-and-forget callers ignore the binding; check-delivery callers inspect ACK.
-
-### Removed in v0.16.0: `ask` runtime intrinsic
-
-`ask(prompt="...")` was removed because it conflated two unrelated concerns: (1) surfacing a question to a user, which requires an interactive channel the runtime can't guarantee for cron/event-fired skills, and (2) acting as a mutation gate. The mutation-gate role is now covered by per-op `approved="reason"` kwarg + skill-level `# Autonomous: true`. For input-collection workflows, use `emit(text="...")` and have the caller handle the round-trip.
 
 ### `shell` — sandboxed or unsafe shell exec
 
@@ -424,7 +421,7 @@ file_read(path="/tmp/state.json") -> STATE
 file_write(path="/tmp/report.md", content="${REPORT}", approved="nightly sweep deliverable")
 ```
 
-`file_read` is read-only (always allowed). `file_write` is mutation-classified — requires `# Autonomous: true` declaration on the skill OR per-call `approved="..."` kwarg OR a preceding `ask` gate in the same target. `mkdir -p` semantics for the parent directory.
+`file_read` is read-only (always allowed). `file_write` is mutation-classified — requires `# Autonomous: true` declaration on the skill OR per-call `approved="..."` kwarg. `mkdir -p` semantics for the parent directory.
 
 `unconfirmed-mutation` lint enforces the mutation-classification rule.
 
@@ -432,11 +429,11 @@ file_write(path="/tmp/report.md", content="${REPORT}", approved="nightly sweep d
 
 ```
 brief:
-    $ llm prompt="${VOICE_RULES} Now write a one-line status:" model=qwen -> RESULT
+    $ llm prompt="${VOICE_RULES} Now write a one-line status:" -> RESULT
     inline(skill="voice-rules")
 ```
 
-Inlines an Approved `# Type: data` skill into the host skill's compiled artifact at the call site. Resolved at `compile()` time; the data skill's `content_hash` is recorded in the host's provenance. `skillfile audit` detects stale recompiles when a referenced data skill changes.
+Inlines an Approved `# Type: data` skill into the host skill's compiled artifact at the call site. Resolved at `compile()` time; the data skill's `content_hash` is recorded in the host's provenance. `skillscript audit` detects stale recompiles when a referenced data skill changes.
 
 See Composition section for the distinction between `inline` (compile-time), `execute_skill` (in-skill runtime call), and dispatched skills.
 
@@ -455,43 +452,165 @@ Runtime-resolved against the SkillStore. Recursion-depth-guarded (default 10).
 
 Calls a tool through a configured connector. Connector name resolves against `connectors.json`. Output binds via optional `-> VAR`. Adopter-side contract details + connector wiring conventions live in the adopter playbook.
 
-### Two dispatch forms — flat and dotted
+### Dispatch form
 
-Both forms are first-class. Neither is canonical; choose by what makes the call site clearer.
-
-**Flat-name dispatch** is the common case. The tool name resolves against the wired connector (most often the `primary`/`default` connector's tool list, or a dedicated entry per tool):
+**Substrate-specific tools use named (dotted) form:**
 
 ```
-$ ticketing_search query="project:INFRA" -> R
-$ llm prompt="${INPUT}" -> V
-$ data_read mode=fts query="..." limit=5 -> M
+$ <connector>.<tool> kwarg=value, ... [-> R]
 ```
 
-**Dotted-prefix dispatch** is the explicit-routing escape hatch — useful when multiple connectors expose tools with overlapping names, or when an adopter wants the connector identity visible at the call site for audit clarity:
+The text before the dot is the connector name (must match an entry in `connectors.json`); the rest is the tool name + args. Named form is canonical for any tool whose semantics are substrate-specific — adopter MCP servers (`amp_*`, `github_*`, `linear_*`, etc.).
 
 ```
-$ ticketing.search query="project:INFRA" -> R
-$ data_read.query query="..." -> M
+$ amp.amp_check_mailbox limit=20 -> MAIL
+$ amp.amp_write_memory summary="..." domain_tags=["x"] vault="private" -> ACK
+$ github.search_issues query="repo:acme/foo state:open" -> ISSUES
+$ linear.find_issues filter="project:INFRA" -> TICKETS
 ```
 
-Parser rule: the text before the dot is the connector name (must match an entry in `connectors.json`); the rest is the tool + args.
+The skill body literally names its substrate edges — reading the body tells you which MCP servers it depends on, with no `primary` config indirection.
+
+**Typed-contract tools use bare form:**
+
+```
+$ <tool> kwarg=value, ... [-> R]
+```
+
+Bare form is reserved for ops with a typed runtime contract — the substrate variance is invisible to the skill body because the runtime dispatches through the contract.
+
+```
+$ data_read mode=fts query="${TOPIC}" limit=5 -> RESULTS
+$ data_write content="${SUMMARY}" tags=["nightly"] -> ACK
+$ skill_read name="hello-world" -> S
+$ skill_write name="child" source="..." overwrite=true -> W
+$ json_parse ${RAW_JSON} -> PARSED
+$ llm prompt="..." -> R
+```
+
+Typed-contract ops (`data_*`, `skill_*`, `json_parse`, `llm`) auto-wire from the adopter's `substrate.local_model` / `substrate.data_store` / `substrate.skill_store` config — the skill body doesn't know whether it's running against SQLite or Postgres or Pinecone. That's the point of the typed contract.
+
+**Lint rules:**
+- `unknown-connector` (tier-1) — `$ x.y` where `x` isn't wired. Lists wired connector names.
+- `bare-mcp-call` (tier-1) — `$ tool_x` where `tool_x` isn't a typed-contract op AND no `primary` connector is wired. Remediation: qualify as `$ <connector>.tool_x`.
+- `unverified-qualified-tool` (advisory) — `$ x.y` where connector `x` doesn't declare its tool surface statically. Runtime will resolve at call time.
+
+### Universal op-level kwargs
+
+Four surfaces apply to every `$` dispatch regardless of tool. The runtime intercepts these before forwarding the remaining kwargs to the connector.
+
+**`timeout=N`** — Per-op timeout in **seconds**. Integer literal or `${VAR}` ref. Resolution chain (most-specific wins):
+
+1. Per-op `timeout=N` kwarg
+2. Skill-level `# Timeout: N` header
+3. Absolute context default (runtime config)
+4. Built-in default
+
+```
+$ llm prompt="..." timeout=30 -> R
+$ amp.amp_olsen_task task_type="scan" timeout=120 -> DISPATCH
+```
+
+**`approved="<reason>"`** — Author-intent marker for the mutation-gate lint. Any non-empty string satisfies. Extracted at runtime; **not forwarded to the connector**. The value is required but not parsed semantically — presence is the signal.
+
+```
+$ data_write content="${REPORT}" tags=["oncall"] approved="morning roundup" -> ACK
+```
+
+**`(fallback: "value")` trailer** — Fires on dispatch throw OR empty bound value (empty string after trim, empty array, null/undefined). Coerce-on-bind: the fallback value binds to the output var transparently, downstream targets need no conditional. Permissive value parsing — bare identifiers, quoted strings, bracketed array literals all accepted.
+
+Note: an envelope object like `{items: []}` is a non-empty object and does NOT trigger the fallback even though its contained array is empty. To handle envelope-empty downstream, test the contained collection (`if ${R.items|length} == "0":`) or apply a filter (`${R.items|fallback:[]}`).
+
+```
+$ llm prompt="Classify: ${INPUT}" -> VERDICT (fallback: "unknown")
+$ amp.amp_query_memories query="${TOPIC}" -> RESULTS (fallback: [])
+$ ticketing.search query="..." -> ISSUES (fallback: "search-unavailable")
+```
+
+**`-> R` binding** — Optional output capture. Result string binds to `R` and to `${target}.output`. Omit when the dispatch is fire-and-forget.
+
+**Kwarg validation for typed-contract ops.** Two sibling lints close the kwarg surface — provider-API kwargs (e.g., `temperature=0.7` on `$ llm`) silently dropped by the bridge get caught at parse time:
+
+- `unknown-llm-arg` (tier-2) — `$ llm` carries a kwarg outside the canonical surface (`prompt`/`maxTokens`/`model`/`timeout`/`approved`/`fallback`). `LocalModel.run()` only consumes `{maxTokens, model}`; anything else is silently dropped at the bridge.
+- `unknown-data-read-arg` (tier-2) — `$ data_read` carries a kwarg outside the canonical surface (`mode`/`query`/`limit`/`connector`/`fallback`/`domain_tags`/`filters`/`min_confidence`).
+
+For named-form dispatch (`$ <connector>.<tool>`) the connector's `staticTools()` surface + per-tool kwarg validation is the discipline boundary — adopter MCP servers each define their own.
+
+### Typed-contract op surfaces
+
+Canonical kwarg surfaces for each typed-contract bare-form op. These are the ops the runtime auto-wires from `substrate.local_model` / `substrate.data_store` / `substrate.skill_store` config.
+
+#### `$ llm`
+
+Routes through the wired LocalModel.
+
+| Kwarg | Required | Notes |
+|---|---|---|
+| `prompt="..."` | yes | Non-empty string. Substitution-resolved at runtime. |
+| `maxTokens=N` | no | Positive integer (number or numeric string). Forwarded as `runOpts.maxTokens`. |
+| `model="X"` | no | Per-call model selection. Resolves against registered LocalModel aliases via `registry.getLocalModel(X)`; falls through to the default LocalModel with `model=X` passed as an upstream hint (e.g., Ollama tag) when X doesn't resolve. See `unknown-llm-model` lint below. |
+
+Plus the universal op-level kwargs (`timeout`, `approved`, `(fallback:)`, `-> R`).
+
+Canonical shape:
+
+```
+$ llm prompt="..." [maxTokens=N] [model="<alias-or-tag>"] [timeout=N] [approved="..."] -> R [(fallback: "...")]
+```
+
+The wired LocalModel determines which underlying model serves the request. Adopters with multiple registered LocalModels (e.g., `qwen` + `gemma`) can target a specific one via `model="qwen"` from the skill body. The `unknown-llm-model` lint (tier-2) validates the value against both registered alias names AND each LocalModel's `manifest().manifest.models_available` — substrate-aware typo-catch, since manifest data is exposed via `runtime_capabilities`.
+
+#### `$ data_read` / `$ data_write`
+
+Route through the wired DataStore. Surface depends on the connector contract — see the adopter playbook for the canonical DataStore contract reference. Common shape:
+
+```
+$ data_read mode=fts query="${TOPIC}" limit=5 -> RESULTS
+$ data_write content="${SUMMARY}" tags=["nightly"] approved="..." -> ACK
+```
+
+#### `$ skill_read` / `$ skill_write`
+
+Route through the wired SkillStore.
+
+```
+$ skill_read name="hello-world" -> S
+$ skill_write name="child" source="..." overwrite=true approved="..." -> W
+```
+
+#### `$ json_parse`
+
+Runtime-intrinsic parser. Single positional value (the raw JSON string).
+
+```
+$ json_parse ${RAW_JSON} -> PARSED
+```
 
 ### Worked examples
 
 ```
-$ ticketing_search query="project:INFRA state:Open" limit=20 -> ISSUES
-$ llm prompt="Classify: ${INPUT}" -> VERDICT
-$ data_read mode=fts query="${TOPIC}" limit=5 -> RESULTS
-$ data_write content="${SUMMARY}" recipients=["oncall"] approved="morning roundup, 2026-05-25" -> ACK
+$ amp.amp_olsen_task task_type="scan" -> DISPATCH
+$ amp.amp_query_memories query="recent activity" limit=5 -> RECENT
+$ llm prompt="Classify: ${INPUT}" timeout=30 -> VERDICT
+$ llm prompt="Summarize: ${TEXT}" model="qwen" maxTokens=500 -> SUMMARY
+$ data_read mode=fts query="${TOPIC}" limit=5 -> RESULTS (fallback: [])
+$ data_write content="${SUMMARY}" tags=["oncall"] approved="morning roundup, 2026-05-25" -> ACK
+$ ticketing.search query="project:INFRA state:Open" limit=20 -> ISSUES
 ```
 
 Tool args are unconstrained `key=value` pairs — the connector forwards them to the underlying MCP tool. If a dispatched call returns `isError: true`, the executor throws via `makeOpError`, which routes through `else:` / `# OnError:` machinery. The inner tool's error text is preserved in `result.errors[]`.
 
-**Substrate-neutrality.** Connector names like `$ llm`, `$ data_read`, `$ ticketing_search` are NOT reserved or built-in — they're whatever the adopter declares in `connectors.json` (substrate config). Bridges for `$ llm` and `$ data_read` / `$ data_write` auto-wire only when the adopter's substrate config sets `substrate.local_model` / `substrate.data_store` respectively. See the adopter playbook for the full substrate config reference.
+**Substrate-neutrality.** Typed-contract bare ops (`$ llm`, `$ data_read`, `$ data_write`, `$ skill_*`, `$ json_parse`) are not reserved built-ins — they're typed-contract bridges the adopter wires through `substrate.local_model` / `substrate.data_store` / `substrate.skill_store` in `skillscript.config.json`. Substrate-specific tools (`$ amp.*`, `$ github.*`, etc.) are whatever the adopter declares in `connectors.json`. For external MCP servers, three bundled wiring paths cover the common cases:
 
-**Unknown connector** → tier-1 `unknown-connector` lint with the list of wired connector names.
+- `HttpMcpConnector` — declarative wiring for any Streamable HTTP MCP server (JSON-RPC over HTTP + SSE). No subprocess. Adopters declare instances by class name in `connectors.json`.
+- `RemoteMcpConnector` — stdio bridging for MCPs distributed as spawnable binaries (YouTrack, GitHub, Linear when run locally) or HTTP MCPs adapted via `npx mcp-remote ... --sse`.
+- Custom fork (`examples/connectors/McpConnectorTemplate/`) — when the wire shape needs behavior the bundled connectors don't expose.
 
-**Unquoted-substitution lint** (`unquoted-substitution-in-kwarg-value`, tier-2): fires when `$ tool key=${VAR}` has unquoted `${VAR}` AND the var's binding origin is "suspect" (`# Vars:` default with whitespace, `$set` with whitespace, op output, foreach iterator). Closes the silent-arg-truncation footgun where the MCP arg parser whitespace-splits substituted values. Remediation: wrap as `key="${VAR}"`.
+See the adopter playbook for the substrate config reference + the full Case 2 tradeoff.
+
+**Discovery surface.** `runtime_capabilities` (MCP tool) exposes the registered substrate state. Every entry across all four substrate slots (SkillStore / DataStore / LocalModel / McpConnector) carries its instance `manifest()` payload alongside the static features. Three observable states per entry: working `manifest:{...}`, runtime failure `manifest:null, manifest_error:"..."`, structural absence `manifest:null, manifest_unsupported:true` (AgentConnector only — the contract has no `manifest()` method). The bridge `wraps` convention re-exposes the underlying substrate's full manifest, so adopters reading the discovery surface see the full bound state without traversing multiple entries.
+
+**Unquoted-substitution lint** (`unquoted-substitution-in-kwarg-value`, tier-2): fires when `$ x.y key=${VAR}` has unquoted `${VAR}` AND the var's binding origin is "suspect" (`# Vars:` default with whitespace, `$set` with whitespace, op output, foreach iterator). Closes the silent-arg-truncation footgun where the MCP arg parser whitespace-splits substituted values. Remediation: wrap as `key="${VAR}"`.
 
 ---
 
@@ -504,12 +623,12 @@ Mutation ops require an authorization signal. The signal is per-op, not a mode b
 - `$ data_write ...` and any MCP connector entry declared `"mutating": true` in `connectors.json`
 - `shell(command=..., unsafe=true)` (always mutation-classified)
 - `shell(command=...)` with destructive verb (rm, mv, dd, mkfs, etc. — heuristic list)
-- `$ <tool>` matching the mutating-verb regex
+- `$ <connector>.<tool>` matching the mutating-verb regex
 
 **Read-only ops (always allowed, no authorization needed):**
-- `file_read`, `emit`, `notify`, `ask`, `inline`, `execute_skill`
+- `file_read`, `emit`, `notify`, `inline`, `execute_skill`
 - `shell(command=...)` with read-only verb
-- `$ <connector> ...` against tools declared `mutating: false` (or unspecified, default false for query-shaped tools)
+- `$ <connector>.<tool>` against tools declared `mutating: false` (or unspecified, default false for query-shaped tools)
 - `$set`, `$append`
 
 **Authorization signals (either suffices):**
@@ -524,7 +643,7 @@ Mutation ops require an authorization signal. The signal is per-op, not a mode b
 
 deliver:
     file_write(path="/tmp/sweep.md", content="${REPORT}")        # no approved= needed
-    $ data_write content="${REPORT}" recipients=["oncall"]       # no approved= needed
+    $ data_write content="${REPORT}" tags=["oncall"]             # no approved= needed
 ```
 
 ```
@@ -551,7 +670,8 @@ deliver:
 | Runtime-intrinsic | `shell` | `shell(command="...", [unsafe=true], [approved="..."]) -> R` | optional |
 | Runtime-intrinsic | `file_read` | `file_read(path="...") -> R` | required |
 | Runtime-intrinsic | `file_write` | `file_write(path="...", content="...", [approved="..."])` | none |
-| External MCP | `$ <connector>` | `$ <name>[.<tool>] kwarg=value, ... [-> R]` | optional |
+| External MCP — substrate-specific | `$ <connector>.<tool>` | `$ <connector>.<tool> kwarg=value, ... [timeout=N] [approved="..."] [-> R] [(fallback: "...")]` | optional |
+| External MCP — typed-contract | `$ <tool>` | `$ <tool> kwarg=value, ... [timeout=N] [approved="..."] [-> R] [(fallback: "...")]` (typed-contract ops only: `data_*`, `skill_*`, `json_parse`, `llm`) | optional |
 
 ## Variable resolution — ${VAR} canonical, substitution + ambient refs + # Requires: cascade
 
@@ -1576,7 +1696,7 @@ The Template-kind skill is the canonical static shape — its `# Output: templat
 
 ## Dynamic skill
 
-A dynamic skill requires the Skillscript runtime to execute. The runtime walks the dispatch DAG, fires `$` ops against wired connectors, runs runtime-intrinsic ops (`emit`, `notify`, `ask`, `shell`, `file_read`, `file_write`, `execute_skill`), and threads outputs through variable bindings.
+A dynamic skill requires the Skillscript runtime to execute. The runtime walks the dispatch DAG, fires `$` ops against wired connectors, runs runtime-intrinsic ops (`emit`, `notify`, `shell`, `file_read`, `file_write`, `execute_skill`), and threads outputs through variable bindings.
 
 Dynamic skills are the default for:
 - **Autonomous workflows** — cron-fired Headless skills that fetch, reason, and emit
@@ -1598,7 +1718,7 @@ The axes are independent. A skill author can produce any combination.
 
 A `# Portability: static | dynamic` frontmatter header would declare the skill's intended execution model. The compiler would lint-check that the skill's op set is consistent with the declaration:
 
-- `# Portability: static` → no `$` dispatch ops permitted; no side-effect runtime-intrinsics (`shell`, `file_write`, `ask`, `notify`, `execute_skill`); only the static-safe set (`emit`, `$set`, `$append`, `inline()`, conditionals, iteration)
+- `# Portability: static` → no `$` dispatch ops permitted; no side-effect runtime-intrinsics (`shell`, `file_write`, `notify`, `execute_skill`); only the static-safe set (`emit`, `$set`, `$append`, `inline()`, conditionals, iteration)
 - `# Portability: dynamic` (or unset, the default) → any op permitted
 
 A new compile mode `compile_skill({source, mode: "static"})` would render only the portable artifact, refusing skills that depend on runtime dispatch.
@@ -1922,5 +2042,5 @@ Hung dispatches hang the skill without explicit timeout configuration. Lean: ski
 
 ---
 
-*Rendered from `skillscript/skillscript-language-reference` — 2026-05-30 09:52 EDT*  
+*Rendered from `skillscript/skillscript-language-reference` — 2026-06-02 16:30 EDT*  
 *Source of truth: AMP (`amp_render_document("skillscript/skillscript-language-reference")`)*

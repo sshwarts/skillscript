@@ -61,6 +61,8 @@ export { SqliteDataStore } from "./connectors/data-store.js";
 export type { SqliteDataStoreConfig } from "./connectors/data-store.js";
 export { CallbackMcpConnector } from "./connectors/mcp.js";
 export type { DispatchFn } from "./connectors/mcp.js";
+export { HttpMcpConnector } from "./connectors/http-mcp.js";
+export type { HttpMcpConfig } from "./connectors/http-mcp.js";
 export { LocalModelMcpConnector } from "./connectors/local-model-mcp.js";
 export { DataStoreMcpConnector } from "./connectors/data-store-mcp.js";
 export { SkillStoreMcpConnector } from "./connectors/skill-store-mcp.js";

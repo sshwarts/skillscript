@@ -101,12 +101,29 @@ Your substrate exposes itself as MCP tools (via a local MCP server or remote one
   }
   ```
 
-- **HTTP MCP / Streamable HTTP** (Anthropic's hosted MCP, AMP, increasingly common for hosted services): the MCP server speaks JSON-RPC over HTTP with Server-Sent Events for the stream channel. Two ways to wire it:
+- **HTTP MCP / Streamable HTTP** (Anthropic's hosted MCP, GitHub MCP, Linear MCP, etc.): the MCP server speaks JSON-RPC over HTTP with Server-Sent Events for the stream channel. Two ways to wire it:
 
-  - **(a) Stdio bridge** — `RemoteMcpConnector` + `npx mcp-remote https://... --sse` runs a node child process that bridges HTTPS-SSE into stdio for the runtime to consume. Works today; adds the bridge subprocess.
-  - **(b) Direct HTTP connector** — wire your own `McpConnector` class against the HTTP transport (no subprocess). See `examples/connectors/McpConnectorTemplate/` for the fork template.
+  - **(a) Stdio bridge** — `RemoteMcpConnector` + `npx mcp-remote https://... --sse` runs a node child process that bridges HTTPS-SSE into stdio for the runtime to consume. Works today; adds the bridge subprocess overhead per call.
+  - **(b) Direct HTTP connector (bundled)** — `HttpMcpConnector` speaks Streamable HTTP MCP directly, no subprocess. Substrate-neutral: works against any MCP server speaking the spec. Wired declaratively:
 
-Pick (a) for quick wiring against a remote HTTP MCP server with no implementation effort; pick (b) when subprocess overhead matters or you want direct control over connection lifecycle.
+    ```json
+    {
+      "my_store": {
+        "class": "HttpMcpConnector",
+        "config": {
+          "endpoint": "https://mcp.example.com/",
+          "headers": {
+            "Authorization": "Bearer ${API_TOKEN}",
+            "X-Agent-ID": "${AGENT_ID}"
+          }
+        }
+      }
+    }
+    ```
+
+  - **(c) Custom direct connector** — fork `examples/connectors/McpConnectorTemplate/` when you need behavior the bundled `HttpMcpConnector` doesn't cover (e.g., a non-spec auth handshake, tool-name normalization, custom retry logic).
+
+Pick (b) by default — no subprocess, no implementation effort, works against any compliant Streamable HTTP MCP server. Pick (a) only when the server is behind tooling that requires the stdio bridge. Pick (c) only when your substrate needs behavior the bundled connector doesn't expose.
 
 **In skills**, regardless of transport:
 

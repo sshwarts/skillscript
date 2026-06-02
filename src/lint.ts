@@ -706,6 +706,116 @@ const UNKNOWN_LLM_MODEL: LintRule = {
   },
 };
 
+// v0.16.5 — `$ llm` op with a kwarg outside the canonical closed set.
+// Catches authors leaking provider-API kwargs (e.g., `temperature=0.7`)
+// which the LocalModelMcpConnector bridge silently drops — LocalModel.run()
+// only consumes `{maxTokens, model}`. Tier-2 warning.
+//
+// Sibling to `unknown-llm-model` (v0.16.4) — same shape, different axis.
+// The `model=` axis validates a value against registered substrate state;
+// this rule validates a kwarg KEY against the documented closed surface.
+//
+// Per memory `9254a648`. Closed set lives in `LLM_KWARG_SURFACE`.
+const LLM_KWARG_SURFACE = new Set([
+  "prompt",
+  "maxTokens",
+  "model",
+  "timeout",
+  "approved",
+  "fallback",
+]);
+
+const UNKNOWN_LLM_ARG: LintRule = {
+  id: "unknown-llm-arg",
+  severity: "warning",
+  description: "A `$ llm` op carries a kwarg outside the canonical surface (`prompt`/`maxTokens`/`model`/`timeout`/`approved`/`fallback`). Provider-API kwargs (e.g., `temperature=`) silently dropped by the bridge.",
+  remediation: "Drop the kwarg, or substitute the canonical equivalent. The closed surface is documented under `$ llm` in the language reference. If your substrate accepts additional kwargs, configure them at the LocalModel adapter layer (e.g., construct an OpenAILocalModel with `defaultTemperature: 0.7`) — kwargs from the skill body must match the substrate-neutral contract.",
+  check: (ctx) => {
+    const findings: LintFinding[] = [];
+    const reported = new Set<string>();
+    for (const [targetName, target] of ctx.parsed.targets) {
+      walkOps(target.ops, (op) => {
+        if (op.kind !== "$") return;
+        const tokens = tokenizeKeywordArgs(op.body);
+        const head = tokens[0];
+        const isLlmDispatch =
+          op.mcpConnector === "llm" || (head === "llm" && op.mcpConnector === undefined);
+        if (!isLlmDispatch) return;
+        for (const tok of tokens) {
+          const eq = tok.indexOf("=");
+          if (eq === -1) continue;
+          const key = tok.slice(0, eq).trim();
+          if (LLM_KWARG_SURFACE.has(key)) continue;
+          const dedupKey = `${targetName}:${key}`;
+          if (reported.has(dedupKey)) continue;
+          reported.add(dedupKey);
+          findings.push({
+            rule: "unknown-llm-arg",
+            severity: "warning",
+            message: `\`$ llm\` in target '${targetName}' carries unknown kwarg '${key}'. Canonical surface: ${[...LLM_KWARG_SURFACE].sort().join(", ")}.`,
+            block: targetName,
+            extras: { kwarg: key },
+          });
+        }
+      });
+    }
+    return findings;
+  },
+};
+
+// v0.16.5 — `$ data_read` op with a kwarg outside the canonical closed
+// set. Replaces the deleted `unknown-retrieval-arg` rule which targeted
+// the v0.7.0-removed `>` symbol op surface. Same shape as `unknown-llm-arg`.
+// Per memory `9254a648`.
+const DATA_READ_KWARG_SURFACE = new Set([
+  "mode",
+  "query",
+  "limit",
+  "connector",
+  "fallback",
+  "domain_tags",
+  "filters",
+  "min_confidence",
+]);
+
+const UNKNOWN_DATA_READ_ARG: LintRule = {
+  id: "unknown-data-read-arg",
+  severity: "warning",
+  description: "A `$ data_read` op carries a kwarg outside the canonical surface (`mode`/`query`/`limit`/`connector`/`fallback`/`domain_tags`/`filters`/`min_confidence`).",
+  remediation: "Drop the kwarg, or substitute the canonical equivalent. The closed surface is documented under `$ data_read` in the language reference. Substrate-specific filters belong inside the `filters={...}` object literal, not as top-level kwargs.",
+  check: (ctx) => {
+    const findings: LintFinding[] = [];
+    const reported = new Set<string>();
+    for (const [targetName, target] of ctx.parsed.targets) {
+      walkOps(target.ops, (op) => {
+        if (op.kind !== "$") return;
+        const tokens = tokenizeKeywordArgs(op.body);
+        const head = tokens[0];
+        const isDataReadDispatch =
+          op.mcpConnector === "data_read" || (head === "data_read" && op.mcpConnector === undefined);
+        if (!isDataReadDispatch) return;
+        for (const tok of tokens) {
+          const eq = tok.indexOf("=");
+          if (eq === -1) continue;
+          const key = tok.slice(0, eq).trim();
+          if (DATA_READ_KWARG_SURFACE.has(key)) continue;
+          const dedupKey = `${targetName}:${key}`;
+          if (reported.has(dedupKey)) continue;
+          reported.add(dedupKey);
+          findings.push({
+            rule: "unknown-data-read-arg",
+            severity: "warning",
+            message: `\`$ data_read\` in target '${targetName}' carries unknown kwarg '${key}'. Canonical surface: ${[...DATA_READ_KWARG_SURFACE].sort().join(", ")}.`,
+            block: targetName,
+            extras: { kwarg: key },
+          });
+        }
+      });
+    }
+    return findings;
+  },
+};
+
 // v0.4.1 — `$ name.tool` where `name` is configured with an
 // `allowed_tools` list that doesn't include `tool`. Tier-1 lint error
 // at compile time. Closes the "minion-safe by default" framing from
@@ -2554,6 +2664,8 @@ const RULES: LintRule[] = [
   SET_JSON_LITERAL_ADVISORY,
   SKILL_NAME_COLLISION,
   UNKNOWN_LLM_MODEL,
+  UNKNOWN_LLM_ARG,
+  UNKNOWN_DATA_READ_ARG,
   // v0.9.2 — promoted from tier-3 info to tier-1 error (P0.9 in c9c667d2)
   NO_DEFAULT_TARGET,
   COLON_KWARG_SYNTAX,

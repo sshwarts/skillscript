@@ -1,5 +1,165 @@
 # Changelog
 
+## 0.16.5 — 2026-06-02 — HttpMcpConnector + RuntimeCapabilitiesConformance + sibling kwarg lints
+
+**Catchup ring.** Three queued items per Perry's `934fc9d8` sign-off had
+been carrying since v0.15.6 (the original two-stage proposal in
+`0b35bd70`) — HttpMcpConnector + contract-test fixture + sibling kwarg
+lints. v0.16.4 shipped one (the `unknown-llm-model` lint) and silently
+punted the other three. Warm-adopter flagged "2 releases late" on the
+carry-forwards. This ring closes all four.
+
+### 1. `HttpMcpConnector` — bundled generic Streamable HTTP MCP connector
+
+Speaks JSON-RPC over HTTP + Server-Sent Events directly — no subprocess
+(unlike `RemoteMcpConnector` + `mcp-remote`). Substrate-neutral by
+design: works against any MCP server speaking the Streamable HTTP spec
+(Anthropic's hosted MCP, GitHub MCP, Linear MCP, AMP, etc.) via the
+same connector class with different `endpoint` + `headers` config.
+
+Adopters declare instances in `connectors.json`:
+
+```json
+{
+  "my_remote": {
+    "class": "HttpMcpConnector",
+    "config": {
+      "endpoint": "https://mcp.example.com/",
+      "headers": {
+        "Authorization": "Bearer ${API_TOKEN}",
+        "X-Agent-ID": "${AGENT_ID}"
+      }
+    },
+    "allowed_tools": ["search", "fetch"]
+  }
+}
+```
+
+**Implementation details** (per the lift checklist in warm-adopter
+memory `41fedec6`):
+
+- `initialize` handshake captures `mcp-session-id` response header,
+  echoes on every subsequent request
+- `notifications/initialized` sent after `initialize`, before any
+  `tools/call` (protocol-mandatory)
+- SSE response parsing handles multi-frame replies (trailing
+  notification frame can masquerade as the reply; we take the terminal
+  data frame)
+- Configurable static auth/identity headers passed through verbatim
+- Result unwrap: when `content[0].text` is JSON-shaped, parse it;
+  fallback to raw text or full result block
+- `staticTools()` returns `null` (runtime-discovered);
+  `manifest()` populates `tools_available` via `tools/list`
+- Concurrent first-callers share a single handshake (single-flight
+  initialization promise)
+
+**Source attribution.** Lifted + generalized from a warm-adopter's
+direct-HTTP MCP client at commit 844a19e in the adopter's tree, per
+Perry's `934fc9d8` sign-off. Substrate-specific bits (adopter's tool-
+name normalization convenience) stayed adopter-side; only the wire-
+layer code was lifted. Generalized substrate-specifics out at the
+lift boundary.
+
+### 2. `RuntimeCapabilitiesConformance` — discovery-surface contract test
+
+Per Perry's `adf47c0b`. Closes the long-running discipline-only-
+contracts pattern: every flag in `runtime_capabilities` must have a
+matching execution-path probe test. Forces adopters to wire BOTH the
+capability declaration AND the dispatch-path probe in lockstep —
+without it, the "lint passes, runtime fails" multi-layer-promise
+failure mode keeps recurring (5 instances counted pre-v0.15.4 alone).
+
+Exported from `skillscript-runtime/testing` alongside the existing
+five `*Conformance` objects. Adopters wire it against their runtime:
+
+```ts
+import { RuntimeCapabilitiesConformance } from "skillscript-runtime/testing";
+
+const fixture = {
+  buildRuntime: async () => ({ mcpServer: myWiredRuntime.mcpServer }),
+  flagProbes: {
+    "shellExecution.unsafe_enabled": async (runtime) => {
+      // Probe that unsafe shell ops respect the unsafe_enabled config.
+    },
+    "localModels[].features.supports_streaming": async (runtime) => {
+      // Probe that streaming dispatch is honored when declared.
+    },
+  },
+  requiredFlags: ["shellExecution.unsafe_enabled"],
+};
+
+const tests = RuntimeCapabilitiesConformance.buildTests(fixture);
+for (const t of tests) it(`[${t.category}] ${t.name}`, t.run);
+```
+
+The suite generates 6 schema tests (3-state manifest validation
+across all 5 substrate slots, AgentConnector `manifest_unsupported`
+correctness, etc.) + one test per supplied probe + one coverage
+test that fails if any `requiredFlags` entry has no probe (the
+load-bearing close).
+
+### 3. `unknown-llm-arg` + `unknown-data-read-arg` — sibling kwarg lints
+
+Tier-2 warnings sibling to v0.16.4's `unknown-llm-model`. Catch
+provider-API kwargs leaking through the bridge — e.g.
+`$ llm prompt="..." temperature=0.7` silently dropped by
+`LocalModelMcpConnector` because `LocalModel.run()` only consumes
+`{maxTokens, model}`. Closed kwarg surfaces:
+
+- `$ llm`: `prompt` / `maxTokens` / `model` / `timeout` / `approved` / `fallback`
+- `$ data_read`: `mode` / `query` / `limit` / `connector` / `fallback` / `domain_tags` / `filters` / `min_confidence`
+
+Same per-rule structure as `unknown-llm-model`: silent without
+context, dedupe by `target:kwarg`, off-target ops skipped via the
+first-token / `op.mcpConnector` discrimination from v0.16.4.
+
+### 4. Docs — playbook §Case 2 + onboarding-scaffold + McpConnectorTemplate
+
+- `docs/adopter-playbook.md` §Case 2 path (b) now points at the
+  bundled `HttpMcpConnector` as the default for Streamable HTTP MCP
+  servers; path (c) covers the forked-template case for adopters who
+  need behavior the bundled connector doesn't expose.
+- `examples/onboarding-scaffold/connectors.json` includes an
+  `_example_http_mcp` alongside the existing `_example_remote_mcp`,
+  showing both shapes.
+- `examples/connectors/McpConnectorTemplate/README.md` rewrites the
+  bundled-impls table to lead with `HttpMcpConnector` + drops the
+  "near-term roadmap" disclaimer.
+
+### Internal
+
+- `src/connectors/http-mcp.ts` — new class + `fromConfig` factory.
+  Registered in `KNOWN_CONNECTOR_CLASSES`. Re-exported from package
+  root + `/connectors` subpath.
+- `src/testing/conformance.ts` — `RuntimeCapabilitiesConformance`
+  suite + types. Re-exported from `/testing`.
+- `src/lint.ts` — `UNKNOWN_LLM_ARG` + `UNKNOWN_DATA_READ_ARG` rules
+  + closed-surface constants. Registered in `RULES` tier-2 alongside
+  v0.16.4's `UNKNOWN_LLM_MODEL`.
+- +19 tests in `tests/v0.16.5-http-mcp.test.ts` (real local HTTP
+  server, exercises full session-handshake + SSE-parsing flow).
+- +10 tests in `tests/v0.16.5-runtime-capabilities-conformance.test.ts`
+  (validates the conformance suite itself against bundled bootstrap).
+- +11 tests in `tests/v0.16.5-sibling-kwarg-lints.test.ts`.
+- 1484 tests passing (was 1444 at v0.16.4 — 40 new total this ring).
+
+### Process notes
+
+**Resolved-thread blind spot.** v0.16.4 underdelivered against Perry's
+`934fc9d8` sign-off because that thread was resolved + sibling to the
+v0.16.3 ring I was working on — never appeared in my pending-response
+mailbox sweep. Banked the refinement to the cold-pickup checkpoint
+discipline: query resolved threads addressed to self in the recent
+past, scan for forward-looking commitments still owed.
+
+**Discipline-only-contracts class count.** 12 instances closed since
+`d0fb1375`. v0.16 series alone: 7 (canonicalization /
+trust-boundary / parity / bridge-routing / manifest-exposure /
+unknown-llm-model / this ring's three closures: HttpMcpConnector
+making the "fork or rebuild" gap structural, RuntimeCapabilitiesConformance
+making the multi-layer-promise pattern lockstep, sibling kwarg lints
+closing the documented-but-unenforced kwarg surface).
+
 ## 0.16.4 — 2026-06-02 — `unknown-llm-model` lint (substrate-aware typo-catch)
 
 **Lint addition.** Closes the documented-but-unenforced surface from

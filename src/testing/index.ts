@@ -8,6 +8,11 @@ export {
   LocalModelConformance,
   McpConnectorConformance,
   AgentConnectorConformance,
+  // v0.16.5 — discovery-surface conformance for runtime_capabilities.
+  // Validates the 3-state manifest schema (v0.16.3) + orchestrates
+  // adopter-supplied flag → execution-path probes. Closes the
+  // discipline-only-contracts pattern per Perry's adf47c0b.
+  RuntimeCapabilitiesConformance,
 } from "./conformance.js";
 
 export type {
@@ -18,4 +23,7 @@ export type {
   LocalModelFixture,
   McpConnectorFixture,
   AgentConnectorFixture,
+  RuntimeCapabilitiesFixture,
+  RuntimeCapabilitiesFixtureRuntime,
+  RuntimeCapabilityProbe,
 } from "./conformance.js";

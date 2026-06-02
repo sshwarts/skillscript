@@ -25,6 +25,7 @@
 import { readFileSync, existsSync } from "node:fs";
 import { dirname, basename, resolve } from "node:path";
 import { CallbackMcpConnector } from "./mcp.js";
+import { HttpMcpConnector } from "./http-mcp.js";
 import { RemoteMcpConnector } from "./mcp-remote.js";
 import { LocalModelMcpConnector } from "./local-model-mcp.js";
 import { DataStoreMcpConnector } from "./data-store-mcp.js";
@@ -94,6 +95,19 @@ export const KNOWN_CONNECTOR_CLASSES: ReadonlyMap<string, ConnectorClassEntry> =
     {
       ctor: RemoteMcpConnector,
       fromConfig: (config: Record<string, unknown>) => RemoteMcpConnector.fromConfig(config),
+    },
+  ],
+  // v0.16.5 — Bundled generic HTTP MCP connector. Speaks Streamable HTTP
+  // MCP transport (JSON-RPC over HTTP + SSE) for any compliant MCP server.
+  // No subprocess (unlike RemoteMcpConnector + mcp-remote). Adopters
+  // declare instances by class name in connectors.json. Source: lifted +
+  // generalized from a warm-adopter's direct-HTTP MCP client per
+  // memory `41fedec6` + Perry's v0.16.4 sign-off `934fc9d8`.
+  [
+    "HttpMcpConnector",
+    {
+      ctor: HttpMcpConnector,
+      fromConfig: (config: Record<string, unknown>) => HttpMcpConnector.fromConfig(config),
     },
   ],
   // v0.7.2 — bridge classes registered for discoverability via

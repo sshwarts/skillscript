@@ -77,6 +77,10 @@ export { SqliteDataStore } from "./data-store.js";
 export type { SqliteDataStoreConfig } from "./data-store.js";
 export { CallbackMcpConnector } from "./mcp.js";
 export type { DispatchFn } from "./mcp.js";
+// v0.16.5 — bundled generic HTTP MCP connector (Streamable HTTP transport).
+// Adopters declare instances via connectors.json (`class: "HttpMcpConnector"`).
+export { HttpMcpConnector } from "./http-mcp.js";
+export type { HttpMcpConfig } from "./http-mcp.js";
 export { NoOpAgentConnector } from "./agent-noop.js";
 
 // v0.7.2 — typed-contract → MCP bridge classes. Wrap LocalModel /

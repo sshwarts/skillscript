@@ -1,7 +1,19 @@
 {
   "_comment": "Onboarding scaffold connectors.json — wires example MCP servers an adopter might add alongside the bundled bridges. Most onboarding deployments don't need anything here; the file-backed data store + OpenAI LLM + tmux-shell wiring lives in bootstrap.ts. This file is the place for adopter-specific MCP servers (your in-house tools, a YouTrack instance, a custom agent API, etc.).",
 
-  "_comment_transport": "RemoteMcpConnector bridges stdio MCP servers. The `mcp-remote` shape below also bridges Streamable HTTP MCP servers (the wire transport increasingly common for hosted MCPs — Anthropic's hosted MCP, AMP, etc.): `mcp-remote https://endpoint/sse` runs a node subprocess that adapts HTTPS-SSE to stdio for the runtime. For lower overhead (no subprocess layer), wire a direct HTTP MCP connector class — see docs/adopter-playbook.md §Case 2 and examples/connectors/McpConnectorTemplate/.",
+  "_comment_transport": "Two bundled paths for MCP transport: (1) `HttpMcpConnector` speaks Streamable HTTP MCP directly — no subprocess, lowest overhead, works against any compliant Streamable HTTP MCP server. (2) `RemoteMcpConnector` spawns a child process for stdio MCP servers — also bridges Streamable HTTP via `mcp-remote https://endpoint/sse` when you need an HTTPS-to-stdio adapter. Pick (1) by default for HTTP MCP; (2) for native-stdio servers (community MCPs commonly distributed as binaries you spawn). See docs/adopter-playbook.md §Case 2 for the full tradeoff.",
+
+  "_example_http_mcp": {
+    "class": "HttpMcpConnector",
+    "config": {
+      "endpoint": "https://your-mcp-server.example.com/",
+      "headers": {
+        "Authorization": "Bearer ${MY_API_TOKEN}",
+        "X-Agent-ID": "${AGENT_ID}"
+      }
+    },
+    "allowed_tools": ["search", "fetch"]
+  },
 
   "_example_remote_mcp": {
     "class": "RemoteMcpConnector",
