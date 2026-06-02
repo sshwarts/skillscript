@@ -1,5 +1,80 @@
 # Changelog
 
+## 0.16.4 — 2026-06-02 — `unknown-llm-model` lint (substrate-aware typo-catch)
+
+**Lint addition.** Closes the documented-but-unenforced surface from
+v0.16.2's `model=` routing: a typo like `$ llm prompt="..." model="qwen2.5"`
+(intending the upstream Ollama tag `qwen2.5:7b` or the runtime alias
+`qwen`) would either error at dispatch or silently fall through to the
+default model — neither visible at compile time. Lint warning now fires
+at parse time.
+
+**Substrate-aware via v0.16.3 manifest exposure.** With each registered
+LocalModel's `manifest()` now folded into `runtime_capabilities`, the
+lint has two sources of truth to validate against:
+
+1. **Registry alias names** (`registry.listLocalModels().map(e => e.name)`) —
+   what skills typically reference (`model="qwen"`).
+2. **Underlying `models_available`** (union of each LocalModel's
+   `manifest().manifest.models_available`) — what the substrate exposes
+   as serveable. Authors writing the underlying tag directly
+   (`model="qwen2.5:7b"`) lint clean because the manifest reports it as
+   available.
+
+A model string matching either source passes. A complete typo
+(`model="qwen2.5"`, neither an alias nor in any substrate's
+`models_available`) fires the warning with a remediation pointing at
+`runtime_capabilities()`.
+
+### Behavior matrix
+
+| `model=` value | Result |
+|---|---|
+| Registered alias (`"qwen"`) | Silent |
+| Any registered LocalModel's `models_available` entry (`"qwen2.5:7b"`) | Silent |
+| Variable substitution (`"${MODEL_TAG}"`) | Silent (runtime-resolved) |
+| Typo / unknown literal (`"qwen2.5"`) | Warning |
+| No registry supplied to `lint()` | Silent (caller doesn't know what's wired) |
+
+### Graceful degradation
+
+- **Throwing `manifest()`** — per-instance try/catch in the helper;
+  silently degrades that instance to alias-only validation rather than
+  failing the lint. Substrate unreachability at lint time doesn't gate
+  parse-time validation.
+- **No `models_available` in manifest** — the contract permits absence;
+  alias-name check still fires.
+- **`lintSync()` path** — async manifest probe isn't available; the lint
+  uses alias names only. Authors writing the underlying tag under
+  `lintSync()` (e.g., `model="qwen2.5:7b"` against alias `"qwen"`) will
+  see the warning unless they pass `localModelsAvailable` explicitly.
+
+### Internal
+
+- `src/lint.ts`: `UNKNOWN_LLM_MODEL` rule (tier-2 warning) +
+  `collectLocalModelInfoFromRegistry` (async, manifest-probing) +
+  `collectLocalModelAliasesFromRegistry` (sync, alias-only).
+  `localModelAliases` / `localModelsAvailable` added to `LintOptions`
+  and `LintContext`. Bare-form `$ llm` op detection via first-token
+  match on `op.body` (parser puts the connector name there for bare
+  dispatch; named-form `$ llm.run` would set `op.mcpConnector`
+  separately, and the rule handles both shapes).
+- `tests/v0.16.4-unknown-llm-model.test.ts`: 10 tests covering the
+  matrix above + dedup, off-target rule scoping, and manifest-throw
+  graceful degradation. Three-test discipline applied via the existing
+  `tests/local-model-mcp-model-routing.test.ts` (runtime layer) and
+  `tests/v0.16.3-manifest-exposure.test.ts` (e2e layer); this file is
+  the lint layer of the per-dispatch-shape coverage.
+- 1444 tests passing (was 1434 at v0.16.3).
+
+### Counting
+
+11th instance of the discipline-only-contracts class closed since
+`d0fb1375`. The pattern continues — naming a kwarg surface in vocabulary
+(here: `model=` documented in v0.16.2 release notes) without lint
+enforcement is itself a discipline-only contract; this ring mechanically
+closes it.
+
 ## 0.16.3 — 2026-06-02 — Substrate-general manifest exposure on `runtime_capabilities`
 
 **Discovery surface fix.** Closes the structural-half of v0.16.2's P0 (the

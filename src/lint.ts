@@ -110,6 +110,20 @@ export interface LintOptions {
   connectorConfigErrors?: string[];
   /** v0.8.0 — registered AgentConnector names (empty = none wired). */
   agentConnectorNames?: string[];
+  /**
+   * v0.16.4 — registered LocalModel alias names (the names skills target
+   * via `$ llm model="<alias>"`). Plus the union of `models_available`
+   * across every registered LocalModel's `manifest()` payload — substrate-
+   * aware typo-catch. When both are undefined (caller didn't supply data),
+   * `unknown-llm-model` is silent.
+   *
+   * Derived from `registry` when only the registry is provided AND the
+   * caller uses the async `lint()` entry point. `lintSync()` derives only
+   * `localModelAliases` (sync probe of registry list); `localModelsAvailable`
+   * stays undefined since `manifest()` is async.
+   */
+  localModelAliases?: string[];
+  localModelsAvailable?: string[];
 }
 
 interface LintContext {
@@ -126,6 +140,8 @@ interface LintContext {
   connectorConfigErrors: string[];
   mcpConnectorAllowedTools: Map<string, string[]>;
   agentConnectorNames: string[] | undefined;
+  localModelAliases: string[] | undefined;
+  localModelsAvailable: string[] | undefined;
   /**
    * v0.9.1 — per-connector declared tool surface from `McpConnectorClass.staticTools()`.
    * Map entry: connector name → tool array (declared surface) OR null (class doesn't
@@ -148,6 +164,9 @@ export interface LintRule {
 
 export async function lint(source: string, options?: LintOptions): Promise<LintResult> {
   const parsed = parse(source);
+  const localModelInfo = options?.localModelAliases !== undefined
+    ? { aliases: options.localModelAliases, modelsAvailable: options.localModelsAvailable ?? [] }
+    : await collectLocalModelInfoFromRegistry(options?.registry);
   const ctx: LintContext = {
     parsed,
     source,
@@ -160,6 +179,8 @@ export async function lint(source: string, options?: LintOptions): Promise<LintR
     connectorConfigErrors: options?.connectorConfigErrors ?? [],
     mcpConnectorAllowedTools: options?.mcpConnectorAllowedTools ?? collectMcpConnectorAllowedToolsFromRegistry(options?.registry),
     agentConnectorNames: options?.agentConnectorNames ?? collectAgentConnectorNamesFromRegistry(options?.registry),
+    localModelAliases: localModelInfo?.aliases,
+    localModelsAvailable: localModelInfo?.modelsAvailable,
     mcpConnectorStaticTools: collectMcpConnectorStaticToolsFromRegistry(options?.registry),
   };
   const findings: LintFinding[] = [];
@@ -202,6 +223,8 @@ export function lintSync(source: string, options?: LintOptions): LintResult {
     connectorConfigErrors: options?.connectorConfigErrors ?? [],
     mcpConnectorAllowedTools: options?.mcpConnectorAllowedTools ?? collectMcpConnectorAllowedToolsFromRegistry(options?.registry),
     agentConnectorNames: options?.agentConnectorNames ?? collectAgentConnectorNamesFromRegistry(options?.registry),
+    localModelAliases: options?.localModelAliases ?? collectLocalModelAliasesFromRegistry(options?.registry),
+    localModelsAvailable: options?.localModelsAvailable,
     mcpConnectorStaticTools: collectMcpConnectorStaticToolsFromRegistry(options?.registry),
   };
   const findings: LintFinding[] = [];
@@ -602,6 +625,81 @@ const UNKNOWN_CONNECTOR: LintRule = {
           block: targetName,
           extras: { referenced_connector: ref },
         });
+      });
+    }
+    return findings;
+  },
+};
+
+// v0.16.4 — `$ llm prompt="..." model="X"` where X matches neither any
+// registered LocalModel alias name NOR any `models_available` entry from
+// any registered LocalModel's `manifest()` payload. Tier-2 warning.
+//
+// Closes the documented-but-unenforced surface from v0.16.2 (the `model=`
+// kwarg shipped working at runtime but a typo like `model="qwen2.5"` —
+// intending the upstream Ollama tag `qwen2.5:7b` or the alias `qwen` —
+// would silently fall through to the default model). With v0.16.3
+// putting `manifest()` in `runtime_capabilities`, the lint now has
+// substrate-aware source of truth: both alias names AND each registered
+// LocalModel's underlying model surface participate in the typo-catch.
+//
+// Silent unless context carries the data — `lint()` without a `registry`
+// or explicit `localModelAliases` cannot validate. Variable-substituted
+// values (`model="${TAG}"`) are skipped — the literal isn't a model
+// identifier at compile time.
+const UNKNOWN_LLM_MODEL: LintRule = {
+  id: "unknown-llm-model",
+  severity: "warning",
+  description: "A `$ llm` op carries `model=\"X\"` where X is neither a registered LocalModel alias nor a model in any registered LocalModel's `models_available` manifest field.",
+  remediation: "Check the model name against the runtime's registered LocalModels — `runtime_capabilities()` lists every alias plus each instance's `manifest.models_available`. Either fix the typo, register the model under a runtime alias (e.g., `registry.registerLocalModel(\"<alias>\", <instance>)`), or wrap the value in a substitution if it's resolved at runtime.",
+  check: (ctx) => {
+    if (ctx.localModelAliases === undefined) return [];
+    const known = new Set<string>(ctx.localModelAliases);
+    if (ctx.localModelsAvailable !== undefined) {
+      for (const m of ctx.localModelsAvailable) known.add(m);
+    }
+    const findings: LintFinding[] = [];
+    const reported = new Set<string>();
+    for (const [targetName, target] of ctx.parsed.targets) {
+      walkOps(target.ops, (op) => {
+        if (op.kind !== "$") return;
+        // Bare-form `$ llm ...` puts `llm` as the first token of op.body
+        // with op.mcpConnector === undefined. Named-form `$ llm.run ...`
+        // would set op.mcpConnector === "llm" — match either.
+        const tokens = tokenizeKeywordArgs(op.body);
+        const head = tokens[0];
+        const isLlmDispatch =
+          op.mcpConnector === "llm" || (head === "llm" && op.mcpConnector === undefined);
+        if (!isLlmDispatch) return;
+        for (const tok of tokens) {
+          const eq = tok.indexOf("=");
+          if (eq === -1) continue;
+          const key = tok.slice(0, eq).trim();
+          if (key !== "model") continue;
+          let value = tok.slice(eq + 1).trim();
+          // Strip outer quotes if present.
+          if ((value.startsWith('"') && value.endsWith('"')) ||
+              (value.startsWith("'") && value.endsWith("'"))) {
+            value = value.slice(1, -1);
+          }
+          if (value === "") continue;
+          // Substitutions — `${TAG}` / `$(TAG)` — are runtime-resolved.
+          if (value.includes("$(") || value.includes("${")) continue;
+          if (known.has(value)) continue;
+          const dedupKey = `${targetName}:${value}`;
+          if (reported.has(dedupKey)) continue;
+          reported.add(dedupKey);
+          const knownDescr = known.size === 0
+            ? "(no LocalModels registered)"
+            : [...known].sort().join(", ");
+          findings.push({
+            rule: "unknown-llm-model",
+            severity: "warning",
+            message: `\`$ llm model="${value}"\` in target '${targetName}': '${value}' matches no registered LocalModel alias and no \`models_available\` entry from any registered LocalModel. Known: ${knownDescr}.`,
+            block: targetName,
+            extras: { referenced_model: value },
+          });
+        }
       });
     }
     return findings;
@@ -2455,6 +2553,7 @@ const RULES: LintRule[] = [
   TRANSCRIPT_FOOTGUN,
   SET_JSON_LITERAL_ADVISORY,
   SKILL_NAME_COLLISION,
+  UNKNOWN_LLM_MODEL,
   // v0.9.2 — promoted from tier-3 info to tier-1 error (P0.9 in c9c667d2)
   NO_DEFAULT_TARGET,
   COLON_KWARG_SYNTAX,
@@ -2619,6 +2718,43 @@ function collectAgentConnectorNamesFromRegistry(registry: Registry | undefined):
   // listAgentConnectors() excludes the implicit NoOp fallback (per
   // registry.ts) — empty array means "no real AgentConnector wired."
   return registry.listAgentConnectors().map((e) => e.name);
+}
+
+function collectLocalModelAliasesFromRegistry(registry: Registry | undefined): string[] | undefined {
+  if (registry === undefined) return undefined;
+  return registry.listLocalModels().map((e) => e.name);
+}
+
+// v0.16.4 — async sibling to collectLocalModelAliasesFromRegistry: probes each
+// registered LocalModel's `manifest()` to harvest `models_available`. Used by
+// the async `lint()` entry point so `unknown-llm-model` can validate against
+// both registry aliases AND the underlying substrate's model surface (sharpened
+// by Perry's `bfd776a9` audit insight — with manifest in capabilities, the lint
+// has substrate-aware source of truth, not just alias names).
+//
+// Per-instance try/catch — a throwing `manifest()` (e.g., substrate unreachable
+// at lint time) silently degrades to alias-only validation rather than failing
+// the lint. Adopters whose LocalModel `manifest()` omits `models_available`
+// (the contract permits absence) also gracefully fall through.
+async function collectLocalModelInfoFromRegistry(
+  registry: Registry | undefined,
+): Promise<{ aliases: string[]; modelsAvailable: string[] } | undefined> {
+  if (registry === undefined) return undefined;
+  const entries = registry.listLocalModels();
+  const aliases = entries.map((e) => e.name);
+  const available = new Set<string>();
+  for (const entry of entries) {
+    try {
+      const m = await entry.instance.manifest();
+      const inner = m.manifest as { models_available?: string[] };
+      if (Array.isArray(inner.models_available)) {
+        for (const tag of inner.models_available) available.add(tag);
+      }
+    } catch {
+      // Probe failure — degrade to alias-only for this instance.
+    }
+  }
+  return { aliases, modelsAvailable: [...available] };
 }
 
 function collectMcpConnectorAllowedToolsFromRegistry(registry: Registry | undefined): Map<string, string[]> {
