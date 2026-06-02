@@ -536,14 +536,15 @@ function substitute(body: string, resolved: Map<string, string>): string {
   // v0.7.0: accepts both `$(REF)` (legacy) and `${REF}` (canonical).
   // Capture groups: 1+2 = paren form, 3+4 = brace form.
   return body.replace(
-    /\$(?:\(([^|)\s]+)\s*(?:\|\s*([A-Za-z_]\w*)(?:\s*:\s*"[^"]*")?)?\s*\)|\{([^|}\s]+)\s*(?:\|\s*([A-Za-z_]\w*)(?:\s*:\s*"[^"]*")?)?\s*\})/g,
-    (match: string, name1: string | undefined, filter1: string | undefined, name2: string | undefined, filter2: string | undefined) => {
+    /\$(?:\(([^|)\s]+)\s*(?:\|\s*([A-Za-z_]\w*)(?:\s*:\s*"([^"]*)")?)?\s*\)|\{([^|}\s]+)\s*(?:\|\s*([A-Za-z_]\w*)(?:\s*:\s*"([^"]*)")?)?\s*\})/g,
+    (match: string, name1: string | undefined, filter1: string | undefined, arg1: string | undefined, name2: string | undefined, filter2: string | undefined, arg2: string | undefined) => {
       const name = (name1 ?? name2)!;
       const filter = filter1 ?? filter2;
+      const arg = arg1 ?? arg2;
       if (!resolved.has(name)) return match;
       const raw = resolved.get(name)!;
       if (!filter || filter === "fallback") return raw;
-      return applyFilter(raw, filter);
+      return applyFilter(raw, filter, arg);
     },
   );
 }

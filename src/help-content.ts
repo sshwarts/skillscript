@@ -295,8 +295,28 @@ Resolves the tool name against the adopter's \`connectors.json\`. Flat form (\`$
 | JSON object | \`payload={"k":"v"}\` | object \`{"k":"v"}\` |
 | Substitution | \`id=\${BUG_ID}\` | resolved at dispatch time |
 | Quoted substitution | \`query="\${QUERY}"\` | quoted resolution (recommended when value may contain whitespace) |
+| Triple-quote multi-line | \`text="""prose body across\\nmultiple lines"""\` | string; spans newlines, embedded \`"\` allowed, common leading indent stripped (\`textwrap.dedent\` pattern), \`\${VAR}\` interpolation works the same as single-line |
 
 **Lint warning** \`unquoted-substitution-in-kwarg-value\` fires when an unquoted \`\${VAR}\` sits in kwarg-value position and VAR's binding origin suggests whitespace. Wrap as \`key="\${VAR}"\` to prevent silent arg truncation if the resolved value contains spaces.
+
+**Triple-quote dedent.** Authors writing multi-line bodies indented inside the call site (e.g., inside an \`emit(text=...)\` block) get the common leading whitespace stripped automatically. Leading and trailing whitespace-only lines are stripped too. Interior blank lines stay. The template looks like the output:
+
+\`\`\`
+deliver:
+    emit(text="""
+    Follow these directions exactly,
+    step by step,
+    without skipping any steps.
+    """)
+\`\`\`
+
+renders as:
+
+\`\`\`
+Follow these directions exactly,
+step by step,
+without skipping any steps.
+\`\`\`
 
 **\`$ json_parse \${VAR} -> P\`** parses input as JSON and binds the structured value to \`P\`. Dotted descent via \`\${P.field}\` works in conditions and emit. Throws on malformed JSON (caught by \`else:\` / \`# OnError:\`).
 
@@ -338,6 +358,7 @@ Apply on \`\${VAR|filter}\` references; chain left-to-right.
 | \`length\` | Array element count or string char count |
 | \`fallback:"X"\` | Coalesce-on-missing: when the upstream ref is unresolved, substitute literal \`X\` and continue the chain. Positional — \`\${VAR|fallback:"-"|upper}\` defaults-then-uppercases. |
 | \`isodate\` | Format an epoch timestamp (ms or sec, auto-detected by magnitude) as ISO-8601. Passes already-ISO strings through unchanged. \`\${EVENT.fired_at_unix|isodate}\`. |
+| \`contains:"X"\` | Boolean substring/membership check. Returns \`"true"\` on match, \`""\` on miss — use in conditionals: \`if \${R|contains:"urgent"}:\`. Type-aware: list LHS (or JSON-string-of-list) does element membership; string LHS does substring match. Mirrors \`if "X" in \${R}:\` semantics from the conditional grammar. |
 
 **\`\${NOW}\` ambient ref** substitutes as an ISO-8601 string. Numeric epoch values remain available as \`\${EVENT.fired_at}\` (ms) and \`\${EVENT.fired_at_unix}\` (sec).
 

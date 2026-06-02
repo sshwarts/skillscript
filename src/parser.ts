@@ -616,8 +616,13 @@ export function processSetValue(raw: string): string {
   // v0.7.2 — triple-quote `"""..."""` multi-line literal. Check before the
   // single-quote pair check; a value like `"""abc"""` shouldn't be shortened
   // to `""abc""` via the `"..."` branch.
+  // v0.16.6 — apply Python `textwrap.dedent` pattern: strip the common
+  // leading whitespace of all non-empty lines + strip leading/trailing
+  // blank lines. Without it, authors writing the body indented inside the
+  // call site get that indent literally in the rendered string (bad for
+  // prose, bad for prompts). Per Perry's `98d6b60b` design directive.
   if (trimmed.length >= 6 && trimmed.startsWith('"""') && trimmed.endsWith('"""')) {
-    return interpretDoubleQuotedEscapes(trimmed.slice(3, -3));
+    return dedentTripleQuoteBody(interpretDoubleQuotedEscapes(trimmed.slice(3, -3)));
   }
   if (trimmed.length >= 2) {
     const first = trimmed[0]!;
@@ -644,6 +649,55 @@ export function processSetValue(raw: string): string {
  * `processSetValue` ($set + function-call kwargs), leaving `$ skill_write
  * source="..."` with literal `\n` / `\"` bytes in the value.
  */
+/**
+ * v0.16.6 — Apply the Python `textwrap.dedent` pattern to a multi-line
+ * triple-quote body. Two passes:
+ *
+ *   1. Strip a leading blank line (whitespace-only) and a trailing blank
+ *      line. The natural author shape `text="""\n  body\n  """` leaves
+ *      the leading `\n` immediately after the opening delimiter and a
+ *      trailing whitespace line before the closing — neither belongs in
+ *      the output.
+ *
+ *   2. Compute the common leading-whitespace prefix across all non-empty
+ *      lines, then strip that prefix from each line. Lines that are
+ *      blank-or-whitespace-only do NOT constrain the prefix calculation
+ *      (their indentation is treated as flexible).
+ *
+ * Dedent runs BEFORE `${VAR}` substitution per the design directive
+ * (substituted multi-line values keep their own whitespace; the template
+ * looks like the output).
+ *
+ * Single-line bodies (no embedded `\n`) pass through unchanged.
+ */
+export function dedentTripleQuoteBody(body: string): string {
+  const lines = body.split("\n");
+  if (lines.length === 1) return body; // single-line literal — no dedent.
+  // Strip a leading whitespace-only line, then a trailing whitespace-only
+  // line. These come from the natural `"""\n  body\n  """` shape.
+  if (lines.length > 0 && lines[0]!.trim() === "") lines.shift();
+  if (lines.length > 0 && lines[lines.length - 1]!.trim() === "") lines.pop();
+  // Compute common leading whitespace prefix across non-empty lines.
+  let commonIndent: string | null = null;
+  for (const line of lines) {
+    if (line.trim() === "") continue;
+    const m = /^[ \t]*/.exec(line);
+    const indent = m !== null ? m[0] : "";
+    if (commonIndent === null) {
+      commonIndent = indent;
+      continue;
+    }
+    let i = 0;
+    while (i < commonIndent.length && i < indent.length && commonIndent[i] === indent[i]) i++;
+    commonIndent = commonIndent.slice(0, i);
+    if (commonIndent === "") break;
+  }
+  if (commonIndent === null || commonIndent.length === 0) {
+    return lines.join("\n");
+  }
+  return lines.map((line) => line.startsWith(commonIndent!) ? line.slice(commonIndent!.length) : line).join("\n");
+}
+
 export function interpretDoubleQuotedEscapes(s: string): string {
   return s.replace(/\\(["\\nt])/g, (match, ch: string) => {
     switch (ch) {

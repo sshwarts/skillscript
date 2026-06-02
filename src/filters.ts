@@ -1,7 +1,7 @@
 // Pipe-filter implementations. `$(NAME|filter)` syntax dispatches here.
 
 /** The names of every registered filter. Lint's `unknown-filter` rule consults this. */
-export const KNOWN_FILTERS = ["url", "shell", "json", "trim", "length", "fallback", "isodate"] as const;
+export const KNOWN_FILTERS = ["url", "shell", "json", "trim", "length", "fallback", "isodate", "contains"] as const;
 export type KnownFilter = (typeof KNOWN_FILTERS)[number];
 
 /**
@@ -65,7 +65,7 @@ export function parseFilterChain(chain: string | undefined): FilterSpec[] {
  * resolveRef's dotted descent. Filter was string-in/string-out which couldn't
  * propagate parsed shape through `.field` access.
  */
-export function applyFilter(value: string, filter: string): string {
+export function applyFilter(value: string, filter: string, arg?: string): string {
   switch (filter) {
     case "url":
       return encodeURIComponent(value);
@@ -127,7 +127,37 @@ export function applyFilter(value: string, filter: string): string {
       }
       return String(value.length);
     }
+    case "contains": {
+      // Boolean substring/membership check. Returns "true" on match, "" on
+      // miss — the empty-string-as-falsy convention matches `isTruthy` in
+      // runtime.ts so `if ${R|contains:"X"}:` evaluates as the author
+      // intuits.
+      //
+      // Type-aware with JSON-string tolerance (mirrors `in` / `not in`
+      // conditional operators):
+      //   - LHS resolves to a JSON-parseable array → element membership
+      //     (each element stringified, compared against `arg`)
+      //   - LHS resolves to anything else (string, number, etc.) → substring
+      //     match on the resolved-string form
+      //
+      // The two semantics let `${LIST|contains:"a"}` against ["a","b"]
+      // return "true" (element match) without silent-false-positive on
+      // ["alphabet"] (which substring-only would incorrectly match).
+      // Symmetric with `if "a" in ${LIST}:` per the conditionals spec.
+      if (arg === undefined) {
+        throw new Error("|contains filter: requires a quoted arg (e.g., |contains:\"X\")");
+      }
+      try {
+        const parsed = JSON.parse(value) as unknown;
+        if (Array.isArray(parsed)) {
+          return parsed.some((item) => String(item) === arg) ? "true" : "";
+        }
+      } catch {
+        /* not JSON — fall through to substring semantics */
+      }
+      return value.includes(arg) ? "true" : "";
+    }
     default:
-      throw new Error(`Unknown filter '${filter}' — supported: url, shell, json, trim, length`);
+      throw new Error(`Unknown filter '${filter}' — supported: ${KNOWN_FILTERS.join(", ")}`);
   }
 }

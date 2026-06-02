@@ -1,5 +1,128 @@
 # Changelog
 
+## 0.16.6 — 2026-06-02 — `|contains:` filter + triple-quote `textwrap.dedent`
+
+Two pure-language additions per Perry's `98d6b60b` directive. Both
+small, both high author-UX value, both no design tension with existing
+carve-outs.
+
+### 1. `|contains:"X"` filter
+
+Boolean substring/membership check for use in conditionals. Returns
+`"true"` on match, `""` (empty string) on miss — matches the
+`isTruthy` convention in runtime so `if ${R|contains:"X"}:` evaluates
+the way the syntax suggests.
+
+**Type-aware with JSON-string tolerance.** Mirrors the `in` / `not in`
+conditional operators per Perry's `4235ef2b` pushback during checkpoint:
+
+- LHS resolves to a JSON-parseable array → element membership (each
+  element stringified, compared against arg)
+- LHS resolves to anything else → substring match on the resolved
+  string form
+
+Without type-awareness, `${LIST|contains:"a"}` against `["alphabet"]`
+would silently match (substring "a" inside the stringified
+`'["alphabet"]'`) — the discipline-only-contracts shape we've been
+closing. Type-aware semantics catch the structural mismatch instead.
+
+Cognitive symmetry: `if ${A} in ${L}:` and `if ${L|contains:"a"}:`
+return the same answer when `${A}` resolves to `"a"`. **First filter
+to operate on structured types** because the conditional primitives
+already do; filter-as-conditional-primitive is the design line.
+Other filters (`|trim`, `|json`, `|fallback`, etc.) stay string-only.
+
+Common authoring pattern:
+
+```
+$ llm prompt="Reply with 'urgent' if any items are urgent" -> VERDICT
+if ${VERDICT|contains:"urgent"}:
+    notify(agent="oncall", message="paged")
+```
+
+Replaces the today-fragile shape `if ${VERDICT|trim} == "urgent":`
+which forces the prompt to over-constrain ("EXACTLY one word") just
+to fit the equality grammar.
+
+### 2. Triple-quote `textwrap.dedent` pattern
+
+Triple-quote literal extraction (parse, escape interpretation,
+multi-line spanning, embedded single quotes, `${VAR}` interpolation
+preservation) was already shipped in the earlier triple-quote work.
+This ring adds the missing piece: Python `textwrap.dedent` whitespace
+discipline.
+
+**What changes:** authors writing multi-line bodies indented inside
+the call site (the natural shape) get the common leading whitespace
+stripped automatically:
+
+```
+deliver:
+    emit(text="""
+    Follow these directions exactly,
+    step by step,
+    without skipping any steps.
+    """)
+```
+
+Renders as:
+
+```
+Follow these directions exactly,
+step by step,
+without skipping any steps.
+```
+
+Three passes:
+
+1. Strip a leading whitespace-only line (the natural `"""\n  body\n  """`
+   shape leaves one immediately after the opening delimiter)
+2. Strip a trailing whitespace-only line (same shape leaves one before
+   the closing delimiter)
+3. Compute the common leading-whitespace prefix across non-empty lines,
+   then strip that prefix from each line. Blank-or-whitespace-only lines
+   don't constrain the calculation — their indentation is flexible.
+
+**Dedent runs BEFORE `${VAR}` substitution** per the directive's Q1
+answer. Authors who substitute multi-line values into a triple-quote
+template keep the substituted value's own whitespace; only the
+template's literal-body indent gets stripped.
+
+**Single-line triple-quote literals pass through unchanged** — dedent
+only fires when there's actually a newline in the body.
+
+### Internal
+
+- `src/filters.ts`: `contains` added to `KNOWN_FILTERS`. `applyFilter`
+  signature extended with optional `arg` parameter (the existing
+  `fallback` filter consumes its arg upstream, so no other filter
+  needed it before).
+- `src/runtime.ts`, `src/compile.ts`: call-site updates to thread
+  `spec.arg` through to `applyFilter`. Compile-time substitute regex
+  extended to capture the arg.
+- `src/parser.ts`: `dedentTripleQuoteBody` helper added; applied in the
+  triple-quote literal extract branch of `processSetValue`. Exported
+  for direct testing.
+- `src/help-content.ts`: `contains:` row added to Pipe filters table;
+  triple-quote multi-line row added to Kwarg value grammar table;
+  dedent semantics example added.
+- LOC ceiling nudged 9900 → 10000 to absorb the v0.16 series cumulative
+  additions (kwarg lints, manifest exposure, `|contains:` filter, dedent
+  helper, bare-form detection branches). Per Scott's "LOC ceiling is a
+  signal not a budget" rule.
+- +14 tests in `tests/v0.16.6-contains-filter.test.ts` (unit + condition
+  context + lint integration). +13 tests in
+  `tests/v0.16.6-triple-quote-dedent.test.ts` (unit on the helper +
+  end-to-end via `emit(text=...)` + backward-compat with single-line).
+  1511 passing total (was 1484).
+
+### Docs
+
+Atom-level updates to the language reference happen separately (owned
+by Perry: `c6224b7d` Ops atom, the Pipe Filters atom, the Planned
+section). This ring touches only `src/help-content.ts` on the runtime
+side per agreed split.
+
 ## 0.16.5 — 2026-06-02 — HttpMcpConnector + RuntimeCapabilitiesConformance + sibling kwarg lints
 
 **Catchup ring.** Three queued items per Perry's `934fc9d8` sign-off had

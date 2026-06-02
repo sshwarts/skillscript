@@ -1573,7 +1573,7 @@ export function substituteRuntime(text: string, vars: Map<string, unknown>): str
         if (value === undefined) {
           throw new UnresolvedVariableError(ref, "?");
         }
-        value = applyFilter(stringifyValue(value), spec.name);
+        value = applyFilter(stringifyValue(value), spec.name, spec.arg);
       }
 
       if (value === undefined) {
@@ -1680,7 +1680,7 @@ function applyFilterChain(value: string, chain: string | undefined): string {
   let s = value;
   for (const spec of specs) {
     if (spec.name === "fallback") continue;
-    s = applyFilter(s, spec.name);
+    s = applyFilter(s, spec.name, spec.arg);
   }
   return s;
 }
@@ -1699,7 +1699,7 @@ function applyFilterChainCondition(value: unknown, chain: string | undefined): s
       continue;
     }
     if (current === undefined) current = "";
-    current = applyFilter(stringifyValue(current), spec.name);
+    current = applyFilter(stringifyValue(current), spec.name, spec.arg);
   }
   if (current === undefined) current = "";
   return stringifyValue(current);
