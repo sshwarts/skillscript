@@ -1,5 +1,100 @@
 # Changelog
 
+## 0.16.1 — 2026-06-02 — Trust-boundary discipline + parser hardening
+
+Theme: closes the 7-finding code-smell audit banked in v0.16.0's §32
+charter. Each finding is now structurally enforced — boundaries that
+were named in vocabulary now have guards that exercise the actual
+attack shapes. Plus housekeeping carried over from v0.16.0: timeless
+adopter-facing docs, envelope-empty fallback semantics clarification
+(per Perry's adopter dogfood finding `a214ef51`).
+
+### Trust-boundary discipline (audit findings #1–#5)
+
+- **`safePathJoin` helper** + `InvalidPathError` class. `trace.ts`
+  write/get/query/`_traceFilePathFor` now route through path-validated
+  joins. Closes #1 (`traceId` path-traversal via
+  `skill_metadata({name: ".."})` MCP arg) + #2 (`sanitize()` whitelist
+  left `.`/`..` intact). The old `sanitize()` function is gone.
+- **`RemoteMcpConnector.manifest()` redaction.** Returns
+  `args_count` + `args_redacted: true` instead of the literal `args`
+  array. Closes #3 — secrets substituted into args at wire-time no
+  longer leak through `runtime_capabilities` to MCP callers.
+- **Broader `credential-in-args` lint.** Walks all op kinds (not just
+  `$`), scans `# Vars:` defaults, recognizes `:`-separated key shape
+  (`Authorization: Bearer ...`), recognizes value-shape patterns
+  (Bearer 20+/`sk-`/`ghp_`/JWT triple). Demoted to tier-2 (warning) —
+  broader patterns trade fewer false negatives for some false positives.
+  Closes #4.
+- **New `unsafe-shell-unescaped-subst` tier-2 lint.** Fires when an
+  `unsafe=true` shell body interpolates a declared variable without the
+  `|shell` escape filter. Sibling to existing `unsafe-shell-ambiguous-subst`
+  (which catches the opposite case: undeclared refs colliding with bash
+  command-sub syntax). Closes #5.
+
+### Parser hardening (audit findings #6–#7)
+
+- **`$set` malformed explicit parse errors.** No-`=`, dotted target,
+  numeric-leading-ident, and bare-`$set` shapes each get a distinct
+  diagnostic instead of silent-drop. Closes #6 — adopters see the
+  cause directly instead of downstream `undeclared-var` blaming the
+  symptom.
+- **Parser resource caps.** `MAX_CONDITION_LENGTH = 4096` +
+  `MAX_CONDITION_DEPTH = 64`. Length cap upstream of REF_PATTERN
+  regex application closes the practical ReDoS vector with smaller
+  risk than a regex rewrite (REF_PATTERN refactor deferred). Depth cap
+  bounds recursion in `validateCompoundCondition` against
+  stack-overflow on deeply-chained `AND`/`OR`. Closes #7. Parser
+  returns cleanly on adversarial input rather than throwing — preserves
+  the "never throws" contract under resource pressure.
+
+### Envelope-empty fallback clarification (Perry's adopter finding)
+
+Per `a214ef51`: `$ data_read mode="..." query="..." -> R (fallback: "...")`
+binds `R` to `{items: []}` on empty matches; fallback does NOT fire
+because the envelope object is non-empty. Strict reading of the v0.16.0
+parity-fix contract is consistent ("fires on empty bound value"), but
+the UX surprise was real. Doc clarification lands in `help()` ops
+topic: "The fallback fires on dispatch throw OR empty bound value...
+An envelope object like `{items: []}` is a non-empty object even when
+the contained array is empty, so the fallback does NOT fire. To handle
+envelope-empty downstream, either test the contained collection
+(`if ${R.items|length} == "0":`) or apply a filter
+(`${R.items|fallback:[]}`)." Part 2 (envelope-shape-fallback lint
+advisory) deferred — needs typed-contract return-shape registry that
+doesn't exist yet, and the existing `object-iteration-advisory` already
+catches the related foreach-on-envelope shape.
+
+### Timeless adopter-facing docs
+
+- `help()` content swept of all `v0.X.Y` version references (was 66
+  occurrences, now 0).
+- Onboarding-scaffold examples (`openai-local-model.ts`,
+  `tmux-shell-agent-connector.ts`, `file-data-store.ts`, `bootstrap.ts`,
+  `custom-bootstrap.example.ts`, `examples/README.md`) swept of stale
+  version-stamped commentary.
+- Adopter-facing connector templates (`McpConnectorTemplate.ts`,
+  `SkillStoreTemplate.ts`) swept.
+
+Help content + adopter templates now describe what IS, not version
+history — per `feedback_playbook_is_timeless`. The full language-guide
+re-render (atom `50fcecc8`) is the v0.16.2 followup.
+
+### Internal
+
+- +6 new test files, +84 new tests (was 1336 at v0.16.0 baseline, now
+  1420). Coverage of: path-traversal boundary, manifest redaction,
+  broader credential patterns, unsafe-shell-unescaped-subst, $set
+  malformed shapes, parser resource caps under adversarial input.
+- Narrow core LOC 9423/9900 (+87 from v0.16.0).
+- All 7 audit findings closed → §32 charter v0.16.3 + v0.16.4 work
+  pulled forward into this ring.
+- Filed forward to v0.16.2: HttpMcpConnector (bundled, generic) +
+  language-guide regen + typed-contract kwarg lints
+  (`unknown-llm-model` / `unknown-llm-arg` / `unknown-data-read-arg`
+  per memory `9254a648`) + `runtime_capabilities` contract-test
+  fixture (Perry's `adf47c0b`).
+
 ## 0.16.0 — 2026-06-02 — Language-surface canonicalization
 
 Theme: structural discipline applied to source-level dispatch surfaces. Two

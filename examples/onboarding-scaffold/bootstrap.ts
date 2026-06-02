@@ -1,5 +1,5 @@
 // Onboarding scaffold: complete bootstrap wiring file-backed data store +
-// OpenAI LLM + tmux-shell AgentConnector. v0.7.3.
+// OpenAI LLM + tmux-shell AgentConnector.
 //
 // Copy this file into your deployment and modify substrate choices to
 // match your environment. The shape is:
@@ -74,12 +74,12 @@ registry.registerMcpConnector("llm", new LocalModelMcpConnector(openai));
 const dataBridge = new DataStoreMcpConnector(dataStore);
 registry.registerMcpConnector("data_read", dataBridge);
 registry.registerMcpConnector("data_write", dataBridge);
-// v0.15.0 — SkillStore-as-bridge. Makes `$ skill_write` / `$ skill_read`
-// dispatchable from inside an executing skill (Lisp-shape: skills program
-// skills). In-skill writes are forced to `# Status: Draft` at the bridge
-// layer per the v0.15.0 trust boundary — see `src/connectors/skill-store-mcp.ts`
-// header for the threat-model rationale. Outside-MCP `skill_write` (via the
-// wire surface) keeps its existing "body declares status" behavior.
+// SkillStore-as-bridge. Makes `$ skill_write` / `$ skill_read` dispatchable
+// from inside an executing skill (Lisp-shape: skills program skills).
+// In-skill writes are forced to `# Status: Draft` at the bridge layer —
+// see `src/connectors/skill-store-mcp.ts` header for the threat-model
+// rationale. Outside-MCP `skill_write` (via the wire surface) keeps its
+// existing "body declares status" behavior.
 const skillBridge = new SkillStoreMcpConnector(skillStore);
 registry.registerMcpConnector("skill_read", skillBridge);
 registry.registerMcpConnector("skill_write", skillBridge);

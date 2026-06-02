@@ -246,7 +246,28 @@ export class OpTimeoutError extends OpError {
 }
 
 
-/** An `@ unsafe` op fired with `runtime.enable_unsafe_shell = false` (default). */
+/**
+ * A path component failed `safePathJoin` validation — empty, all-dots
+ * (`.` / `..` / etc.), or contains a separator or null byte. Surfaces
+ * path-traversal attempts at filesystem boundaries (TraceStore writes,
+ * substrate-touching surfaces with untrusted name components).
+ */
+export class InvalidPathError extends Error {
+  constructor(
+    public readonly badComponent: string,
+    public readonly reason: string,
+  ) {
+    const safe = badComponent.length > 40 ? `${badComponent.slice(0, 40)}...` : badComponent;
+    super(
+      `Invalid path component '${safe}': ${reason}. ` +
+      "Path components must be non-empty, must not be '.'/'..'/all-dots, " +
+      "and must not contain '/', '\\\\', or null bytes."
+    );
+    this.name = "InvalidPathError";
+  }
+}
+
+/** A shell op (`shell(command="...", unsafe=true)`) fired with `runtime.enable_unsafe_shell = false` (default). */
 export class UnsafeShellDisabledError extends OpError {
   constructor(
     public readonly command: string,

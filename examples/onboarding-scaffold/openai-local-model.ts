@@ -1,17 +1,16 @@
-// Onboarding scaffold: OpenAI-API-backed LocalModel. v0.7.3.
+// Onboarding scaffold: OpenAI-API-backed LocalModel.
 //
 // HTTP client to OpenAI's Chat Completions endpoint. Implements the
-// `LocalModel.run(prompt, opts)` typed contract so the v0.7.2 bridge
-// (`LocalModelMcpConnector`) surfaces it as canonical `$ llm prompt=...`
-// for skills.
+// `LocalModel.run(prompt, opts)` typed contract so the
+// `LocalModelMcpConnector` bridge surfaces it as canonical
+// `$ llm prompt=... [maxTokens=N] [model="..."] -> R` for skills.
 //
 // **Prompt-vs-messaging caveat.** `LocalModel.run()` takes a single
 // `prompt` string; Chat Completions expects a list of messages with roles.
 // This adapter wraps the prompt as a single `user` message. Skills that
-// need multi-turn or system-prompt isolation should treat this as a
-// limitation of the v0.7.x contract and pair the LLM dispatch with `$set`
-// + accumulation in the skill body for now. v0.8.x is a likely venue
-// for a richer message-shaped LocalModel contract.
+// need multi-turn or system-prompt isolation should pair the LLM dispatch
+// with `$set` + accumulation in the skill body — the LocalModel contract
+// is intentionally narrow (prompt-in, text-out).
 
 import type {
   LocalModel,

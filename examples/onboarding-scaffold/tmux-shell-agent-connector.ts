@@ -1,12 +1,12 @@
-// Onboarding scaffold: tmux-shell AgentConnector. v0.7.3.
+// Onboarding scaffold: tmux-shell AgentConnector.
 //
 // Delivers skill output to a named tmux session via `tmux send-keys`.
 // Matches what nanoclaw-style agent harnesses do internally — adopters
-// with agents running in tmux sessions can wire `# Output: prompt-context:
-// <agent>` end-to-end against this impl.
+// with agents running in tmux sessions can wire `# Output: agent: <agent>`
+// end-to-end against this impl.
 //
 // **Scope.** Implements `deliver()` + `list_agents()` + `wake()` +
-// `manifest()` per the v0.7.x AgentConnector contract. `wake()` is a no-op
+// `manifest()` per the AgentConnector contract. `wake()` is a no-op
 // here (tmux panes are always live; wake is for harnesses with sleep modes).
 
 import { spawn } from "node:child_process";

@@ -299,26 +299,43 @@ const COND_CMP = new RegExp(`^\\s*${REF_PATTERN}\\s*(?:<=|>=|<|>)\\s*"[^"]*"\\s*
 const COND_CMP_REF = new RegExp(`^\\s*${REF_PATTERN}\\s*(?:<=|>=|<|>)\\s*${REF_PATTERN}\\s*$`);
 const COND_IN = new RegExp(`^\\s*${REF_PATTERN}\\s+(?:not\\s+)?in\\s+${REF_PATTERN_NO_FILTER}\\s*$`);
 
+// Parser resource caps. The "parser never throws on bad input" contract
+// requires bounded recursion + length-capped regex application — without
+// these guards, adversarial input crashes the host (stack overflow via
+// `a and b and c and ...` deeply-chained AND; CPU exhaustion via
+// REF_PATTERN's nested `*` quantifiers backtracking on near-valid input).
+// Length cap is upstream of regex application (smaller risk than regex
+// refactor, which is deferred). Depth cap is downstream of the length
+// check; both must hold.
+const MAX_CONDITION_LENGTH = 4096;
+const MAX_CONDITION_DEPTH = 64;
+
 function validateCondition(cond: string): boolean {
-  return validateCompoundCondition(cond.trim());
+  const trimmed = cond.trim();
+  if (trimmed.length > MAX_CONDITION_LENGTH) return false;
+  return validateCompoundCondition(trimmed, 0);
 }
 
-// v0.3.2 — recursive structural decomposition matching runtime evalCondition.
+// Recursive structural decomposition matching runtime evalCondition.
 // Order: strip parens → split on outermost OR → AND → not prefix → simple shape.
-function validateCompoundCondition(cond: string): boolean {
+// `depth` is incremented per recursive call and capped at MAX_CONDITION_DEPTH —
+// adversarial input like `a and b and c and ... (1000 ANDs)` would otherwise
+// blow the JS stack.
+function validateCompoundCondition(cond: string, depth: number): boolean {
+  if (depth > MAX_CONDITION_DEPTH) return false;
   const stripped = stripOuterCondParens(cond);
   const orIdx = findOuterCondToken(stripped, "or");
   if (orIdx >= 0) {
-    return validateCompoundCondition(stripped.slice(0, orIdx).trim())
-      && validateCompoundCondition(stripped.slice(orIdx + 4).trim());
+    return validateCompoundCondition(stripped.slice(0, orIdx).trim(), depth + 1)
+      && validateCompoundCondition(stripped.slice(orIdx + 4).trim(), depth + 1);
   }
   const andIdx = findOuterCondToken(stripped, "and");
   if (andIdx >= 0) {
-    return validateCompoundCondition(stripped.slice(0, andIdx).trim())
-      && validateCompoundCondition(stripped.slice(andIdx + 5).trim());
+    return validateCompoundCondition(stripped.slice(0, andIdx).trim(), depth + 1)
+      && validateCompoundCondition(stripped.slice(andIdx + 5).trim(), depth + 1);
   }
   const lead = stripped.trimStart();
-  if (lead.startsWith("not ")) return validateCompoundCondition(lead.slice(4));
+  if (lead.startsWith("not ")) return validateCompoundCondition(lead.slice(4), depth + 1);
   return COND_TRUTHY.test(stripped) || COND_EQ.test(stripped) || COND_EQ_REF.test(stripped) ||
          COND_CMP.test(stripped) || COND_CMP_REF.test(stripped) || COND_IN.test(stripped);
 }
@@ -1606,6 +1623,25 @@ export function parse(source: string): ParsedSkill {
           setName: setName!,
           setValue: processSetValue(rawValue!),
         });
+      } else {
+        // Malformed `$set` no longer silently drops. Diagnose the
+        // specific shape so the author sees the cause, not a downstream
+        // `undeclared-var` blaming the symptom. Sibling to v0.9.2 P0.8
+        // (`$append VAR =`) + qwen-test P0.5 (`$<word>`) treatments.
+        const tail = stripped.slice(4).trim();
+        let detail: string;
+        if (tail === "") {
+          detail = "missing variable name and `=` assignment. Canonical: `$set VAR = value`.";
+        } else if (!tail.includes("=")) {
+          detail = `'${tail.slice(0, 40)}' has no \`=\` assignment. Canonical: \`$set VAR = value\` (the \`=\` is required).`;
+        } else if (/^\d/.test(tail)) {
+          detail = `'${tail.slice(0, 40)}' starts with a digit. Variable names must start with a letter or underscore.`;
+        } else if (/^[A-Za-z_]\w*\.[A-Za-z_]/.test(tail)) {
+          detail = `'${tail.slice(0, 40)}' uses dotted target. \`$set\` binds top-level variables only; dotted writes aren't supported. Bind a parent var first via \`$set PARENT = {...}\` then mutate via \`$ json_parse\` + structured ops.`;
+        } else {
+          detail = `'${tail.slice(0, 40)}' doesn't match the \`VAR = value\` shape. Variable names: \`[A-Za-z_]\\w*\`. Canonical: \`$set VAR = value\`.`;
+        }
+        result.parseErrors.push(`Malformed \`$set\` op in target '${currentTarget.name}': ${detail}`);
       }
       continue;
     } else if (stripped.startsWith("$append ") || stripped === "$append") {

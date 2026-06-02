@@ -967,26 +967,61 @@ const DISABLED_SKILL_REFERENCE: LintRule = {
   },
 };
 
-/** Patterns that strongly suggest a credential in plaintext. Conservative — false positives are noisy, false negatives are dangerous, so we err on the side of catching obvious cases. */
-const CREDENTIAL_ARG_PATTERN = /\b(apikey|api_key|token|secret|password|passwd|pwd|auth_token|access_token|bearer)\s*=/i;
+// Credential detection covers two surfaces:
+//
+//   1. KEY shape — identifier names that conventionally hold secrets,
+//      followed by `=` or `:` (covers MCP-tool kwargs, HTTP headers like
+//      `Authorization: Bearer ...`, connector config k:v pairs).
+//
+//   2. VALUE shape — recognizable token prefixes/structures (Bearer
+//      tokens, OpenAI `sk-` keys, GitHub `ghp_` tokens, JWT `eyJ.X.Y`).
+//      Catches credentials in unnamed positions (e.g., literal Bearer
+//      token in a shell command body).
+//
+// Tier-2 (warning) — broader patterns mean some false positives are
+// expected. False positives are noisy; false negatives are dangerous.
+const CREDENTIAL_KEY_PATTERN = /\b(api[_-]?key|token|secret|password|passwd|pwd|auth(?:[_-]?token)?|access[_-]?token|bearer|client[_-]?secret|private[_-]?key|signing[_-]?key|refresh[_-]?token|connection[_-]?string|vault[_-]?token|db[_-]?password)\s*[:=]/i;
+const CREDENTIAL_VALUE_PATTERN = /(?:Bearer\s+[A-Za-z0-9_.~+/=-]{20,}|\bsk-[A-Za-z0-9_-]{20,}|\bghp_[A-Za-z0-9]{20,}|\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+)/;
+
+function findsCredential(text: string): boolean {
+  return CREDENTIAL_KEY_PATTERN.test(text) || CREDENTIAL_VALUE_PATTERN.test(text);
+}
 
 const CREDENTIAL_IN_ARGS: LintRule = {
   id: "credential-in-args",
-  severity: "error",
-  description: "A `$` op carries arg values that match credential-like patterns. Credentials don't belong in skill source.",
-  remediation: "Move credentials to per-connector config (env vars, mounted secrets). Skill args should reference operator-managed values, not embed them.",
+  severity: "warning",
+  description: "An op or `# Vars:` default appears to carry credential-like content. Credentials don't belong in skill source.",
+  remediation: "Move credentials to per-connector config (env vars in connectors.json, mounted secrets). Skill source should reference operator-managed values via `# Requires: user-var:NAME -> VAR`, not embed them.",
   check: (ctx) => {
     const findings: LintFinding[] = [];
+    const reported = new Set<string>();
+    const emit = (where: string, snippet: string, block?: string): void => {
+      const key = `${where}:${snippet.slice(0, 60)}`;
+      if (reported.has(key)) return;
+      reported.add(key);
+      findings.push({
+        rule: "credential-in-args",
+        severity: "warning",
+        message: `${where}: credential-like content detected ('${snippet.slice(0, 60).replace(/\n/g, " ")}${snippet.length > 60 ? "..." : ""}').`,
+        ...(block !== undefined ? { block } : {}),
+      });
+    };
+    // # Vars: default values — author-written, often where adopters paste secrets by mistake.
+    for (const v of ctx.parsed.vars) {
+      if (v.default !== undefined && findsCredential(v.default)) {
+        emit(`# Vars: ${v.name} default`, v.default);
+      }
+    }
+    // Op bodies + value-bearing fields across all op kinds.
     for (const [targetName, target] of ctx.parsed.targets) {
       walkOps(target.ops, (op) => {
-        if (op.kind !== "$") return;
-        if (CREDENTIAL_ARG_PATTERN.test(op.body)) {
-          findings.push({
-            rule: "credential-in-args",
-            severity: "error",
-            message: `\`$\` op in target '${targetName}' appears to carry credential-like arg ('${op.body.slice(0, 40)}...').`,
-            block: targetName,
-          });
+        // Op body — covers $, shell, emit, $set body, foreach list, etc.
+        if (op.body !== undefined && findsCredential(op.body)) {
+          emit(`Op '${op.kind}' in target '${targetName}'`, op.body, targetName);
+        }
+        // Mutation-statement value (setValue holds the RHS of $set / $append).
+        if (op.setValue !== undefined && findsCredential(op.setValue)) {
+          emit(`'${op.kind}' value in target '${targetName}'`, op.setValue, targetName);
         }
       });
     }
@@ -1188,6 +1223,70 @@ const UNSAFE_SHELL_AMBIGUOUS_SUBST: LintRule = {
             message: `\`$(${inner})\` in \`@ unsafe\` body of target '${targetName}' is ambiguous — either send literally to bash via \`$$(${inner})\`, or use a declared skillscript variable.`,
             block: targetName,
             extras: { ref: inner },
+          });
+        }
+      });
+    }
+    return findings;
+  },
+};
+
+// Sibling to unsafe-shell-ambiguous-subst: that rule catches refs that
+// AREN'T declared (potential bash command-sub collision); this rule
+// catches refs that ARE declared but are inlined raw into bash, missing
+// the `|shell` escape filter. Author intent is "substitute this variable"
+// but they haven't told the runtime to bash-escape it — variable values
+// containing spaces or shell metacharacters break the command silently
+// or, worse, become injectable.
+const UNSAFE_SHELL_UNESCAPED_SUBST: LintRule = {
+  id: "unsafe-shell-unescaped-subst",
+  severity: "warning",
+  description: "An `unsafe=true` shell op interpolates a declared variable into a bash command body without the `|shell` escape filter. Variable values containing whitespace or shell metacharacters break the command or become injectable.",
+  remediation: "Add the `|shell` filter on every interpolation: `${VAR|shell}` produces a single bash-quoted token. The filter exists for exactly this case — it's the canonical escape for unsafe-shell substitution.",
+  check: (ctx) => {
+    const declared = new Set<string>();
+    for (const v of ctx.parsed.vars) declared.add(v.name);
+    for (const r of ctx.parsed.requires) declared.add(r.target);
+    for (const target of ctx.parsed.targets.values()) {
+      const collect = (op: SkillOp): void => {
+        if (op.setName !== undefined) declared.add(op.setName);
+        if (op.outputVar !== undefined) declared.add(op.outputVar);
+        if (op.foreachIter !== undefined) declared.add(op.foreachIter);
+      };
+      walkOps(target.ops, collect);
+      if (target.elseBlock !== undefined) walkOps(target.elseBlock, collect);
+    }
+    const findings: LintFinding[] = [];
+    // Match both `${VAR|filters}` and `$(VAR|filters)` forms. Capture the
+    // var name + the filter chain. Single `$` only — `$$(...)` is the
+    // bash-literal escape, not a skillscript substitution.
+    const REF_RE = /(?<!\$)\$(?:\{([^|}\s]+)((?:\|\s*[A-Za-z_]\w*(?:\s*:\s*"[^"]*")?)*)\}|\(([^|)\s]+)((?:\|\s*[A-Za-z_]\w*(?:\s*:\s*"[^"]*")?)*)\))/g;
+    for (const [targetName, target] of ctx.parsed.targets) {
+      const reported = new Set<string>();
+      walkOps(target.ops, (op) => {
+        if (op.kind !== "shell" || op.policy !== "unsafe") return;
+        const re = new RegExp(REF_RE.source, "g");
+        let m: RegExpExecArray | null;
+        while ((m = re.exec(op.body)) !== null) {
+          const varName = (m[1] ?? m[3])!;
+          const chain = (m[2] ?? m[4]) ?? "";
+          // Skip dotted refs (structured access — author's responsibility).
+          if (varName.includes(".")) continue;
+          // Skip ambient refs — runtime-injected, author can't filter them.
+          if (AMBIENT_VARS.includes(varName)) continue;
+          // Skip refs whose ROOT identifier isn't declared (those fire as
+          // `unsafe-shell-ambiguous-subst` or `undeclared-var` instead).
+          if (!declared.has(varName)) continue;
+          // The cure: a `|shell` filter in the chain.
+          if (/\|\s*shell\b/.test(chain)) continue;
+          if (reported.has(varName)) continue;
+          reported.add(varName);
+          findings.push({
+            rule: "unsafe-shell-unescaped-subst",
+            severity: "warning",
+            message: `\`\${${varName}}\` interpolated into \`shell(command=..., unsafe=true)\` body in target '${targetName}' without the \`|shell\` escape filter. Variable values with spaces or shell metacharacters will break the command or become injectable. Rewrite as \`\${${varName}|shell}\`.`,
+            block: targetName,
+            extras: { var_name: varName },
           });
         }
       });
@@ -2340,6 +2439,7 @@ const RULES: LintRule[] = [
   DEPRECATED_QUESTION,
   DEPRECATED_SUBSTITUTION_SHAPE,
   UNSAFE_SHELL_AMBIGUOUS_SUBST,
+  UNSAFE_SHELL_UNESCAPED_SUBST,
   UNSAFE_SHELL_OP,
   UNSAFE_SHELL_DISABLED,
   UNCONFIRMED_MUTATION,

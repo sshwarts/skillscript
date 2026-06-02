@@ -257,12 +257,18 @@ export class RemoteMcpConnector implements McpConnector {
 
   async manifest(): Promise<ManifestInfo<"mcp_connector">> {
     await this.start();
+    // Args are NOT returned verbatim — they may contain env-substituted
+    // secrets (e.g. `Authorization: Bearer ${API_KEY}` substituted at
+    // wiring time to a literal token). `runtime_capabilities` surfaces
+    // manifests through the MCP wire, so leaking the substituted args
+    // exposes credentials. Surface count + redaction flag instead.
     return {
       capabilities_version: "1",
       manifest: {
         kind: "remote",
         command: this.config.command,
-        args: this.config.args,
+        args_count: this.config.args.length,
+        args_redacted: true,
         framing: this.framing,
         tools_available: this.toolsAvailable,
       },

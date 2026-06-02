@@ -1,6 +1,8 @@
 import { createHash, randomUUID } from "node:crypto";
 import { mkdir, readdir, readFile, stat, unlink, writeFile } from "node:fs/promises";
 import { join, basename, dirname } from "node:path";
+import { safePathJoin, validatePathComponent } from "./safe-path.js";
+import { InvalidPathError } from "./errors.js";
 import type { ExecutionError } from "./runtime.js";
 
 /**
@@ -102,9 +104,12 @@ export class FilesystemTraceStore implements TraceStore {
   constructor(private readonly rootDir: string) {}
 
   async write(record: TraceRecord): Promise<void> {
-    const dir = join(this.rootDir, sanitize(record.skill_name));
+    // safePathJoin throws InvalidPathError on `..`, `.`, separators, null bytes.
+    // Record came from a parser that accepted `# Skill: ..` (the parser checks
+    // reserved keywords only); the path-traversal boundary is enforced here.
+    const dir = safePathJoin(this.rootDir, record.skill_name);
     await mkdir(dir, { recursive: true });
-    const path = join(dir, `${record.trace_id}.json`);
+    const path = safePathJoin(dir, `${record.trace_id}.json`);
     await writeFile(path, JSON.stringify(record, null, 2), "utf8");
   }
 
@@ -112,7 +117,13 @@ export class FilesystemTraceStore implements TraceStore {
     const results: TraceRecord[] = [];
     let skillDirs: string[];
     if (filter.skill_name !== undefined) {
-      skillDirs = [sanitize(filter.skill_name)];
+      try {
+        validatePathComponent(filter.skill_name);
+      } catch (err) {
+        if (err instanceof InvalidPathError) return [];
+        throw err;
+      }
+      skillDirs = [filter.skill_name];
     } else {
       try {
         skillDirs = await readdir(this.rootDir);
@@ -149,6 +160,13 @@ export class FilesystemTraceStore implements TraceStore {
   }
 
   async get(traceId: string): Promise<TraceRecord | null> {
+    // traceId is caller-supplied (CLI arg or MCP arg) — validate before file ops.
+    try {
+      validatePathComponent(traceId);
+    } catch (err) {
+      if (err instanceof InvalidPathError) return null;
+      throw err;
+    }
     let skillDirs: string[];
     try {
       skillDirs = await readdir(this.rootDir);
@@ -294,15 +312,9 @@ export const TRACE_DEFAULTS = {
 
 // ─── Internals ──────────────────────────────────────────────────────────────
 
-function sanitize(name: string): string {
-  // Filesystem-safe per the FilesystemSkillStore convention. Same charset
-  // — alphanumeric, hyphen, underscore, dot.
-  return name.replace(/[^A-Za-z0-9._-]/g, "_");
-}
-
 /** Convenience for tests: derive the on-disk path FilesystemTraceStore writes to. */
 export function _traceFilePathFor(rootDir: string, record: TraceRecord): string {
   void basename;
   void dirname;
-  return join(rootDir, sanitize(record.skill_name), `${record.trace_id}.json`);
+  return safePathJoin(rootDir, record.skill_name, `${record.trace_id}.json`);
 }

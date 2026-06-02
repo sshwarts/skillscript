@@ -1,13 +1,11 @@
-// Onboarding scaffold: file-backed DataStore. v0.7.3.
+// Onboarding scaffold: file-backed DataStore.
 //
 // JSON file as the substrate; simple JS substring + token match for "fts"
 // queries; reranks by recency. Adopters copy this file and modify for
 // their concrete substrate (e.g., swap the JSON file for a Postgres
 // table, the substring match for actual full-text search, etc.).
 //
-// **Scope.** Read-only `query()` per the v0.7.2 DataStore contract.
-// `write()` is deferred to v0.8.x bundled with the auth model — when
-// that lands, extend this file with the matching `write()` method.
+// **Scope.** Implements `query()` + `write()` per the DataStore contract.
 
 import { readFileSync, existsSync, writeFileSync } from "node:fs";
 import { randomUUID } from "node:crypto";
@@ -106,7 +104,7 @@ export class FileDataStore implements DataStore {
         file_path: this.config.filePath,
         record_count: this.loadFile().length,
         supports_write: true,
-        // v0.14.1 strict-filters: the bridge enforces every non-base filter
+        // strict-filters: the bridge enforces every non-base filter
         // key in `query()` calls against this declared set, throwing
         // UnsupportedFilterError for unknowns. This reference impl's
         // substring scorer doesn't actually filter on any field (it

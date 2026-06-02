@@ -1,9 +1,9 @@
 // Worked example: writing a custom bootstrap that wires adopter-specific
-// substrates against skillscript-runtime's public APIs. v0.7.3.
+// substrates against skillscript-runtime's public APIs.
 //
 // **When to write your own bootstrap.** The bundled `bootstrap()` from
 // `skillscript-runtime` wires `FilesystemSkillStore` + `OllamaLocalModel` +
-// `SqliteDataStore` + the v0.7.2 bridges. If your deployment uses
+// `SqliteDataStore` + the typed-contract bridges. If your deployment uses
 // different substrates (your own data store, a hosted LLM API, an MCP
 // server for agent delivery, etc.), write your own bootstrap rather than
 // modifying the bundled one. Prevents merge conflicts on every upstream
@@ -52,7 +52,7 @@ class MyAdopterConnector implements McpConnector {
   constructor(private readonly config: Record<string, unknown>) {}
 
   async call(toolName: string, args: Record<string, unknown>, _ctx?: McpDispatchCtx): Promise<unknown> {
-    // Dispatch to your substrate. Auth/credentials per the v0.8.x passthrough
+    // Dispatch to your substrate. Auth/credentials per the passthrough
     // model: the substrate enforces; runtime threads credentials via ctx.
     void toolName; void args;
     return { ok: true };
@@ -102,7 +102,7 @@ registry.registerSkillStore("primary", skillStore);
 //     registry.registerMcpConnector("data_read", dataBridge);
 //     registry.registerMcpConnector("data_write", dataBridge);
 //   }
-//   // v0.15.0 — SkillStore-as-bridge. Makes `$ skill_write` / `$ skill_read`
+//   // SkillStore-as-bridge. Makes `$ skill_write` / `$ skill_read`
 //   // dispatchable from inside an executing skill (Lisp-shape: skills program
 //   // skills). In-skill writes are Draft-forced at the bridge layer; outside-MCP
 //   // skill_write keeps the existing "body declares status" behavior.
