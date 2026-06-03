@@ -326,6 +326,13 @@ export class Scheduler {
       // pass their own triggerCtx with the right source value.
       triggerCtx: triggerCtx ?? { source: "inline", name: "", fired_at_ms: nowMs },
       skillVersion: loaded.metadata.version,
+      // v0.16.9 — identity follows the skill. Trigger-fired dispatch
+      // (cron, scheduled, event-source) carries the skill's author as
+      // ctx.agentId. Closes the `olsen-nightly` cron case from Scott's
+      // original framing: a skill that writes to its author's mailbox
+      // now dispatches under the author's identity even when fired by
+      // the scheduler under a different process identity.
+      ...(loaded.metadata.author !== undefined ? { agentId: loaded.metadata.author } : {}),
     };
     const defaults = this.buildEventDefaults();
     return execute(

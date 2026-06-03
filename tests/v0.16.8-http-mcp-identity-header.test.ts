@@ -126,9 +126,12 @@ describe("v0.16.8 — HttpMcpConnector identity header threading (honesty fix)",
     expect(mock.capturedToolCallHeaders[0]!["x-agent-id"]).toBe("alice");
   });
 
-  it("staticCapabilities declares supports_identity_propagation:false (honest until per-identity-sessions ships)", () => {
+  it("staticCapabilities declares supports_identity_propagation:true once v0.16.9 per-identity-sessions ship", () => {
     const caps = HttpMcpConnector.staticCapabilities();
-    expect(caps.features["supports_identity_propagation"]).toBe(false);
+    // v0.16.9 update — flag flipped from false (v0.16.8 placeholder) to
+    // true once per-identity session keying landed. Both Level 1 +
+    // Level 2 propagation work against session-pinning substrates.
+    expect(caps.features["supports_identity_propagation"]).toBe(true);
   });
 
   it("fromConfig accepts identityHeader when supplied", async () => {

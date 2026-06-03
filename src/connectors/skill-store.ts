@@ -172,19 +172,6 @@ export class FilesystemSkillStore implements SkillStore {
     }
     await mkdir(this.rootDir, { recursive: true });
 
-    // v0.9.1 — P0.4 auto-stamp. When the body declares `# Status: Approved`
-    // without a hash token (or with an invalid one), stamp `vN:<token>`
-    // automatically so headless MCP-only adopters don't need a dashboard
-    // round-trip to get a runnable Approved state. Bodies that ALREADY
-    // carry a valid `# Status: Approved vN:<token>` are re-stamped too
-    // (cheap; ensures the persisted body always matches the hash).
-    // Draft/Disabled bodies pass through verbatim.
-    let bodyToWrite = source;
-    const extracted = extractStatusFromBody(source);
-    if (extracted !== null && extracted.status === "Approved") {
-      bodyToWrite = stampApprovalToken(source);
-    }
-
     // v0.16.8 — author capture + immutability. First-write captures the
     // authenticated writer (defaulting to `os.userInfo().username` for the
     // filesystem-trust-boundary). Subsequent `store()` calls preserve the
@@ -208,9 +195,62 @@ export class FilesystemSkillStore implements SkillStore {
       resolvedAuthor = requestedAuthor ?? userInfo().username;
     }
 
+    // v0.16.9 — status preservation on overwrite. Status transition is the
+    // load-bearing security operation — it requires an explicit
+    // `update_status()` call (or substrate-side authority via explicit
+    // `metadata.status`), NOT a side-effect of a body rewrite. Existing
+    // skill's current status is read from the versions log (last entry) and
+    // preserved; body's `# Status:` declaration is rewritten to match the
+    // preserved status so body + persisted state agree. Caller can override
+    // by passing `metadata.status` explicitly (this is the authority-bypass
+    // path used by `update_status()` and dashboard approval flows). For new
+    // skills, body's declaration is honored as before.
+    //
+    // Aligns with `SkillMeta.author` immutability (v0.16.8) — both at the
+    // SkillStore trust-boundary, both require explicit substrate-level
+    // authority to transition, both prevent silent escalation via body
+    // rewrite. Per Perry's `9d9aef14` / `fd18e3f7` ack on the (A)
+    // intentional-trust-boundary interpretation.
+    const existingStatus = await this.readLastVersionStatus(name);
+    const bodyStatus = extractStatus(source);
+    let resolvedStatus: SkillStatus;
+    let bodyToWrite: string;
+    if (existingStatus !== null) {
+      // Existing skill — preserve previous status unless caller has authority
+      // (explicit metadata.status). Rewrite body to match.
+      resolvedStatus = metadata?.status ?? existingStatus;
+      if (bodyStatus !== null && bodyStatus !== resolvedStatus) {
+        // Body's declaration would have changed status; rewrite body to
+        // match the preserved status (or strip any token if going to non-
+        // Approved). Auto-stamp re-applies below if landing Approved.
+        bodyToWrite = rewriteStatusHeader(source, resolvedStatus);
+      } else {
+        bodyToWrite = source;
+      }
+    } else {
+      // New skill — body's declaration is the authority. Existing v0.9.1
+      // auto-stamp path applies.
+      resolvedStatus = metadata?.status ?? bodyStatus ?? "Draft";
+      bodyToWrite = source;
+    }
+
+    // v0.9.1 — P0.4 auto-stamp. When the resulting status is Approved,
+    // stamp the hash token onto the body so it always matches the persisted
+    // status. Applies to both new-skill body-says-Approved and
+    // preserved-Approved-on-overwrite paths.
+    const finalExtracted = extractStatusFromBody(bodyToWrite);
+    if (resolvedStatus === "Approved" && (finalExtracted === null || finalExtracted.status === "Approved")) {
+      // Ensure body header says Approved (in case caller passed
+      // metadata.status="Approved" with a Draft body — auto-stamp on the
+      // canonical body shape).
+      if (finalExtracted === null || finalExtracted.status !== "Approved") {
+        bodyToWrite = rewriteStatusHeader(bodyToWrite, "Approved");
+      }
+      bodyToWrite = stampApprovalToken(bodyToWrite);
+    }
+
     const content_hash = hashSource(bodyToWrite);
     const version = shortHash(content_hash);
-    const status = metadata?.status ?? extractStatus(bodyToWrite) ?? "Draft";
     const nowSec = Math.floor(Date.now() / 1000);
 
     await writeFile(this.pathFor(name), bodyToWrite, "utf8");
@@ -218,12 +258,35 @@ export class FilesystemSkillStore implements SkillStore {
       name,
       version,
       content_hash,
-      status,
+      status: resolvedStatus,
       changed_at: nowSec,
       changed_by: resolvedAuthor,
     };
     await appendFile(this.versionsPathFor(name), JSON.stringify(info) + "\n", "utf8");
     return info;
+  }
+
+  /**
+   * v0.16.9 — read the last VersionInfo's status from the versions log.
+   * Returns null when the skill has no versions yet (new skill). Used by
+   * `store()` to preserve status across overwrite per the (A) intentional
+   * trust-boundary discipline.
+   */
+  private async readLastVersionStatus(name: string): Promise<SkillStatus | null> {
+    try {
+      const body = await readFile(this.versionsPathFor(name), "utf8");
+      const lines = body.split("\n").filter((l) => l.trim() !== "");
+      if (lines.length === 0) return null;
+      try {
+        const last = JSON.parse(lines[lines.length - 1]!) as VersionInfo;
+        return last.status;
+      } catch {
+        return null;
+      }
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === "ENOENT") return null;
+      throw err;
+    }
   }
 
   /**

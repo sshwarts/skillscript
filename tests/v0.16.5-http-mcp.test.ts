@@ -316,10 +316,10 @@ describe("v0.16.5 — HttpMcpConnector", () => {
     expect(caps.connector_type).toBe("mcp_connector");
     expect(caps.implementation).toBe("HttpMcpConnector");
     expect(caps.contract_version).toBe("1.0.0");
-    // v0.16.8 — honest declaration. Single-value contract means end-to-end
-    // propagation; per-pinned-session substrates need per-identity-sessions
-    // (later ring) for actual propagation. False until that lands.
-    expect(caps.features["supports_identity_propagation"]).toBe(false);
+    // v0.16.9 — flag flips true. Per-identity session keying lands; both
+    // Level 1 (header reaches transport) and Level 2 (distinct ctx →
+    // distinct substrate scope) work against session-pinning substrates.
+    expect(caps.features["supports_identity_propagation"]).toBe(true);
   });
 
   it("fromConfig validates `endpoint` is a non-empty string", () => {

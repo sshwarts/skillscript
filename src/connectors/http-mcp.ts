@@ -110,6 +110,20 @@ export interface HttpMcpConfig {
    * requires a different protocol version.
    */
   protocolVersion?: string;
+  /**
+   * v0.16.9 — maximum number of cached per-identity sessions. When the
+   * pool reaches this size, the least-recently-used entry is evicted to
+   * make room for a new identity's session. Default `undefined` =
+   * unlimited (suitable for adopters with bounded identity cardinality;
+   * adopters with per-end-user dispatch should configure this to prevent
+   * unbounded memory growth).
+   *
+   * Production-hardening note: idle-timeout eviction + connection
+   * healthcheck are explicit v0.17+ targets. Current impl evicts only on
+   * pool-size pressure; sessions are kept alive indefinitely while the
+   * pool has room.
+   */
+  maxPoolSize?: number;
 }
 
 interface JsonRpcReply {
@@ -117,6 +131,24 @@ interface JsonRpcReply {
   error?: { code: number; message: string; data?: unknown };
   id?: number | string | null;
 }
+
+/**
+ * v0.16.9 — per-identity session entry in the connection pool. Each
+ * distinct `ctx.agentId` gets its own entry (matching identity at
+ * `initialize` time, so the server's pinned-session model honors the
+ * intended identity). Pool keyed by identity string; default "<default>"
+ * sentinel when no identity is supplied.
+ *
+ * Lifted from warm-adopter's `IdentityAwareAmpConnector` reference impl;
+ * generalized substrate-neutral.
+ */
+interface SessionEntry {
+  sessionId: string | null;
+  initializing: Promise<void> | null;
+  cachedTools: string[] | null;
+}
+
+const DEFAULT_IDENTITY_KEY = "<default>";
 
 /**
  * Streamable HTTP MCP connector. Implements McpConnector against any
@@ -129,13 +161,18 @@ export class HttpMcpConnector implements McpConnector {
   private readonly clientName: string;
   private readonly clientVersion: string;
   private readonly protocolVersion: string;
-  private sessionId: string | null = null;
-  private initializing: Promise<void> | null = null;
-  private cachedTools: string[] | null = null;
+  private readonly maxPoolSize: number | undefined;
+  // v0.16.9 — per-identity session pool. Map preserves insertion order;
+  // bump-on-access (delete + re-set) gives free LRU ordering when pool
+  // size hits `maxPoolSize`.
+  private readonly sessions: Map<string, SessionEntry> = new Map();
 
   constructor(config: HttpMcpConfig) {
     if (typeof config.endpoint !== "string" || config.endpoint === "") {
       throw new Error("HttpMcpConnector: `endpoint` (string, non-empty) required");
+    }
+    if (config.maxPoolSize !== undefined && (typeof config.maxPoolSize !== "number" || config.maxPoolSize < 1 || !Number.isInteger(config.maxPoolSize))) {
+      throw new Error("HttpMcpConnector: `maxPoolSize` (if set) must be a positive integer");
     }
     this.endpoint = config.endpoint;
     this.baseHeaders = { ...(config.headers ?? {}) };
@@ -143,6 +180,7 @@ export class HttpMcpConnector implements McpConnector {
     this.clientName = config.clientName ?? DEFAULT_CLIENT_NAME;
     this.clientVersion = config.clientVersion ?? RUNTIME_VERSION;
     this.protocolVersion = config.protocolVersion ?? DEFAULT_PROTOCOL_VERSION;
+    this.maxPoolSize = config.maxPoolSize;
   }
 
   static staticCapabilities(): McpConnectorCapabilities {
@@ -151,16 +189,16 @@ export class HttpMcpConnector implements McpConnector {
       implementation: "HttpMcpConnector",
       contract_version: CONTRACT_VERSION,
       features: {
-        // v0.16.8 — flag intentionally `false`. Single-value contract means
-        // end-to-end propagation (Level 2 in the consolidated charter): the
-        // connector reads `ctx.agentId` and emits the configured identity
-        // header per-call (Level 1, contract-honesty), BUT substrates that
-        // pin sessions per-identity (current default for many MCP servers)
-        // don't honor the per-call header within a pinned session. Real
-        // end-to-end propagation needs per-identity sessions, target: later
-        // ring. Until then this flag stays false; per-call header emission
-        // is internal-only behavior gated by `identityHeader` config.
-        supports_identity_propagation: false,
+        // v0.16.9 — flag flips to true. Per-identity session keying lands
+        // in this ring (lifted + generalized from warm-adopter's
+        // IdentityAwareAmpConnector reference impl). Each distinct
+        // `ctx.agentId` gets its own session, pinned to that identity at
+        // server-side `initialize` time. Both Level 1 (identity reaches
+        // transport) AND Level 2 (distinct ctx → distinct substrate scope)
+        // achieved against session-pinning substrates including AMP.
+        // Adopter gates the claim via RuntimeCapabilitiesConformance
+        // probe (v0.16.9 item 3).
+        supports_identity_propagation: true,
         supports_streaming_responses: false,
         supports_batch: false,
       },
@@ -205,11 +243,15 @@ export class HttpMcpConnector implements McpConnector {
   }
 
   async manifest(): Promise<ManifestInfo<"mcp_connector">> {
+    // Manifest uses the default-identity session for tool introspection.
+    // Per-identity tool surfaces are out of scope — substrates that vary
+    // tools by identity would surface that via a different mechanism.
     let toolsAvailable: string[] | undefined;
     let fetchError: string | undefined;
+    const entry = this.getOrCreateEntry(DEFAULT_IDENTITY_KEY);
     try {
-      await this.ensureSession();
-      toolsAvailable = this.cachedTools ?? (await this.listTools());
+      await this.ensureSession(DEFAULT_IDENTITY_KEY, entry);
+      toolsAvailable = entry.cachedTools ?? (await this.listToolsForEntry(DEFAULT_IDENTITY_KEY, entry));
     } catch (err) {
       fetchError = err instanceof Error ? err.message : String(err);
     }
@@ -226,26 +268,22 @@ export class HttpMcpConnector implements McpConnector {
   }
 
   async call(toolName: string, args: Record<string, unknown>, ctx?: McpDispatchCtx): Promise<unknown> {
-    await this.ensureSession();
-    // v0.16.8 — per-call identity header. When the adopter configured an
-    // `identityHeader` AND the runtime passed a `ctx.agentId`, emit the
-    // header on this call. Falls through to `baseHeaders` static defaults
-    // otherwise. Note: this closes the connector-contract gap (Level 1 of
-    // the propagation work) but doesn't achieve end-to-end propagation
-    // against substrates that pin sessions per-identity — per-identity
-    // session work is a later ring. The
-    // `supports_identity_propagation: false` declaration in
-    // staticCapabilities() reflects this honesty.
-    const extraHeaders: Record<string, string> = {};
-    if (this.identityHeader !== undefined && typeof ctx?.agentId === "string" && ctx.agentId !== "") {
-      extraHeaders[this.identityHeader] = ctx.agentId;
-    }
-    const reply = await this.post({
-      jsonrpc: "2.0",
-      id: Math.floor(Math.random() * 1e6),
-      method: "tools/call",
-      params: { name: toolName, arguments: args },
-    }, false, extraHeaders);
+    // v0.16.9 — per-identity session keying. Each distinct `ctx.agentId`
+    // gets its own pool entry; identity is pinned at server-side
+    // `initialize` time, so the substrate's session model honors it for
+    // the duration of the session. End-to-end propagation (Level 1 + 2)
+    // works against session-pinning substrates.
+    // Per-identity pooling activates ONLY when the adopter configured an
+    // identityHeader. Without it, the connector isn't threading identity
+    // to the substrate, so per-identity pool entries would be pointless
+    // overhead — all calls converge to the default session.
+    const identityKey = this.identityHeader !== undefined
+      && typeof ctx?.agentId === "string"
+      && ctx.agentId !== ""
+      ? ctx.agentId
+      : DEFAULT_IDENTITY_KEY;
+    const entry = this.getOrCreateEntry(identityKey);
+    const reply = await this.dispatchWithRetry(identityKey, entry, toolName, args);
     if (reply === null) throw new Error(`HttpMcpConnector: empty reply from ${toolName} at ${this.endpoint}`);
     if (reply.error !== undefined) {
       throw new Error(`HttpMcpConnector ${toolName} error ${reply.error.code}: ${reply.error.message}`);
@@ -262,12 +300,40 @@ export class HttpMcpConnector implements McpConnector {
   }
 
   /**
-   * Discover the server's tool surface via `tools/list`. Result is cached
-   * for subsequent `manifest()` calls; first dispatch may pay the
-   * round-trip cost.
+   * Dispatch with bounded-at-1 retry on session-mismatch. When the
+   * substrate returns HTTP >= 400 (likely session-not-found / stale),
+   * evict the pool entry, re-init, and retry once. Per Perry's
+   * `33fefa0f` impl-nit on retry-bounding. Persistent server errors
+   * after retry surface to the caller as the second-attempt failure.
    */
-  private async listTools(): Promise<string[]> {
-    const reply = (await this.post({
+  private async dispatchWithRetry(
+    identityKey: string,
+    entry: SessionEntry,
+    toolName: string,
+    args: Record<string, unknown>,
+  ): Promise<JsonRpcReply | null> {
+    await this.ensureSession(identityKey, entry);
+    const body = {
+      jsonrpc: "2.0" as const,
+      id: Math.floor(Math.random() * 1e6),
+      method: "tools/call",
+      params: { name: toolName, arguments: args },
+    };
+    try {
+      return await this.post(identityKey, entry, body);
+    } catch (err) {
+      if (!(err instanceof StaleSessionError)) throw err;
+      // Stale-session retry path. Evict entry + re-init + retry once.
+      // Per warm-adopter's `33fefa0f` framing: bounded at 1 to prevent
+      // infinite-loop against persistent server-side errors.
+      const freshEntry = this.recreateEntry(identityKey);
+      await this.ensureSession(identityKey, freshEntry);
+      return this.post(identityKey, freshEntry, body);
+    }
+  }
+
+  private async listToolsForEntry(identityKey: string, entry: SessionEntry): Promise<string[]> {
+    const reply = (await this.post(identityKey, entry, {
       jsonrpc: "2.0",
       id: Math.floor(Math.random() * 1e6),
       method: "tools/list",
@@ -276,15 +342,57 @@ export class HttpMcpConnector implements McpConnector {
     const names = Array.isArray(tools)
       ? tools.map((t) => t.name ?? "").filter((n) => n !== "")
       : [];
-    this.cachedTools = names;
+    entry.cachedTools = names;
     return names;
   }
 
-  private async ensureSession(): Promise<void> {
-    if (this.sessionId !== null) return;
-    if (this.initializing === null) {
-      this.initializing = (async () => {
-        await this.post({
+  /**
+   * Pool entry get-or-create. Bumps to MRU position on access (Map insert
+   * order = LRU order; delete + re-set moves to end). Evicts oldest if
+   * pool would exceed `maxPoolSize`.
+   *
+   * Documented gap (v0.17 hardening target): no time-based eviction;
+   * sessions kept alive indefinitely while pool has room. Long-running
+   * adopters with high identity cardinality should configure
+   * `maxPoolSize`. Substrates that silently kill idle sessions without
+   * surfacing an error need adopter-side healthcheck wiring.
+   */
+  private getOrCreateEntry(identityKey: string): SessionEntry {
+    const existing = this.sessions.get(identityKey);
+    if (existing !== undefined) {
+      // Bump to MRU.
+      this.sessions.delete(identityKey);
+      this.sessions.set(identityKey, existing);
+      return existing;
+    }
+    // Eviction check before inserting fresh.
+    if (this.maxPoolSize !== undefined && this.sessions.size >= this.maxPoolSize) {
+      // Map iteration order = insertion order = LRU. Delete the first
+      // (oldest) entry. Mid-dispatch eviction edge: if the evicted
+      // entry is mid-flight, the dispatch's session-id mismatch on
+      // next attempt triggers the retry path. Per Perry's `33fefa0f`
+      // option (c) — accept the rare edge, retry handles it.
+      const oldestKey = this.sessions.keys().next().value;
+      if (oldestKey !== undefined) this.sessions.delete(oldestKey);
+    }
+    const fresh: SessionEntry = { sessionId: null, initializing: null, cachedTools: null };
+    this.sessions.set(identityKey, fresh);
+    return fresh;
+  }
+
+  /**
+   * Evict + recreate a pool entry. Used by the stale-session retry path.
+   */
+  private recreateEntry(identityKey: string): SessionEntry {
+    this.sessions.delete(identityKey);
+    return this.getOrCreateEntry(identityKey);
+  }
+
+  private async ensureSession(identityKey: string, entry: SessionEntry): Promise<void> {
+    if (entry.sessionId !== null) return;
+    if (entry.initializing === null) {
+      entry.initializing = (async () => {
+        await this.post(identityKey, entry, {
           jsonrpc: "2.0",
           id: 1,
           method: "initialize",
@@ -298,32 +406,65 @@ export class HttpMcpConnector implements McpConnector {
         // before any tools/call. Per warm-adopter checklist `41fedec6`
         // item #2.
         await this.post(
+          identityKey, entry,
           { jsonrpc: "2.0", method: "notifications/initialized" },
           true,
         );
       })();
     }
-    await this.initializing;
+    await entry.initializing;
   }
 
-  private async post(body: unknown, isNotification = false, extraHeaders?: Record<string, string>): Promise<JsonRpcReply | null> {
+  private async post(
+    identityKey: string,
+    entry: SessionEntry,
+    body: unknown,
+    isNotification = false,
+  ): Promise<JsonRpcReply | null> {
     const headers: Record<string, string> = {
       "content-type": "application/json",
       accept: "application/json, text/event-stream",
       ...this.baseHeaders,
-      ...(extraHeaders ?? {}),
     };
-    if (this.sessionId !== null) headers["mcp-session-id"] = this.sessionId;
+    // v0.16.9 — per-call identity header. When configured AND identity is
+    // not the default sentinel, emit the header on every request (init +
+    // notifications + tools/call). Servers that pin session-to-identity
+    // at initialize time consume the header at that point; servers that
+    // re-check per request consume it per request.
+    if (this.identityHeader !== undefined && identityKey !== DEFAULT_IDENTITY_KEY) {
+      headers[this.identityHeader] = identityKey;
+    }
+    if (entry.sessionId !== null) headers["mcp-session-id"] = entry.sessionId;
     const res = await fetch(this.endpoint, {
       method: "POST",
       headers,
       body: JSON.stringify(body),
     });
     const sid = res.headers.get("mcp-session-id");
-    if (sid !== null) this.sessionId = sid;
+    if (sid !== null) entry.sessionId = sid;
+    // v0.16.9 — stale-session detection. HTTP >= 400 likely indicates
+    // the server-side session is dead (session-not-found, expired, etc.).
+    // Throw a typed error that `dispatchWithRetry` catches + retries
+    // once with a fresh entry. Notification posts don't return a reply
+    // so we treat their 4xx as terminal (server rejected the notif —
+    // not retryable).
+    if (res.status >= 400 && !isNotification) {
+      throw new StaleSessionError(`HttpMcpConnector: ${res.status} from ${this.endpoint} (likely stale session for identity '${identityKey}')`);
+    }
     if (isNotification) return null;
     const text = await res.text();
     return parseSseReply(text);
+  }
+}
+
+/**
+ * v0.16.9 — internal signal for the stale-session retry path. Not
+ * surfaced to callers; `dispatchWithRetry` catches + handles.
+ */
+class StaleSessionError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "StaleSessionError";
   }
 }
 

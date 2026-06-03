@@ -125,11 +125,19 @@ export async function executeSkillByName(
   //   the middle per the audit footnote
   // - Otherwise, parent IS the entry; child inherits parent's
   //   `_currentSkillName` as its entrySkillName
+  //
+  // v0.16.9 — identity follows the skill. Override `agentId` from the
+  // CHILD skill's `metadata.author`. Per Perry's `fd18e3f7` cross-author
+  // ack: when parent A (Alice) composes child B (Bob), B runs under Bob's
+  // identity — NOT Alice's. Same invariant for every skill run:
+  // `ctx.agentId = skill.author`. v0.17+ adds dual-identity for the
+  // delegation case (Alice on-behalf-of-Bob).
   const childCtx: ExecuteContext = {
     ...ctx,
     recursionDepth: depth,
     maxRecursionDepth: limit,
     entrySkillName: ctx.entrySkillName ?? ctx._currentSkillName,
+    ...(loaded.metadata.author !== undefined ? { agentId: loaded.metadata.author } : {}),
   };
 
   const result = await execute(

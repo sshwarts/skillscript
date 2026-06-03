@@ -1,5 +1,89 @@
 # Changelog
 
+## 0.16.9 — 2026-06-03 — End-to-end identity propagation: per-identity sessions + owner-as-default + conformance probe
+
+**Cluster ring.** Four items closing the identity-propagation surface
+opened in v0.16.8. v0.16.8 landed `SkillMeta.author` capture +
+`HttpMcpConnector` per-call header (Level 1 — identity reaches
+transport) but honestly declared `supports_identity_propagation: false`
+because per-call headers don't propagate end-to-end against
+session-pinning substrates (warm-adopter's `1e1c9305` finding). This
+ring lands the structural close: per-identity session keying achieves
+Level 2 (distinct `ctx.agentId` → distinct observable substrate scope),
+owner-as-default for all dispatch paths, and a conformance probe that
+gates the `true` claim on probe-wired evidence.
+
+Charter: Perry's `9af842f7` ack + `33fefa0f` go-ahead. Empirically
+validated against live AMP via warm-adopter's `299c0d20` reference
+prototype before charter commit.
+
+### 1. Overwrite-status preservation in `FilesystemSkillStore`
+
+`store()` now reads the last version's persisted status before write
+and preserves it on overwrite. Body's `# Status:` header is rewritten
+to match preserved status via existing `rewriteStatusHeader`. Explicit
+`metadata.status` overrides the persisted value (authority bypass for
+substrate operations).
+
+Closes the sibling-class issue to v0.16.8 item 1's author-locking:
+the SkillStore IS the trust boundary for both author identity AND
+approval state — body-declared status on overwrite was bypassing the
+boundary. Now: body declares, store records, persisted state wins on
+overwrite, body rewritten to match.
+
+### 2. Per-identity session keying in `HttpMcpConnector`
+
+Connector rewrite per warm-adopter's `IdentityAwareAmpConnector`
+reference impl pattern. Each distinct `ctx.agentId` gets its own
+session, pinned to that identity at server-side `initialize` time.
+`Map<identity, SessionEntry>` with insertion-order LRU eviction
+(`maxPoolSize` config field, bump-on-access for MRU promotion).
+`StaleSessionError` triggers one bounded re-init + retry. Per-identity
+pooling activates ONLY when `identityHeader` is configured — adopters
+who don't thread identity get substrate-neutral default-session
+behavior.
+
+`supports_identity_propagation: true` flag flipped on — both Level 1
+AND Level 2 achieved against session-pinning substrates including AMP.
+
+### 3. `RuntimeCapabilitiesConformance` auto-coverage probe (Level 1 + Level 2)
+
+The flag claim is now gated on adopter-supplied probe evidence. When
+ANY registered McpConnector declares
+`supports_identity_propagation: true` in `staticCapabilities()`, the
+conformance suite auto-generates a coverage test that requires BOTH
+probes via `flagProbes`:
+
+- `mcpConnectors.<name>.supports_identity_propagation.level1` —
+  identity reaches transport (substrate-independent)
+- `mcpConnectors.<name>.supports_identity_propagation.level2` —
+  distinct `ctx.agentId` yields distinct observable substrate scope
+  (substrate-coupled; adopter pattern: identity-pinned mock or live
+  substrate)
+
+Closes the structural-honesty gate per `33fefa0f`: declaring the flag
+without probes is a discipline-only-contract instance. The probe
+catches the false-positive scenario warm-adopter flagged — per-call
+headers pass Level 1 while silently failing Level 2.
+
+### 4. Owner-as-default for all cross-author dispatch paths
+
+`execute_skill` MCP tool already populated `ctx.agentId` from
+`SkillMeta.author` in v0.16.8. This ring generalizes to the two
+remaining dispatch paths:
+
+- `executeSkillByName()` in `src/composition.ts` — when a skill inlines
+  another via `! call`, the child `ctx.agentId` is set to the called
+  skill's author (cross-author = called-skill-author default per
+  Perry's `fd18e3f7`: identity follows the skill).
+- `dispatchSkill()` in `src/scheduler.ts` — trigger-fired dispatch
+  populates `ctx.agentId` from the loaded skill's metadata.
+
+Dual-identity delegation (caller + callee both threaded) deferred to
+v0.17+.
+
+---
+
 ## 0.16.8 — 2026-06-03 — Identity foundation: SkillMeta.author + connector honesty + approval posture
 
 **Cluster ring.** Six items on the SkillStore metadata + connector honesty

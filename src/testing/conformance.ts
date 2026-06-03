@@ -565,6 +565,43 @@ export const RuntimeCapabilitiesConformance = {
       });
     }
 
+    // v0.16.9 — auto-coverage: when any registered McpConnector declares
+    // `supports_identity_propagation: true` in its staticCapabilities,
+    // adopter MUST supply BOTH Level 1 + Level 2 probes via flagProbes,
+    // keyed by `mcpConnectors.<name>.supports_identity_propagation.level1`
+    // and `.level2`. Closes the structural-honesty gate per Perry's
+    // `9af842f7` charter — declaring the flag without probes is a
+    // discipline-only-contract instance. Per warm-adopter `1e1c9305`:
+    // per-call-header connectors against session-pinning substrates pass
+    // Level 1 while failing Level 2 — the gap probe must catch.
+    tests.push({
+      category: "feature-behavior",
+      name: "auto-coverage: supports_identity_propagation:true requires Level 1 + Level 2 probes per connector",
+      run: withRuntime(fixture, async (runtime) => {
+        const caps = await callRuntimeCapabilities(runtime);
+        const connectors = (caps["mcpConnectors"] as Array<Record<string, unknown>>) ?? [];
+        const missingProbes: string[] = [];
+        for (const entry of connectors) {
+          const features = entry["features"] as Record<string, unknown> | undefined;
+          if (features?.["supports_identity_propagation"] !== true) continue;
+          const name = String(entry["name"]);
+          const l1Key = `mcpConnectors.${name}.supports_identity_propagation.level1`;
+          const l2Key = `mcpConnectors.${name}.supports_identity_propagation.level2`;
+          if (!(l1Key in flagProbes)) missingProbes.push(l1Key);
+          if (!(l2Key in flagProbes)) missingProbes.push(l2Key);
+        }
+        assert(
+          missingProbes.length === 0,
+          `Connectors declare \`supports_identity_propagation: true\` but Level 1/2 probes are missing: ` +
+            `${missingProbes.join(", ")}. The flag claims end-to-end identity propagation; adopter must supply ` +
+            `probes that exercise it. Level 1: identity reaches transport. Level 2: distinct ctx.agentId yields ` +
+            `distinct observable substrate scopes. Add probe entries to fixture.flagProbes — Level 1 is ` +
+            `substrate-independent; Level 2 needs a real substrate (warm-adopter pattern: identity-pinned mock ` +
+            `or live substrate). Without these probes, the flag is structurally-asserted-but-empirically-unverified.`,
+        );
+      }),
+    });
+
     return tests;
   },
 };

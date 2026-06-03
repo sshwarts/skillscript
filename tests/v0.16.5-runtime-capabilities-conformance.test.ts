@@ -45,7 +45,9 @@ describe("v0.16.5 — RuntimeCapabilitiesConformance against bundled bootstrap",
 
   it("generates a stable minimum number of tests (schema-only fixture)", () => {
     // 6 schema tests when no probes/required-flags supplied.
-    expect(tests.length).toBe(6);
+    // v0.16.5: 6 schema tests. v0.16.9: +1 auto-coverage test for
+    // supports_identity_propagation Level 1+2 probes. 7 total now.
+    expect(tests.length).toBe(7);
   });
 });
 
@@ -67,7 +69,9 @@ describe("v0.16.5 — RuntimeCapabilitiesConformance with flag probes + required
 
     const tests = RuntimeCapabilitiesConformance.buildTests(fixture);
     // 6 schema + 1 probe + 1 coverage = 8 total.
-    expect(tests.length).toBe(8);
+    // v0.16.5: 6 schema + 1 probe + 1 required-flag coverage = 8.
+    // v0.16.9: +1 auto-coverage for identity probes = 9 total.
+    expect(tests.length).toBe(9);
 
     for (const t of tests) await t.run();
     expect(probeRan).toBe(true);
@@ -99,7 +103,8 @@ describe("v0.16.5 — RuntimeCapabilitiesConformance with flag probes + required
 
     const tests = RuntimeCapabilitiesConformance.buildTests(fixture);
     expect(tests.some((t) => t.name.startsWith("coverage:"))).toBe(false);
-    // 6 schema + 1 probe + 0 coverage = 7 total.
-    expect(tests.length).toBe(7);
+    // v0.16.5: 6 schema + 1 probe + 0 coverage = 7.
+    // v0.16.9: +1 auto-coverage for identity probes = 8 total.
+    expect(tests.length).toBe(8);
   });
 });
