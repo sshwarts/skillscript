@@ -1,5 +1,96 @@
 # Changelog
 
+## 0.17.0 — 2026-06-03 — MCP-caller identity propagation: host-attested caller → SkillMeta.author + adopter playbook docs
+
+**Opens v0.17 line.** Closes the write-side gap that mirrored v0.16.9's
+read-side fix: when an agent calls `skill_write` via the MCP transport,
+the calling agent's identity now reaches the runtime's handler and
+stamps `SkillMeta.author`. Combined with v0.16.9's owner-as-default
+dispatch, MCP-authored skills execute under the calling agent's
+substrate scope.
+
+Charter: Perry's `3f47b16e` Gap-1 finding + warm-adopter's `6ce97894`
+prototype (validated against live AMP: caller=perry→author=perry
+distinct from caller=alice→author=alice through the HTTP/MCP boundary)
++ Perry's `2a9c234a` 4-point spec ack. Same `substrate-author-prototype-in-parallel`
+pattern as v0.16.8/9; the prototype's measured shape became the runtime
+spec verbatim.
+
+### 1. Inbound caller-identity threading (the load-bearing fix)
+
+`DashboardServer` reads a configured HTTP header (e.g. `X-Agent-Id`)
+on every `/rpc` request, captures it as `McpRequestCtx.callerIdentity`,
+threads it into `McpServer.handle(req, ctx)`. The `skill_write` handler
+uses it as `store({author})`. Header lookup is case-insensitive (Node
+lowercases inbound header names).
+
+**New types:**
+- `McpRequestCtx` — request-scoped ctx passed from transport into
+  `McpServer.handle()` and through to tool handlers. Inbound mirror of
+  v0.16.9's outbound `McpDispatchCtx`, one layer up. Re-exported from
+  the package index.
+- `DashboardServerConfig.mcpCallerIdentityHeader?: string` — opt-in
+  header name. Default unset; existing v0.16.8 behavior preserved.
+- `McpServerDeps.mcpCallerIdentityHeader?: string` — companion field
+  for non-DashboardServer embeddings.
+- `SkillscriptConfig.dashboard.mcpCallerIdentityHeader?: string` —
+  configurable via `skillscript.config.json`.
+
+### 2. Opt-in for multi-agent hosts; invisible to simple-substrate adopters
+
+Header unset = existing v0.16.8 behavior. Single-user CLI, single-tenant
+deployments, hobby installs — none configure this surface. The
+`SkillStore.store()` author fallback (e.g. `userInfo().username` for
+`FilesystemSkillStore`) continues to capture the right author for these
+deployments. Multi-agent hosts (where one runtime serves multiple
+authenticated agents via MCP) configure the header.
+
+### 3. Inbound vs outbound `X-Agent-Id` — two layers, two semantics
+
+Same header name as v0.16.9's outbound `HttpMcpConnector.identityHeader`
+by convention. They are NOT the same value in general:
+- Inbound (this ring) = request-scoped caller (current caller of the runtime)
+- Outbound (v0.16.9) = dispatch-scoped owner (derived from `SkillMeta.author`)
+
+They MEET at `SkillMeta.author` — that's the bridge. Forwarding inbound
+straight to outbound would be a setuid hazard (anyone invoking alice's
+skill would dispatch as the caller, not alice). The runtime keeps them
+separate; outbound is always derived from author at dispatch.
+
+### 4. Three-test discipline + multi-agent empirical lane
+
+- Runtime unit: `McpServer.handle(req, ctx)` threads `callerIdentity` to
+  `skill_write` → `store({author})`. First-write-locking still wins.
+- E2E: `DashboardServer` reads header end-to-end; case-insensitive lookup;
+  absent header → fallback; non-configured runtime ignores the header.
+- Multi-agent lane: two callers with distinct `X-Agent-Id` values →
+  distinct stored authors (the test (C) per-host couldn't pass).
+
+### 5. Docs ring (bundled from v0.16.9)
+
+- `docs/adopter-playbook.md` HttpMcpConnector section now documents
+  `identityHeader` + `maxPoolSize` config (v0.16.9 surfaces that lacked
+  adoption docs).
+- New section forthcoming on the multi-agent inbound-identity setup.
+- `examples/skillscripts/skill-store-roundtrip.skill.md` +
+  `youtrack-morning-sweep.skill.md` — dropped stale version-history
+  parentheticals per `feedback_playbook_is_timeless`.
+- `examples/connectors/McpConnectorTemplate/McpConnectorTemplate.ts` —
+  expanded `supports_identity_propagation` comment to point at the
+  Level 1 + Level 2 probe-keying convention so adopters who flip the
+  flag don't hit the v0.16.9 auto-coverage gate empty-handed.
+
+### Operational note
+
+Existing skills authored via the old write path (e.g., authored as the
+runtime's own identity rather than the calling agent's) stay attributed
+to the runtime until they're re-written via `skill_write` under the new
+header convention, OR until an adopter-side admin operation transfers
+ownership. The first-write-locking discipline still holds: subsequent
+overwrites by a different caller don't re-author.
+
+---
+
 ## 0.16.9 — 2026-06-03 — End-to-end identity propagation: per-identity sessions + owner-as-default + conformance probe
 
 **Cluster ring.** Four items closing the identity-propagation surface

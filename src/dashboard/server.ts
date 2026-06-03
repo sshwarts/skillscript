@@ -36,6 +36,26 @@ export interface DashboardServerConfig {
    * Default true preserves existing `skillfile dashboard` behavior.
    */
   mountSpa?: boolean;
+  /**
+   * v0.17.0 — name of the inbound HTTP header carrying host-attested caller
+   * identity (e.g., `"X-Agent-Id"`). When set, `handleRpc` reads the header
+   * from each `/rpc` request and threads the value as
+   * `McpRequestCtx.callerIdentity` into `McpServer.handle()`. The
+   * `skill_write` handler captures it as `SkillMeta.author`.
+   *
+   * Lookup is case-insensitive — Node lowercases inbound header names.
+   * Absent header on a configured runtime → `callerIdentity` is undefined
+   * for that request → SkillStore.store() falls back to its default author
+   * capture (existing v0.16.8 behavior). Multi-agent hosts (NanoClaw-style)
+   * inject this header; simple-substrate adopters don't configure it.
+   *
+   * Same header name as v0.16.9's outbound `HttpMcpConnector.identityHeader`
+   * by convention. Two layers, two semantics — inbound = request-scoped
+   * caller; outbound = dispatch-scoped owner derived from `SkillMeta.author`.
+   * Don't forward inbound → outbound (setuid hazard); they meet at the
+   * stored author. Per warm-adopter `6ce97894` prototype + Perry `2a9c234a`.
+   */
+  mcpCallerIdentityHeader?: string;
 }
 
 const MIME: Record<string, string> = {
@@ -51,6 +71,7 @@ export class DashboardServer {
   private readonly bindAddress: string;
   private readonly assetsDir: string;
   private readonly mountSpa: boolean;
+  private readonly callerIdentityHeader: string | undefined;
   private httpServer: Server | null = null;
 
   constructor(config: DashboardServerConfig) {
@@ -59,6 +80,10 @@ export class DashboardServer {
     this.bindAddress = config.bindAddress ?? "127.0.0.1";
     this.assetsDir = config.assetsDir ?? locateAssetsDir();
     this.mountSpa = config.mountSpa ?? true;
+    // v0.17.0 — Node lowercases inbound header names; normalize the
+    // configured name once at constructor time so per-request lookup is
+    // a single Map access (req.headers[<lowercased-name>]).
+    this.callerIdentityHeader = config.mcpCallerIdentityHeader?.toLowerCase();
   }
 
   async start(): Promise<void> {
@@ -123,7 +148,22 @@ export class DashboardServer {
       res.end(JSON.stringify({ jsonrpc: "2.0", id: null, error: { code: -32700, message: "Parse error" } }));
       return;
     }
-    const response = await this.mcpServer.handle(rpcReq);
+    // v0.17.0 — when an identity header is configured, read it from the
+    // inbound request and thread as the per-call McpRequestCtx so
+    // `skill_write` can stamp SkillMeta.author from the calling agent.
+    // Absent header → callerIdentity stays undefined → SkillStore.store()
+    // falls back to its default author capture (existing v0.16.8 behavior
+    // — backwards compatible).
+    let callerIdentity: string | undefined;
+    if (this.callerIdentityHeader !== undefined) {
+      const raw = req.headers[this.callerIdentityHeader];
+      if (typeof raw === "string" && raw !== "") {
+        callerIdentity = raw;
+      } else if (Array.isArray(raw) && raw.length > 0 && raw[0] !== "") {
+        callerIdentity = raw[0];
+      }
+    }
+    const response = await this.mcpServer.handle(rpcReq, { callerIdentity });
     res.statusCode = 200;
     res.setHeader("content-type", MIME[".json"]!);
     res.end(JSON.stringify(response));

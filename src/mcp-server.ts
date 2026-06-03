@@ -76,11 +76,37 @@ export type JsonRpcResponse = JsonRpcSuccessResponse | JsonRpcErrorResponse;
 
 // ─── MCP tool definition ───────────────────────────────────────────────────
 
+/**
+ * v0.17.0 — request-scoped MCP-side context passed from the HTTP/stdio
+ * transport into `McpServer.handle()` and through to tool handlers.
+ *
+ * Inbound mirror of the outbound `McpDispatchCtx` (v0.16.9), one layer up:
+ * outbound = dispatch-scoped owner identity the runtime asserts TO substrates
+ * (derived from `SkillMeta.author`); inbound = request-scoped caller identity
+ * the runtime receives FROM hosts. They MEET at `SkillMeta.author` — the
+ * `skill_write` handler reads `callerIdentity` and threads it as
+ * `store({author: callerIdentity})`, then later dispatches derive outbound
+ * identity from that stored author. Do NOT forward an inbound caller-identity
+ * header straight to an outbound connector — outbound is always derived from
+ * the skill's owner at dispatch, not the current caller (setuid hazard).
+ */
+export interface McpRequestCtx {
+  /**
+   * Host-attested caller identity (e.g., the agent invoking `skill_write`
+   * via an MCP host that bridges agent identity into transport headers).
+   * Trust is bilateral: the runtime trusts the host's attestation when the
+   * adopter has configured `mcpCallerIdentityHeader`. Hosts that don't
+   * inject identity leave this undefined; runtime falls back to its own
+   * writer identity (existing v0.16.8 behavior).
+   */
+  callerIdentity?: string;
+}
+
 export interface McpTool {
   name: string;
   description: string;
   inputSchema: Record<string, unknown>;
-  handler: (args: Record<string, unknown>) => Promise<unknown>;
+  handler: (args: Record<string, unknown>, ctx: McpRequestCtx) => Promise<unknown>;
 }
 
 export interface McpServerDeps {
@@ -110,6 +136,26 @@ export interface McpServerDeps {
    * boundary, unaffected by this flag.
    */
   forceAlwaysDraft?: boolean;
+  /**
+   * v0.17.0 — name of the inbound HTTP header carrying host-attested caller
+   * identity. When configured, `DashboardServer.handleRpc` reads the header
+   * from each `/rpc` request and threads the value as
+   * `McpRequestCtx.callerIdentity` into `McpServer.handle(req, ctx)`. The
+   * `skill_write` handler then captures `SkillMeta.author` from
+   * `ctx.callerIdentity` so MCP-authored skills get the calling agent's
+   * identity stamped at write time (not the runtime's wiring identity).
+   *
+   * Default unset — preserves v0.16.8 behavior (author = runtime's writer
+   * identity). Simple-substrate adopters (single-user CLI, single-tenant
+   * deployments) never need to configure this surface.
+   *
+   * Convention: `"X-Agent-Id"` (case-insensitive at lookup; Node lowercases
+   * inbound header names). Same header name as v0.16.9's outbound
+   * `identityHeader` by convention — two layers, two semantics, meet at
+   * `SkillMeta.author`. Per warm-adopter's `6ce97894` prototype + Perry's
+   * `2a9c234a` charter ack.
+   */
+  mcpCallerIdentityHeader?: string;
   /** Runtime mode label — `"serve"` (headless) or `"dashboard"` (SPA mounted). v0.2.7. */
   runtimeMode?: "serve" | "dashboard";
   /** Path to the persistent imperative-trigger registry, when configured. v0.2.7. */
@@ -141,7 +187,7 @@ export class McpServer {
     return Array.from(this.tools.values());
   }
 
-  async handle(req: JsonRpcRequest): Promise<JsonRpcResponse> {
+  async handle(req: JsonRpcRequest, ctx: McpRequestCtx = {}): Promise<JsonRpcResponse> {
     const id = req.id ?? null;
     try {
       switch (req.method) {
@@ -177,7 +223,7 @@ export class McpServer {
             return errorResponse(id, -32601, `Tool '${params.name}' not found`);
           }
           const args = params.arguments ?? {};
-          const result = await tool.handler(args);
+          const result = await tool.handler(args, ctx);
           return {
             jsonrpc: "2.0",
             id,
@@ -530,7 +576,7 @@ export class McpServer {
         },
         required: ["name", "source"],
       },
-      handler: async (args) => this.skillWrite(args),
+      handler: async (args, ctx) => this.skillWrite(args, ctx),
     });
 
     // ─── v0.2.8 — composition + discovery ──────────────────────────────────
@@ -821,7 +867,7 @@ export class McpServer {
     }
   }
 
-  private async skillWrite(args: Record<string, unknown>): Promise<Record<string, unknown>> {
+  private async skillWrite(args: Record<string, unknown>, ctx: McpRequestCtx = {}): Promise<Record<string, unknown>> {
     const name = args["name"];
     const source = args["source"];
     if (typeof name !== "string" || name === "") {
@@ -851,9 +897,17 @@ export class McpServer {
     // of body claim) opt in via the flag at runtime startup. Per Perry's
     // `787b6b95` Option A.
     const bodyToStore = this.deps.forceAlwaysDraft === true ? forceDraftStatus(source) : source;
+    // v0.17.0 — thread host-attested caller identity into `store({author})`
+    // so MCP-authored skills stamp `SkillMeta.author = <calling agent>`,
+    // not the runtime's wiring identity. When ctx.callerIdentity is
+    // undefined (no header configured, or header absent on this request),
+    // SkillStore.store() falls back to its default author capture (e.g.,
+    // `userInfo().username` for FilesystemSkillStore) — preserves v0.16.8
+    // behavior for adopters not configured for multi-agent identity.
+    const metadata = ctx.callerIdentity !== undefined ? { author: ctx.callerIdentity } : undefined;
     // SkillStore.store() runs tier-1 lint as part of its contract and throws
     // LintFailureError on rejection. Surface that to the caller verbatim.
-    const versionInfo = await this.deps.skillStore.store(name, bodyToStore);
+    const versionInfo = await this.deps.skillStore.store(name, bodyToStore, metadata);
     return {
       name: versionInfo.name,
       version: versionInfo.version,

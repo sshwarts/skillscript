@@ -192,6 +192,7 @@ export { McpServer } from "./mcp-server.js";
 export type {
   McpServerDeps,
   McpTool,
+  McpRequestCtx,
   JsonRpcRequest,
   JsonRpcResponse,
   JsonRpcSuccessResponse,

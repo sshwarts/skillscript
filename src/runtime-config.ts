@@ -48,6 +48,16 @@ export interface SkillscriptConfig {
     port?: number;
     /** Bind address. Default "127.0.0.1". */
     host?: string;
+    /**
+     * v0.17.0 — inbound HTTP header name for host-attested caller identity
+     * (e.g., `"X-Agent-Id"`). When set, the runtime reads this header on
+     * every `/rpc` request, threads the value into `McpRequestCtx.callerIdentity`,
+     * and `skill_write` uses it as `SkillMeta.author`. Unset → existing
+     * v0.16.8 behavior (author = runtime's writer identity). Multi-agent
+     * hosts (NanoClaw-style) configure this; single-user / single-tenant
+     * adopters leave it unset.
+     */
+    mcpCallerIdentityHeader?: string;
   };
 }
 
@@ -143,7 +153,7 @@ export function loadSkillscriptConfig(opts: LoadSkillscriptConfigOpts): LoadSkil
       errors.push(`skillscript.config.json: field 'dashboard' must be an object.`);
     } else {
       const dash = obj["dashboard"] as Record<string, unknown>;
-      const dashboard: { port?: number; host?: string } = {};
+      const dashboard: { port?: number; host?: string; mcpCallerIdentityHeader?: string } = {};
       if (dash["port"] !== undefined) {
         if (typeof dash["port"] !== "number" || !Number.isInteger(dash["port"]) || dash["port"] < 1 || dash["port"] > 65535) {
           errors.push(`skillscript.config.json: field 'dashboard.port' must be an integer 1-65535.`);
@@ -158,7 +168,14 @@ export function loadSkillscriptConfig(opts: LoadSkillscriptConfigOpts): LoadSkil
           dashboard.host = dash["host"];
         }
       }
-      if (dashboard.port !== undefined || dashboard.host !== undefined) {
+      if (dash["mcpCallerIdentityHeader"] !== undefined) {
+        if (typeof dash["mcpCallerIdentityHeader"] !== "string" || dash["mcpCallerIdentityHeader"] === "") {
+          errors.push(`skillscript.config.json: field 'dashboard.mcpCallerIdentityHeader' must be a non-empty string.`);
+        } else {
+          dashboard.mcpCallerIdentityHeader = dash["mcpCallerIdentityHeader"];
+        }
+      }
+      if (dashboard.port !== undefined || dashboard.host !== undefined || dashboard.mcpCallerIdentityHeader !== undefined) {
         config.dashboard = dashboard;
       }
     }

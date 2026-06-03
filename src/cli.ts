@@ -713,6 +713,9 @@ async function cmdRuntimeHost(args: string[], opts: { mode: "serve" | "dashboard
     port,
     bindAddress: host,
     mountSpa: opts.mode === "dashboard",
+    ...(fileConfig.dashboard?.mcpCallerIdentityHeader !== undefined
+      ? { mcpCallerIdentityHeader: fileConfig.dashboard.mcpCallerIdentityHeader }
+      : {}),
   });
   await server.start();
   const label = opts.mode === "dashboard" ? "dashboard" : "serve (headless)";

@@ -113,13 +113,20 @@ Your substrate exposes itself as MCP tools (via a local MCP server or remote one
         "config": {
           "endpoint": "https://mcp.example.com/",
           "headers": {
-            "Authorization": "Bearer ${API_TOKEN}",
-            "X-Agent-ID": "${AGENT_ID}"
-          }
+            "Authorization": "Bearer ${API_TOKEN}"
+          },
+          "identityHeader": "X-Agent-Id",
+          "maxPoolSize": 64
         }
       }
     }
     ```
+
+    Identity-propagation config:
+    - `identityHeader` — when set, the connector reads `ctx.agentId` per call and threads it as both a per-call request header AND the session-pinning key. Each distinct agent identity gets its own session, pinned to that identity at server-side `initialize` time. Required for substrates that pin sessions to the initializing identity (the common case for memory-substrate MCPs). Omit it when every caller shares one identity — all calls then share a single default session.
+    - `maxPoolSize` — optional cap on the per-identity session pool (LRU eviction by access recency). Default unlimited; set when your substrate has session-count limits or you want bounded resource use.
+
+    When `identityHeader` is set, `supports_identity_propagation: true` is declared in `runtime_capabilities`. The `RuntimeCapabilitiesConformance` suite then requires Level 1 + Level 2 probes wired via `flagProbes` — see [Connector Contract Reference](connector-contract-reference.md) for the probe contract.
 
   - **(c) Custom direct connector** — fork `examples/connectors/McpConnectorTemplate/` when you need behavior the bundled `HttpMcpConnector` doesn't cover (e.g., a non-spec auth handshake, tool-name normalization, custom retry logic).
 

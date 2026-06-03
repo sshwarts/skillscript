@@ -93,7 +93,19 @@ export class McpConnectorTemplate implements McpConnector {
       contract_version: "1.0.0",
       features: {
         // TODO — set each flag based on what your transport can actually do.
-        supports_identity_propagation: false,  // can ctxOverrides.agentId thread through to upstream?
+        //
+        // `supports_identity_propagation: true` is a structural claim that
+        // distinct `ctx.agentId` values reach the upstream AND yield distinct
+        // observable substrate scopes. When you flip it true, your adopter
+        // conformance fixture MUST supply both Level 1 + Level 2 probes via
+        // `flagProbes`:
+        //   `mcpConnectors.<your-connector-name>.supports_identity_propagation.level1`
+        //   `mcpConnectors.<your-connector-name>.supports_identity_propagation.level2`
+        // Level 1 = identity reaches transport (substrate-independent).
+        // Level 2 = distinct ctx.agentId → distinct observable substrate scope
+        // (substrate-coupled; identity-pinned mock or live substrate).
+        // The `RuntimeCapabilitiesConformance` suite auto-fails if missing.
+        supports_identity_propagation: false,  // can ctx.agentId thread end-to-end?
         supports_streaming_responses: false,   // can `call()` return an async iterable?
         supports_batch: false,                 // can the upstream batch multiple tool calls?
       },
