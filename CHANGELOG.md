@@ -1,5 +1,106 @@
 # Changelog
 
+## 0.17.1 — 2026-06-03 — Docs ring: adopter playbook identity-propagation + authoring posture; language reference re-render
+
+**Docs-only ring.** Two artifact updates bundled — the playbook gains
+two new sections covering v0.17.0's adopter surface, and the language
+reference resyncs from its canonical AMP document tree. No code, no
+language-surface changes.
+
+## Adopter playbook
+
+Closes two docs gaps v0.17.0's CHANGELOG flagged as "forthcoming." Per
+`feedback_playbook_is_timeless` — playbook describes what IS, not
+version history; the new sections are framed in present-state language
+with no v0.17.0 retrospective parentheticals.
+
+### 1. New `Identity propagation — for multi-agent hosts` section
+
+Adopter-facing docs for v0.17.0's `mcpCallerIdentityHeader` config —
+the surface that previously had only a CHANGELOG entry. Covers:
+
+- Lead with the framing memory: skip this section if you're
+  single-user / single-tenant. The v0.16.8 default (`SkillStore`-side
+  author capture) handles those cases without configuration.
+- The MCP boundary's structural gap: JSON-RPC carries no standard
+  caller-identity field, so multi-agent hosts need a convention.
+- Opt-in config example (`dashboard.mcpCallerIdentityHeader: "X-Agent-Id"`)
+  with the inbound request header shape adopters need to inject.
+- Trust model: bilateral — host authenticates, runtime trusts header
+  attestation. Not for untrusted-network deployments.
+- Inbound vs outbound `X-Agent-Id` — same name, two layers, two
+  semantics, bridge meets at `SkillMeta.author`. Critical setuid-hazard
+  warning: never forward inbound→outbound; outbound is always derived
+  from author at dispatch.
+- Verification smoke test (cURL + jq pattern).
+
+### 2. New `Authoring posture` section
+
+Three authoring paths surveyed, with the direct-write Draft→promote
+pattern documented (closes Perry's Gap 2 doc-side per substrate-author's
+`a4826b2a` clarification):
+
+- CLI / dashboard / direct programmatic API → SkillStore default
+  author capture.
+- MCP `skill_write` single-tenant → defaults apply, skip the
+  multi-agent section.
+- MCP `skill_write` multi-agent → see new identity-propagation section.
+
+Plus the **direct-write authoring path** (write substrate record
+directly without going through `skill_write`):
+
+1. Write with `# Status: Draft` (captures `SkillMeta.author` from
+   substrate writer identity).
+2. `skill_status({new_state: "Approved"})` stamps the hash token and
+   preserves the captured author.
+
+Write-Approved-without-stamp fails at execute time with
+`ApprovalRejectedError` — gotcha worth calling out so adopters using
+substrate-direct authoring don't hit the wall Perry hit in dogfood.
+
+## Language reference
+
+Resynced `docs/language-reference.md` from the canonical AMP document
+tree (`skillscript-language-reference`, 15 sections). Picks up content
+Perry authored / refined since the last local render.
+
+- **`|contains:` filter semantics** — full type-aware resolution
+  branches (list, JSON-string-list, string, fallback); symmetry with
+  `in` / `not in` operators.
+- **Triple-quote multi-line strings** — `"""..."""` literal type with
+  `textwrap.dedent` semantics; dedent runs before `${VAR}`
+  interpolation; literal type any kwarg accepts (not emit-specific).
+- **Identity semantics, two layers:**
+  - `inline()` — host-skill identity (compile-time paste, no runtime
+    boundary). Bringing code in via inline is an act of taking
+    responsibility for it. (Spec-aspirational for procedural inline;
+    current impl handles data-typed only — procedural inline still
+    throws at runtime per `src/runtime.ts:692`.)
+  - `execute_skill` — called-skill author identity (`SkillMeta.author`).
+    Each skill is its own identity unit; dispatcher does not loan its
+    identity to the callee. Cross-author delegation deferred.
+- **Third principle for skill authors** — "Comparison is orchestration;
+  computation goes in tools." Includes the shell+jq universal
+  computation escape pattern, the stopping rule, and common shells of
+  the pattern (jq for aggregation, awk/sed for fields, date/python for
+  date math).
+- **`RuntimeCapabilitiesConformance` auto-coverage gate** — capability
+  flags spanning multiple layers (`supports_identity_propagation`) gate
+  via adopter-supplied Level-1 + Level-2 probes; declaring the flag
+  true without probes fails before runtime accepts the claim.
+- **Restructured "Not yet implemented, but planned"** section —
+  consolidates pipe-filter extensions, removes shipped items.
+
+### Spec/impl gap flagged
+
+The language reference describes `inline()` as "compile-time paste
+makes the inlined ops part of the host body" — applies cleanly for
+data skills today, but procedural-skill inline still throws
+`MissingSkillReferenceError` at runtime. The spec is aspirational here;
+runtime-procedural inline is a future-ring code item.
+
+---
+
 ## 0.17.0 — 2026-06-03 — MCP-caller identity propagation: host-attested caller → SkillMeta.author + adopter playbook docs
 
 **Opens v0.17 line.** Closes the write-side gap that mirrored v0.16.9's

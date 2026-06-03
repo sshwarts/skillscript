@@ -14,13 +14,9 @@ These are features designed or anticipated but not yet implemented in the curren
 - **`while CONDITION:` loops** — today's iteration is `foreach IDENT in EXPR:` only. While loops are planned for ad-hoc orchestration patterns ("loop until response contains 'done'").
 - **Arithmetic in `$set`** — today accepts literals + `${VAR}` interpolation; no `+ - * /` operators. Planned alongside `while` for turn counters and orchestration bookkeeping.
 
-## Array aggregation primitives
+## Pipe filter extensions
 
-`|max`, `|min`, `|sum`, `|reduce` pipe-filters over arrays. Today the language tops out at "shape one record" — aggregating across an array requires `foreach` accumulator ceremony. Warm-agent Phase 3 weather skill (2026-06-01) couldn't do `Math.max(hourly.chanceofrain)` without the workaround. Planned as a design question: is `foreach` the deliberate ceiling for aggregation, or do we add primitives?
-
-## Strings
-
-- **Multi-line / heredoc string literals** — today's `emit(text="...")` accepts single-line strings or `\n`-escaped multi-line. Planned: Python-style triple-quote `emit(text="""...""")` for ad-hoc prose blocks in template-kind skills.
+- **Array aggregation primitives** — `|max`, `|min`, `|sum`, `|reduce` over arrays. Today the language tops out at "shape one record" — aggregating across an array requires `foreach` accumulator ceremony. Planned as a design question: is `foreach` the deliberate ceiling for aggregation, or do we add primitives?
 
 ## Triggers (parse-clean today, don't fire — no event-bus surface yet)
 
@@ -86,7 +82,6 @@ Most "right time" reasoning is relative, not wall-clock.
 - **Channel/locality awareness** — `$(CHANNEL_TYPE)`, `$(CHANNEL_PRIVACY)` ambient refs for routing decisions
 - **Introspection primitives** — `$(PROMPT_CONTEXT.size)`, `$(SKILLS_FIRED_RECENTLY.last-1h)`, `$(SELF.confidence-trend)`
 - **Capability declarations** — `# Requires-Capabilities: sensors=[mic, camera], tools=[...]` (audit surface for operators)
-- **`unknown-llm-arg` lint** — typo-catch for `$ llm` kwargs (today, unknown kwargs pass through silently to the connector). Sibling to the older `unknown-retrieval-arg` rule. Sharpening pass on `$ llm` typed-contract validation.
 
 ## When the language extends, this section shrinks
 
@@ -255,7 +250,7 @@ Default `.gitignore` for a file-backed skills repo: `*.skill` and `*.skill.prove
 
 ## Authoring discipline
 
-Two principles for skill authors, learned by accumulated failure across many agent-authored skills.
+Three principles for skill authors, learned by accumulated failure across many agent-authored skills.
 
 ### Don't encode deterministic implementation details
 
@@ -274,6 +269,33 @@ The `# Description:` header determines whether agents pick the right skill when 
 Write descriptions as *trigger conditions*: "if X happens, run this." Not as summaries. Authors who think of the description as the skill's elevator pitch produce skills that never get picked because the trigger condition isn't stated.
 
 This matters at scale. When a skill library grows past ~20 skills, the difference between "agents find the right skill" and "agents waste effort discovering the wrong one" is description-quality discipline.
+
+### Comparison is orchestration; computation goes in tools
+
+The conditional grammar (`==` / `<` / `>` / `in` / `and` / `or` / `not`) lives in the language because conditionals ARE orchestration decisions. Arithmetic, aggregation, transformation — these produce values, which is computation, which belongs in tools.
+
+When you reach for a primitive that isn't in the language (`|max` over an array, modular arithmetic, regex substitution, date math), the stopping rule isn't "feature shelved." It's: *can a tool do this work, and can the skill body invoke that tool via `$` or `shell`?* Almost always yes.
+
+**The universal computation escape is `shell + standard CLI tools.**
+
+```
+shell(command="echo ${RAW|shell} | jq -r '[.weather[0].hourly[] | .chanceofrain | tonumber] | max'", unsafe=true) -> MAX_RAIN
+if ${MAX_RAIN} > "20":
+    emit(text="Rain chance today: ${MAX_RAIN}%")
+```
+
+The skill body stays orchestration-shaped — fetch → compute → compare → emit. The aggregation (jq's `| max`) happens inside the shell call, not inside the skill grammar. `${RAW|shell}` neutralizes interpolation safely; `unsafe=true` is required for pipe characters.
+
+Common shells of this pattern:
+- Array aggregation → `jq '... | max/min/length/add'`
+- Field extraction → `jq -r '.field'` or `awk '{print $N}'`
+- String manipulation → `sed`, `cut`, `tr`
+- Regex → `grep -E`, `sed 's///'`
+- Date math → `date -d` or `python -c 'import datetime; ...'`
+
+When a native primitive eventually ships (e.g., `|max` lands as a language filter), the shell-based version stays correct; the native one is a more skillscript-shaped spelling of the same work. The shell escape is never the wrong answer; it's the always-available answer.
+
+**The stopping rule:** before declaring "feature blocked on missing primitive X," ask: *does shell + a standard tool already do this?* The design philosophy already provides the path; the question is whether a more native spelling would be cleaner.
 
 ## Ops reference — three op classes (mutation / runtime-intrinsic / external MCP dispatch)
 
@@ -371,6 +393,24 @@ emit(text="${REPORT}")
 
 Substitutions resolved at runtime. Ordering within a block: ops execute sequentially in source order.
 
+**Multi-line strings via triple-quote:**
+
+```
+emit(text="""
+    Follow these directions exactly, step by step.
+
+    Pull the current state from ${SOURCE}.
+    Apply the transformation.
+    Verify the output matches ${EXPECTED_SHAPE}.
+
+    Report results to ${RECIPIENT}.
+    """)
+```
+
+Triple-quote string literals (`"""..."""`) accept multi-line bodies. Whitespace-strip semantics: Python `textwrap.dedent` pattern — strip common leading whitespace across non-blank lines, strip leading + trailing blank lines. Dedent runs before `${VAR}` interpolation, so substituted values arrive verbatim into the dedented template and keep their own whitespace.
+
+Triple-quote is a literal type that any kwarg accepts — not emit-specific. `$ llm prompt="""..."""`, `notify(message="""...""")`, and `$ data_write content="""..."""` all parse. Most natural fit is `emit(text=...)` in template-kind skills delivering prose, but the parser doesn't restrict use to that op.
+
 Per-output-kind consumption semantics: presentation surfaces (`# Output: agent: <name>`, `# Output: template: <name>`) consume the joined emit stream as the delivered payload. Programmatic surfaces (`# Output: text`, `# Output: file:`) follow the per-kind semantics described in Output targets.
 
 ### `notify` — mid-skill agent alert
@@ -435,6 +475,8 @@ brief:
 
 Inlines an Approved `# Type: data` skill into the host skill's compiled artifact at the call site. Resolved at `compile()` time; the data skill's `content_hash` is recorded in the host's provenance. `skillscript audit` detects stale recompiles when a referenced data skill changes.
 
+**Identity semantic.** Inlined helpers run under the **host skill's identity** — compile-time paste makes the inlined ops part of the host body, so there is no runtime identity boundary to cross. Contrast with `execute_skill` where the called skill runs under its own author identity. Bringing code in via `inline` is an act of taking responsibility for it.
+
 See Composition section for the distinction between `inline` (compile-time), `execute_skill` (in-skill runtime call), and dispatched skills.
 
 ### `execute_skill` — composition runtime call
@@ -445,6 +487,8 @@ classify:
 ```
 
 Runtime-resolved against the SkillStore. Recursion-depth-guarded (default 10).
+
+**Identity semantic.** Calls run under the **called skill's author identity** (`SkillMeta.author`), not the caller's — same rule as direct dispatch. When skill A (authored by Alice) invokes skill B (authored by Bob) via `execute_skill`, B runs as Bob. Each skill is its own identity unit; the dispatcher does not loan its identity to the callee. Cross-author delegation (caller-identity threaded as a separate context) is a future-ring design surface.
 
 ---
 
@@ -610,6 +654,8 @@ See the adopter playbook for the substrate config reference + the full Case 2 tr
 
 **Discovery surface.** `runtime_capabilities` (MCP tool) exposes the registered substrate state. Every entry across all four substrate slots (SkillStore / DataStore / LocalModel / McpConnector) carries its instance `manifest()` payload alongside the static features. Three observable states per entry: working `manifest:{...}`, runtime failure `manifest:null, manifest_error:"..."`, structural absence `manifest:null, manifest_unsupported:true` (AgentConnector only — the contract has no `manifest()` method). The bridge `wraps` convention re-exposes the underlying substrate's full manifest, so adopters reading the discovery surface see the full bound state without traversing multiple entries.
 
+Connector entries also surface `features` declarations (`supports_identity_propagation`, `supports_streaming_responses`, `supports_batch`). Capability flags that span multiple layers — `supports_identity_propagation` requires both the connector's ctx-honoring AND the substrate's per-identity scope honoring — gate via `RuntimeCapabilitiesConformance` auto-coverage: declaring a feature flag true requires the adopter to wire both Level-1 (substrate-independent: ctx reaches transport) and Level-2 (substrate-coupled: distinct identities yield distinct observable scopes) probes via `flagProbes`. Missing probes fail the gate before runtime accepts the flag as true. This is the structural close that prevents the discipline-only-contract pattern (capability claim without honoring impl) from recurring at the capability-flag surface.
+
 **Unquoted-substitution lint** (`unquoted-substitution-in-kwarg-value`, tier-2): fires when `$ x.y key=${VAR}` has unquoted `${VAR}` AND the var's binding origin is "suspect" (`# Vars:` default with whitespace, `$set` with whitespace, op output, foreach iterator). Closes the silent-arg-truncation footgun where the MCP arg parser whitespace-splits substituted values. Remediation: wrap as `key="${VAR}"`.
 
 ---
@@ -663,7 +709,7 @@ deliver:
 |---|---|---|---|
 | Mutation | `$set` | `$set NAME = value` (with `${VAR}` interpolation at bind) | NAME (no arrow) |
 | Mutation | `$append` | `$append VAR <value>` (type-dispatched: list element / string concat) | VAR (no arrow) |
-| Runtime-intrinsic | `emit` | `emit(text="...")` | none |
+| Runtime-intrinsic | `emit` | `emit(text="...")` or `emit(text="""...""")` for multi-line | none |
 | Runtime-intrinsic | `notify` | `notify(agent="...", [message=...], [event_type=...], [correlation_id=...]) -> ACK` | optional |
 | Runtime-intrinsic | `inline` | `inline(skill="<name>")` | none (compile-time) |
 | Runtime-intrinsic | `execute_skill` | `execute_skill(skill_name="...", inputs={...}) -> R` | optional |
@@ -811,6 +857,7 @@ Pipe filters apply transforms to resolved variables before substitution. Syntax:
 | `json` | `JSON.stringify(value)` | `${payload|json}` for `{k:"v"}` | `"{\"k\":\"v\"}"` |
 | `trim` | Whitespace trim | `${VERDICT|trim}` for `"urgent\n"` | `urgent` |
 | `length` | Count of items (array) or characters (string) | `${ITEMS|length}` for `["a","b","c"]` | `3` |
+| `contains:"X"` | Boolean: type-aware substring / element membership | `${MSG|contains:"urgent"}` for `"Yes, urgent"` | `true` |
 | `fallback:"X"` | Coalesce on missing/undefined ref | `${VAR.missing|fallback:"-"}` | `-` |
 | `isodate` | Epoch seconds → ISO-8601 timestamp | `${EPOCH|isodate}` for `1779660000` | `2026-05-24T22:00:00.000Z` |
 
@@ -831,6 +878,35 @@ if ${ITEMS|length} > 5:
 ```
 
 The output of `|length` is a string-form number ("3", "5", etc.) at substitution time, consistent with how other filters produce strings. Numeric comparison coerces back to number for the comparison; equality (`==`) does byte-for-byte string comparison.
+
+### `contains:"X"` semantics
+
+Type-aware boolean filter for use in conditionals. Resolution branches:
+
+- **LHS resolves to a list** → element membership. `${LIST|contains:"a"}` returns `true` if `"a"` is in the list, `false` otherwise. No substring matching against list elements.
+- **LHS resolves to a string that JSON-parses to a list** → use the parsed list (JSON-string tolerance, same pattern as `in`/`not in` RHS). Accommodates LLM-output-as-JSON-array patterns.
+- **LHS resolves to a string (non-JSON-array)** → substring match. `${TEXT|contains:"urgent"}` returns `true` if `"urgent"` appears anywhere in `TEXT`.
+- **LHS resolves to anything else (object, number, null)** → stringify-then-substring. Last-resort behavior; not the recommended path.
+
+Mirrors the existing `in` / `not in` operator semantics — `${LIST|contains:"a"}` and `if "a" in ${LIST}:` return the same answer for the same inputs. The two ways to ask "does this contain a value" stay symmetric.
+
+```
+$ llm prompt="Reply 'urgent' if any items are urgent" -> VERDICT
+if ${VERDICT|contains:"urgent"}:
+    emit(text="escalate")
+```
+
+Replaces the brittle exact-match pattern (`if ${VERDICT|trim} == "urgent":`) that required prompt-engineering the LocalModel to respond with EXACTLY one word.
+
+Return convention: `"true"` on match, `""` (empty string) on miss. Matches the runtime's `isTruthy` so the natural shape `if ${R|contains:"X"}:` evaluates the way the syntax suggests — no explicit `== "true"` needed.
+
+Case-sensitive by default. Case-insensitive variant deferred until empirical signal.
+
+Quoted-string argument required. Bare-identifier accepted for consistency with other filter args but tier-2 lint warns "prefer quoted form."
+
+Empty-string match: `${VAR|contains:""}` returns `true` if VAR is bound. Documented behavior — any string contains the empty string.
+
+`contains` is the first filter to operate on structured types. The design line — filters are predominantly string ops — is intentionally crossed here because filter-as-conditional-primitive is the load-bearing intent. The rest of the filter set (`|trim`, `|json`, `|fallback`, etc.) operates on the resolved string form.
 
 ### `fallback:"X"` semantics
 
@@ -872,10 +948,12 @@ First trims whitespace, then JSON-stringifies the result.
 
 ## Filter use in conditionals
 
-Filters may appear on the LHS of conditional expressions. Useful for whitespace-tolerant equality checks against LocalModel output (which often has trailing newlines).
+Filters may appear on the LHS of conditional expressions. Useful for whitespace-tolerant equality checks against LocalModel output (which often has trailing newlines), and for the `contains:` predicate-shaped filter:
 
 ```
 if ${VERDICT|trim} == "urgent":
+    ...
+if ${VERDICT|contains:"urgent"}:
     ...
 if ${VAR.maybe|fallback:"-"} == "-":
     emit(text="nothing there")
@@ -930,9 +1008,9 @@ Several filters are planned but not yet shipped:
 
 ## Composition philosophy
 
-Filters are pure functions (input → output, no side effects). Stay small and orthogonal — each filter does one thing. Composition emerges from chaining, not from elaborate per-filter parameter spaces. The shipped set covers ~85% of real-world string-shaping needs; the pending set extends to slicing and array projection.
+Filters are pure functions (input → output, no side effects). Stay small and orthogonal — each filter does one thing. Composition emerges from chaining, not from elaborate per-filter parameter spaces. The shipped set covers ~90% of real-world string-shaping needs; the pending set extends to slicing and array projection.
 
-`length`, `fallback:`, and `isodate` were all added in response to cold-author harness signal — authored skills demonstrated the gap was load-bearing before each filter shipped.
+`length`, `fallback:`, `isodate`, and `contains:` were all added in response to cold-author harness signal — authored skills demonstrated the gap was load-bearing before each filter shipped. `contains:` is also notable as the first filter to operate on structured types; filter-as-conditional-primitive is the design line that warranted the cross.
 
 ## Conditionals & iteration — if/elif/else, foreach, supported operators
 
@@ -2042,5 +2120,5 @@ Hung dispatches hang the skill without explicit timeout configuration. Lean: ski
 
 ---
 
-*Rendered from `skillscript/skillscript-language-reference` — 2026-06-02 16:30 EDT*  
+*Rendered from `skillscript/skillscript-language-reference` — 2026-06-03 18:08 EDT*  
 *Source of truth: AMP (`amp_render_document("skillscript/skillscript-language-reference")`)*

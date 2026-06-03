@@ -230,6 +230,109 @@ SKILLSCRIPT_HOME=/path/to/adopter skillfile dashboard --config /path/to/adopter/
 
 Each instance reads its own config; ports/paths/db files don't collide.
 
+## Authoring posture — who owns the skills you write
+
+Every skill stored in a `SkillStore` carries a `SkillMeta.author` field captured at first-write. The author is then load-bearing at dispatch time: the runtime threads it into `ctx.agentId` so identity-scoped substrates (memory stores, multi-tenant DBs) read and write under that scope.
+
+How `author` is captured depends on how the skill gets written:
+
+- **CLI / dashboard / direct programmatic API.** When you call `SkillStore.store(name, body)` from your own code (CLI, bootstrap, scripts) or via the dashboard's approval flow, the SkillStore captures author from its bundled default. `FilesystemSkillStore` uses `os.userInfo().username`; adopter stores capture from their own auth context.
+
+- **MCP `skill_write` from a single-tenant host.** If only one agent (or one human) calls your runtime, you don't need to configure anything — the `SkillStore.store()` default-author logic above applies. **Skip the multi-agent section below.**
+
+- **MCP `skill_write` from a multi-agent host.** If multiple agents share one runtime instance via MCP (e.g., a host that bridges several authenticated agents into one transport), the runtime can't tell them apart at the protocol layer. See the next section.
+
+### Direct-write authoring path
+
+Adopters whose `SkillStore` is backed by an addressable substrate (e.g., a memory store) can author skills by writing the substrate record directly — without going through the MCP `skill_write` handler. This captures `SkillMeta.author` from the substrate's own writer-identity (whatever the direct-write API authenticates as).
+
+**Gotcha:** direct-write must declare `# Status: Draft`, not `# Status: Approved`. The runtime's hash-token tamper gate (v0.9.0) rejects skills with `# Status: Approved` that lack a `vN:<token>` stamp; the stamp is computed by the runtime's `update_status` flow, not by the substrate. To publish:
+
+1. Write the skill with `# Status: Draft` via your substrate's direct-write API.
+2. Call `skill_status({name, new_state: "Approved"})` via MCP (or the dashboard's Approve button). This stamps the token and preserves the captured author.
+
+Write-Approved-without-stamp will fail at execute time with `ApprovalRejectedError`. Always Draft-then-promote.
+
+## Identity propagation — for multi-agent hosts
+
+**Skip this section** if your runtime serves one agent (CLI tools, single-user dashboards, hobby deployments). The existing v0.16.8 default — `SkillMeta.author` captured from the SkillStore's writer identity — already attributes authorship correctly when there's only one writer.
+
+This section is for adopters whose runtime is fronted by an MCP host that bridges multiple authenticated agents into one transport (e.g., a NanoClaw-style multi-agent gateway, or a multi-tenant SaaS where agents share a runtime pool).
+
+### The gap MCP doesn't close on its own
+
+JSON-RPC over HTTP doesn't carry a standard "calling identity" field. Without an extra convention, every `skill_write` call into your runtime stamps `SkillMeta.author = <runtime's own writer identity>` — regardless of which agent on the host actually originated the call. Subsequent `execute_skill` dispatches then run under the wrong scope. Identity-scoped reads return the runtime's own data, not the calling agent's.
+
+### Opt-in: a configurable inbound header
+
+When you configure `dashboard.mcpCallerIdentityHeader`, the runtime reads that header on every `/rpc` request and threads its value as the caller-identity through to `skill_write`. The handler stamps `SkillMeta.author = <header value>`. Different callers with different header values get distinct stored authors.
+
+```json
+{
+  "dashboard": {
+    "host": "127.0.0.1",
+    "port": 7878,
+    "mcpCallerIdentityHeader": "X-Agent-Id"
+  }
+}
+```
+
+Multi-agent host (NanoClaw, custom MCP gateway, etc.) is responsible for setting the header on every outbound request:
+
+```http
+POST /rpc HTTP/1.1
+Host: skillscript-runtime
+Content-Type: application/json
+X-Agent-Id: alice
+
+{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"skill_write","arguments":{"name":"alice-skill","source":"..."}}}
+```
+
+- Header lookup is case-insensitive (Node lowercases inbound header names).
+- Absent header on a configured runtime → caller identity is undefined for that request → `SkillStore.store()` falls back to its default author capture (existing single-tenant behavior). Backwards-compatible — hosts that don't inject identity behave exactly as before.
+- Empty header value → treated as absent.
+
+### Trust model
+
+The runtime trusts the host's header attestation. There's no signature verification — anyone reaching the runtime with a forged `X-Agent-Id` could claim to be anyone. The runtime is **not** the authentication boundary; the host is. Bilateral trust:
+
+- **The host** (your MCP gateway) authenticates the agent via its own auth surface (OAuth, JWT, session cookies, mTLS — whatever fits your platform) and injects the verified identity into the outbound `X-Agent-Id` header.
+- **The runtime** trusts the host because you configured it to (`mcpCallerIdentityHeader` is opt-in; unset means "I don't trust any inbound identity claim, fall back to my own writer identity").
+
+Don't expose the `/rpc` endpoint directly to untrusted clients with this configuration. Run behind your host's auth-enforcing reverse proxy or in a trusted-network deployment.
+
+### Inbound vs outbound — same header, two layers
+
+Connectors like `HttpMcpConnector` use the **same header name** (`X-Agent-Id` by convention) for outbound calls to substrates — see the [HttpMcpConnector configuration](#case-2--mcp-tools-wiring-substrate-locked) above. The two are NOT the same value in general:
+
+- **Inbound** (this section) = request-scoped caller — who's currently calling the runtime via MCP.
+- **Outbound** (`HttpMcpConnector.identityHeader`) = dispatch-scoped owner — derived from `SkillMeta.author` of the skill being executed, asserted to the substrate so reads land in the owner's scope.
+
+They MEET at `SkillMeta.author`. The runtime captures inbound caller identity at `skill_write` (stamps it as the skill's author); at execute time, the runtime threads `author` into `ctx.agentId`; the outbound connector asserts that to the substrate. The same `X-Agent-Id` header carries two different identity claims at the two boundaries; the stored author is the bridge.
+
+**Critical:** never forward an inbound `X-Agent-Id` header straight to an outbound connector. The skill's owner is who should access the substrate, not the current caller. If anyone invokes alice's skill and the outbound used the caller's identity instead of alice's, the substrate would scope to the caller — a setuid hazard. The runtime keeps the two separate; outbound identity is always derived from author at dispatch.
+
+### Verification
+
+After wiring + restart, a smoke test:
+
+```bash
+# Write a skill as alice
+curl -X POST http://localhost:7878/rpc \
+  -H "content-type: application/json" \
+  -H "X-Agent-Id: alice" \
+  -d '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"skill_write","arguments":{"name":"smoke","source":"# Skill: smoke\n# Status: Draft\nrun:\n    emit(text=\"hi\")\ndefault: run"}}}'
+
+# Verify author was stamped from the header
+curl -X POST http://localhost:7878/rpc \
+  -H "content-type: application/json" \
+  -d '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"skill_metadata","arguments":{"name":"smoke"}}}' \
+  | jq '.result.content[0].text | fromjson | .metadata.author'
+# Expected: "alice"
+```
+
+If the second call returns the runtime's own writer identity instead of `"alice"`, either the config field is unset, the header didn't reach the runtime (check your proxy / host wiring), or you sent the request with a different header name than configured.
+
 ## Conventions for upstream-merge-friendly modifications
 
 If your wiring needs require modifying skillscript-runtime source (rather than just configuration), follow these conventions to minimize merge friction.
