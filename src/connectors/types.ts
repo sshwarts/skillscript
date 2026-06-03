@@ -244,6 +244,26 @@ export interface SkillMeta {
   created_at: number;
   updated_at: number;
   status_changed_at?: number;
+  /**
+   * Authenticated writer captured at first-store. The SkillStore IS the
+   * trust boundary — whoever's authenticated to write IS the owner. Locked
+   * at first-write: subsequent `store()` calls with `overwrite=true`
+   * preserve the original author silently (or throw if an explicit
+   * `metadata.author` disagrees). Transfer of ownership is a substrate-
+   * specific privileged operation, not a side-effect of an authoring
+   * rewrite.
+   *
+   * For bundled `FilesystemSkillStore`: defaults to `os.userInfo().username`
+   * — trust-boundaried by FS perms, FS user IS the identity. Adopter
+   * stores capture from their auth header / session via the
+   * `metadata.author` argument on `store()`.
+   *
+   * Runtime threads this into `McpDispatchCtx.agentId` at dispatch time so
+   * substrate-side identity-scoped reads/writes resolve under the owner.
+   * Connectors that advertise `supports_identity_propagation` honor it;
+   * substrates without per-identity sessions need that capability shipped
+   * before end-to-end propagation works.
+   */
   author?: string;
   metadata_bag?: Record<string, unknown>;
 }
@@ -359,7 +379,15 @@ export interface SkillStore {
   metadata(name: string): Promise<SkillMeta>;
   /** Throws `SkillNotFoundError` if missing. Empty array is valid for new skills. */
   versions(name: string): Promise<VersionInfo[]>;
-  /** Creates or updates. Throws `LintFailureError` if tier-1 lint rejects. */
+  /**
+   * Creates or updates. Throws `LintFailureError` if tier-1 lint rejects.
+   * `metadata.author` is captured at first-write and locked: subsequent
+   * `store()` calls preserve the original author. Throws `StorageConflictError`
+   * if an explicit `metadata.author` disagrees with the existing first-write
+   * author. SkillStore implementations supply a substrate-appropriate default
+   * when `metadata.author` is omitted (e.g., `os.userInfo().username` for
+   * filesystem; session identity for MCP-exposed stores).
+   */
   store(name: string, source: string, metadata?: Partial<SkillMeta>): Promise<VersionInfo>;
   /** Substrate-only delete. Referential integrity is the runtime's concern (T2 Phase 2.1). */
   delete(name: string): Promise<void>;

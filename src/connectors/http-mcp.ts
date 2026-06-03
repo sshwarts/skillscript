@@ -60,6 +60,43 @@ export interface HttpMcpConfig {
    */
   headers?: Record<string, string>;
   /**
+   * v0.16.8 — adopter-configurable per-call identity header name. When
+   * set, `call(toolName, args, ctx)` reads `ctx.agentId` and emits this
+   * header per call (e.g., `identityHeader: "X-Agent-ID"` → requests
+   * carry `X-Agent-ID: <ctx.agentId>` when ctx is supplied). When the
+   * header value would be empty (no ctx, no agentId), the header is
+   * omitted — falls through to `headers` static defaults.
+   *
+   * Default `undefined` — no per-call identity threading. Adopters
+   * configure per their substrate's auth convention; no substrate-
+   * specific defaults are bundled (substrate-neutrality).
+   *
+   * **Critical caveat — substrate behavior gates effectiveness:**
+   *
+   * Per-call identity headers achieve end-to-end propagation ONLY
+   * against substrates that DON'T pin sessions per-identity. Substrates
+   * with session pinning (current default for many MCP servers including
+   * Streamable HTTP servers that establish identity at session-init)
+   * look at the session's identity, not the per-call header. Within a
+   * pinned session, swapping the header per call is a no-op against
+   * such substrates.
+   *
+   * Real end-to-end propagation against session-pinning substrates
+   * needs **per-identity session keying** — a connection pool where
+   * each distinct `ctx.agentId` gets its own session. That's target
+   * for a later ring; warm-adopter's prototype demonstrates the shape
+   * (~40 LOC over the existing client) and validates it against live
+   * AMP.
+   *
+   * Today's `supports_identity_propagation: false` declaration in
+   * `staticCapabilities()` reflects this honestly: the connector reads
+   * ctx and emits the header (Level 1 contract), but end-to-end
+   * propagation (Level 2) isn't guaranteed against session-pinning
+   * substrates. The flag flips true when per-identity session keying
+   * lands.
+   */
+  identityHeader?: string;
+  /**
    * Client-identity strings echoed in the `initialize` handshake. The
    * server may surface these in audit logs. Defaults to
    * `"skillscript-runtime-http-mcp"` / runtime version.
@@ -88,6 +125,7 @@ interface JsonRpcReply {
 export class HttpMcpConnector implements McpConnector {
   private readonly endpoint: string;
   private readonly baseHeaders: Record<string, string>;
+  private readonly identityHeader: string | undefined;
   private readonly clientName: string;
   private readonly clientVersion: string;
   private readonly protocolVersion: string;
@@ -101,6 +139,7 @@ export class HttpMcpConnector implements McpConnector {
     }
     this.endpoint = config.endpoint;
     this.baseHeaders = { ...(config.headers ?? {}) };
+    this.identityHeader = config.identityHeader;
     this.clientName = config.clientName ?? DEFAULT_CLIENT_NAME;
     this.clientVersion = config.clientVersion ?? RUNTIME_VERSION;
     this.protocolVersion = config.protocolVersion ?? DEFAULT_PROTOCOL_VERSION;
@@ -112,7 +151,16 @@ export class HttpMcpConnector implements McpConnector {
       implementation: "HttpMcpConnector",
       contract_version: CONTRACT_VERSION,
       features: {
-        supports_identity_propagation: true,
+        // v0.16.8 — flag intentionally `false`. Single-value contract means
+        // end-to-end propagation (Level 2 in the consolidated charter): the
+        // connector reads `ctx.agentId` and emits the configured identity
+        // header per-call (Level 1, contract-honesty), BUT substrates that
+        // pin sessions per-identity (current default for many MCP servers)
+        // don't honor the per-call header within a pinned session. Real
+        // end-to-end propagation needs per-identity sessions, target: later
+        // ring. Until then this flag stays false; per-call header emission
+        // is internal-only behavior gated by `identityHeader` config.
+        supports_identity_propagation: false,
         supports_streaming_responses: false,
         supports_batch: false,
       },
@@ -145,12 +193,14 @@ export class HttpMcpConnector implements McpConnector {
     const clientName = config["clientName"];
     const clientVersion = config["clientVersion"];
     const protocolVersion = config["protocolVersion"];
+    const identityHeader = config["identityHeader"];
     return new HttpMcpConnector({
       endpoint,
       ...(headers !== undefined ? { headers: headers as Record<string, string> } : {}),
       ...(typeof clientName === "string" ? { clientName } : {}),
       ...(typeof clientVersion === "string" ? { clientVersion } : {}),
       ...(typeof protocolVersion === "string" ? { protocolVersion } : {}),
+      ...(typeof identityHeader === "string" && identityHeader !== "" ? { identityHeader } : {}),
     });
   }
 
@@ -175,14 +225,27 @@ export class HttpMcpConnector implements McpConnector {
     };
   }
 
-  async call(toolName: string, args: Record<string, unknown>, _ctx?: McpDispatchCtx): Promise<unknown> {
+  async call(toolName: string, args: Record<string, unknown>, ctx?: McpDispatchCtx): Promise<unknown> {
     await this.ensureSession();
+    // v0.16.8 — per-call identity header. When the adopter configured an
+    // `identityHeader` AND the runtime passed a `ctx.agentId`, emit the
+    // header on this call. Falls through to `baseHeaders` static defaults
+    // otherwise. Note: this closes the connector-contract gap (Level 1 of
+    // the propagation work) but doesn't achieve end-to-end propagation
+    // against substrates that pin sessions per-identity — per-identity
+    // session work is a later ring. The
+    // `supports_identity_propagation: false` declaration in
+    // staticCapabilities() reflects this honesty.
+    const extraHeaders: Record<string, string> = {};
+    if (this.identityHeader !== undefined && typeof ctx?.agentId === "string" && ctx.agentId !== "") {
+      extraHeaders[this.identityHeader] = ctx.agentId;
+    }
     const reply = await this.post({
       jsonrpc: "2.0",
       id: Math.floor(Math.random() * 1e6),
       method: "tools/call",
       params: { name: toolName, arguments: args },
-    });
+    }, false, extraHeaders);
     if (reply === null) throw new Error(`HttpMcpConnector: empty reply from ${toolName} at ${this.endpoint}`);
     if (reply.error !== undefined) {
       throw new Error(`HttpMcpConnector ${toolName} error ${reply.error.code}: ${reply.error.message}`);
@@ -243,11 +306,12 @@ export class HttpMcpConnector implements McpConnector {
     await this.initializing;
   }
 
-  private async post(body: unknown, isNotification = false): Promise<JsonRpcReply | null> {
+  private async post(body: unknown, isNotification = false, extraHeaders?: Record<string, string>): Promise<JsonRpcReply | null> {
     const headers: Record<string, string> = {
       "content-type": "application/json",
       accept: "application/json, text/event-stream",
       ...this.baseHeaders,
+      ...(extraHeaders ?? {}),
     };
     if (this.sessionId !== null) headers["mcp-session-id"] = this.sessionId;
     const res = await fetch(this.endpoint, {

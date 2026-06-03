@@ -124,6 +124,23 @@ export interface LintOptions {
    */
   localModelAliases?: string[];
   localModelsAvailable?: string[];
+  /**
+   * v0.16.8 — tool names that return bare arrays (not envelope-wrapped).
+   * When `foreach IT in ${VAR}` iterates a bare `$ <tool>` op output whose
+   * tool name is in this list, the `object-iteration-advisory` suppresses
+   * (the bare-iteration is correct for these tools). Default `[]` —
+   * substrate-neutral. Adopters configure per their MCP ecosystem
+   * (substrate-specific tool names belong at the adopter layer, not in
+   * bundled runtime defaults — per the source-reader-signal discipline).
+   *
+   * Per warm-adopter dogfood finding `c497b479`: the advisory was firing
+   * false-positives against bare-array-returning MCP tools, and its
+   * prescriptive `.items` suggestion produced runtime failures when
+   * authors trusted it. Wording softened independently (`.items`
+   * suggestion removed); this list is the explicit opt-out for adopters
+   * whose tools genuinely return bare arrays.
+   */
+  bareArrayReturnTools?: string[];
 }
 
 interface LintContext {
@@ -142,6 +159,7 @@ interface LintContext {
   agentConnectorNames: string[] | undefined;
   localModelAliases: string[] | undefined;
   localModelsAvailable: string[] | undefined;
+  bareArrayReturnTools: string[];
   /**
    * v0.9.1 — per-connector declared tool surface from `McpConnectorClass.staticTools()`.
    * Map entry: connector name → tool array (declared surface) OR null (class doesn't
@@ -181,6 +199,7 @@ export async function lint(source: string, options?: LintOptions): Promise<LintR
     agentConnectorNames: options?.agentConnectorNames ?? collectAgentConnectorNamesFromRegistry(options?.registry),
     localModelAliases: localModelInfo?.aliases,
     localModelsAvailable: localModelInfo?.modelsAvailable,
+    bareArrayReturnTools: options?.bareArrayReturnTools ?? [],
     mcpConnectorStaticTools: collectMcpConnectorStaticToolsFromRegistry(options?.registry),
   };
   const findings: LintFinding[] = [];
@@ -225,6 +244,7 @@ export function lintSync(source: string, options?: LintOptions): LintResult {
     agentConnectorNames: options?.agentConnectorNames ?? collectAgentConnectorNamesFromRegistry(options?.registry),
     localModelAliases: options?.localModelAliases ?? collectLocalModelAliasesFromRegistry(options?.registry),
     localModelsAvailable: options?.localModelsAvailable,
+    bareArrayReturnTools: options?.bareArrayReturnTools ?? [],
     mcpConnectorStaticTools: collectMcpConnectorStaticToolsFromRegistry(options?.registry),
   };
   const findings: LintFinding[] = [];
@@ -2377,7 +2397,7 @@ const APPEND_TO_NON_LIST: LintRule = {
 type BindingOrigin =
   | { kind: "vars"; rawDefault?: string }
   | { kind: "set-literal"; value: string }
-  | { kind: "op-output"; op: "$" | "shell" }
+  | { kind: "op-output"; op: "$" | "shell"; toolName?: string }
   | { kind: "foreach-iter" }
   | { kind: "set-ref" }; // $set X = $(REF) — propagate, treated as suspect
 
@@ -2399,8 +2419,18 @@ function buildBindingOrigins(parsed: ParsedSkill): Map<string, BindingOrigin> {
         }
       }
       if (op.outputVar !== undefined) {
-        if (op.kind === "$") origins.set(op.outputVar, { kind: "op-output", op: "$" });
-        else if (op.kind === "shell") origins.set(op.outputVar, { kind: "op-output", op: "shell" });
+        if (op.kind === "$") {
+          // v0.16.8 — capture the source tool name so downstream lints
+          // (e.g. object-iteration-advisory) can suppress when the tool
+          // is known to return bare arrays. Named-form: tool name is
+          // first whitespace-bounded token after the connector dot.
+          // Bare-form: first token of op.body.
+          const m = /^([A-Za-z_][\w:-]*)/.exec(op.body);
+          const toolName = m !== null ? m[1] : undefined;
+          origins.set(op.outputVar, { kind: "op-output", op: "$", ...(toolName !== undefined ? { toolName } : {}) });
+        } else if (op.kind === "shell") {
+          origins.set(op.outputVar, { kind: "op-output", op: "shell" });
+        }
       }
       if (op.kind === "foreach" && op.foreachIter !== undefined) {
         origins.set(op.foreachIter, { kind: "foreach-iter" });
@@ -2580,14 +2610,22 @@ const DEPRECATED_SUBSTITUTION_SHAPE: LintRule = {
  * Placeholder for the v0.8 tool-schema-introspection solution that catches
  * this precisely. Advisory hints at the common envelope-field names.
  */
+// v0.16.8 — softened wording per Perry's `c497b479` finding 2 + warm-adopter's
+// `1e1c9305` empirical observation. The original advisory PRESCRIBED `.items`
+// access, which produced a runtime failure when authors trusted it against
+// bare-array-returning tools. New wording acknowledges the shape ambiguity
+// and asks the author to verify against the tool's response — no specific
+// field name. Adopter-configurable `LintOptions.bareArrayReturnTools`
+// suppresses the advisory entirely for tools known to return bare arrays.
 const OBJECT_ITERATION_ADVISORY: LintRule = {
   id: "object-iteration-advisory",
   severity: "info",
-  description: "A `foreach IT in ${VAR}` iterates a bound variable whose origin is a `$` MCP tool output, without a `.field` accessor. MCP tools commonly wrap arrays in an envelope.",
-  remediation: "Check the tool's response shape — most MCP services wrap arrays under fields like `.items`, `.results`, `.issuesPage`, `.data`, `.records`. Rewrite as `foreach IT in ${VAR.items}` (or the correct field) once you know the shape. v0.8 tool-schema introspection will catch this precisely; today the advisory is a soft nudge.",
+  description: "A `foreach IT in ${VAR}` iterates a bound variable whose origin is a `$` MCP tool output, without a `.field` accessor. The tool may return a bare array OR an envelope-wrapped one — verify against the tool's actual response shape.",
+  remediation: "Verify the tool's response shape. Some MCP tools return bare arrays (iterate directly: `foreach IT in ${VAR}` is correct); others wrap arrays in envelopes (e.g., `.items`, `.results`, `.data`) and need `foreach IT in ${VAR.items}` or the actual field. If your tool is known to return bare arrays, configure `LintOptions.bareArrayReturnTools` to suppress this advisory.",
   check: (ctx) => {
     const findings: LintFinding[] = [];
     const origins = buildBindingOrigins(ctx.parsed);
+    const suppressedTools = new Set(ctx.bareArrayReturnTools);
     // Bare var ref pattern: `$(VAR)` or `${VAR}` — no dotted accessor, no filter chain.
     const bareRef = /^\s*\$(?:\(([A-Za-z_]\w*)\)|\{([A-Za-z_]\w*)\})\s*$/;
     for (const [targetName, target] of ctx.parsed.targets) {
@@ -2599,12 +2637,14 @@ const OBJECT_ITERATION_ADVISORY: LintRule = {
         const origin = origins.get(varName);
         if (origin === undefined) return;
         if (origin.kind !== "op-output" || origin.op !== "$") return;
+        // v0.16.8 — adopter-configurable suppression.
+        if (origin.toolName !== undefined && suppressedTools.has(origin.toolName)) return;
         findings.push({
           rule: "object-iteration-advisory",
           severity: "info",
-          message: `In target '${targetName}': \`foreach ${op.foreachIter} in \${${varName}}\` iterates a bare \`$\` op output without a \`.field\` accessor. Most MCP tools wrap arrays in an envelope (e.g., \`.items\`, \`.results\`, \`.issuesPage\`, \`.data\`). Check the tool's response shape; rewrite as \`foreach ${op.foreachIter} in \${${varName}.items}\` (or the actual array field) if so.`,
+          message: `In target '${targetName}': \`foreach ${op.foreachIter} in \${${varName}}\` iterates a bare \`$\` op output without a \`.field\` accessor. The tool may return a bare array (in which case bare iteration is correct) OR an envelope shape (e.g., \`{items: [...]}\`) which needs \`foreach ${op.foreachIter} in \${${varName}.items}\`. Verify against the tool's actual response.`,
           block: targetName,
-          extras: { var_name: varName, foreach_iter: op.foreachIter },
+          extras: { var_name: varName, foreach_iter: op.foreachIter, ...(origin.toolName !== undefined ? { tool_name: origin.toolName } : {}) },
         });
       });
     }

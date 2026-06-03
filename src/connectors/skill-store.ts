@@ -1,6 +1,7 @@
 import { readFile, readdir, writeFile, mkdir, stat, unlink, appendFile } from "node:fs/promises";
 import { join, basename, extname } from "node:path";
 import { createHash } from "node:crypto";
+import { userInfo } from "node:os";
 import type {
   SkillStore,
   SkillSource,
@@ -184,6 +185,29 @@ export class FilesystemSkillStore implements SkillStore {
       bodyToWrite = stampApprovalToken(source);
     }
 
+    // v0.16.8 — author capture + immutability. First-write captures the
+    // authenticated writer (defaulting to `os.userInfo().username` for the
+    // filesystem-trust-boundary). Subsequent `store()` calls preserve the
+    // original author silently; an explicit `metadata.author` that
+    // disagrees throws — transfer of ownership is a privileged substrate-
+    // specific operation, not a side-effect of an authoring rewrite.
+    const existingAuthor = await this.readFirstVersionAuthor(name);
+    const requestedAuthor = metadata?.author;
+    let resolvedAuthor: string;
+    if (existingAuthor !== null) {
+      if (requestedAuthor !== undefined && requestedAuthor !== existingAuthor) {
+        throw new StorageConflictError(
+          name,
+          `author is locked at first-write (existing: '${existingAuthor}'; requested: '${requestedAuthor}'). ` +
+          `Use a substrate-specific privileged operation to transfer ownership.`,
+          "FilesystemSkillStore",
+        );
+      }
+      resolvedAuthor = existingAuthor;
+    } else {
+      resolvedAuthor = requestedAuthor ?? userInfo().username;
+    }
+
     const content_hash = hashSource(bodyToWrite);
     const version = shortHash(content_hash);
     const status = metadata?.status ?? extractStatus(bodyToWrite) ?? "Draft";
@@ -196,10 +220,33 @@ export class FilesystemSkillStore implements SkillStore {
       content_hash,
       status,
       changed_at: nowSec,
-      ...(metadata?.author !== undefined ? { changed_by: metadata.author } : {}),
+      changed_by: resolvedAuthor,
     };
     await appendFile(this.versionsPathFor(name), JSON.stringify(info) + "\n", "utf8");
     return info;
+  }
+
+  /**
+   * Read the first version's `changed_by` from the versions log, which IS
+   * the canonical author per the v0.16.8 first-write-locks discipline.
+   * Returns null when the skill has no versions yet (new skill being stored).
+   */
+  private async readFirstVersionAuthor(name: string): Promise<string | null> {
+    try {
+      const body = await readFile(this.versionsPathFor(name), "utf8");
+      const lines = body.split("\n").filter((l) => l.trim() !== "");
+      if (lines.length === 0) return null;
+      try {
+        const first = JSON.parse(lines[0]!) as VersionInfo;
+        return first.changed_by ?? null;
+      } catch {
+        // Malformed first line — treat as no recoverable author.
+        return null;
+      }
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === "ENOENT") return null;
+      throw err;
+    }
   }
 
   async delete(name: string): Promise<void> {
@@ -279,6 +326,11 @@ export class FilesystemSkillStore implements SkillStore {
     const description = extractHeader(source, "Description");
     const fileStat = await stat(this.pathFor(name)).catch(() => null);
     const updated_at = fileStat ? Math.floor(fileStat.mtimeMs / 1000) : 0;
+    // v0.16.8 — author is the first-version writer per first-write-locks
+    // discipline. Reads versions log; null when no versions exist (legacy
+    // skill stored before author capture landed — meta.author stays
+    // undefined rather than guessing).
+    const author = await this.readFirstVersionAuthor(name);
     const meta: SkillMeta = {
       name,
       version,
@@ -288,6 +340,7 @@ export class FilesystemSkillStore implements SkillStore {
       updated_at,
     };
     if (description !== null) meta.description = description;
+    if (author !== null) meta.author = author;
     return meta;
   }
 }

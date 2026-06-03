@@ -18,6 +18,7 @@ import {
 import { helpResponse } from "./help-content.js";
 import { RUNTIME_VERSION } from "./version.js";
 import { evaluateApprovalGate } from "./approval.js";
+import { forceDraftStatus } from "./connectors/skill-store-mcp.js";
 
 /**
  * MCP server contract surface (T6b Phase 1). Exposes the runtime's
@@ -90,6 +91,25 @@ export interface McpServerDeps {
   registry?: Registry;
   /** Surfaced via `runtime_capabilities` so cold agents know whether `@ unsafe` is permitted. */
   enableUnsafeShell?: boolean;
+  /**
+   * v0.16.8 — approval-posture override. When true, the outside-MCP
+   * `skill_write` handler forces every write to land in `Draft` status
+   * regardless of what the body declares. The body's `# Status: Approved`
+   * intent is preserved as a signal (the runtime knows what the author
+   * wanted), but the persisted state is `Draft` until a human or
+   * adopter-specific approval flow explicitly promotes it.
+   *
+   * Default `false` — preserves the v0.9.1 auto-stamp behavior (body
+   * declares Approved → SkillStore stamps the hash token). Adopters
+   * wanting stricter posture (every skill needs explicit promotion
+   * regardless of body claim) set this flag at runtime startup. Per
+   * Perry's `787b6b95` Option A.
+   *
+   * The in-skill bridge dispatch (`SkillStoreMcpConnector`) is
+   * Draft-by-default regardless — that's a separate v0.15.0 trust
+   * boundary, unaffected by this flag.
+   */
+  forceAlwaysDraft?: boolean;
   /** Runtime mode label — `"serve"` (headless) or `"dashboard"` (SPA mounted). v0.2.7. */
   runtimeMode?: "serve" | "dashboard";
   /** Path to the persistent imperative-trigger registry, when configured. v0.2.7. */
@@ -596,11 +616,34 @@ export class McpServer {
     // was configured. The 5th instance of the discipline-only-contracts
     // class (sibling: skill_status v0.13.7, strict_filters v0.14.0,
     // mutation gate v0.14.x, skill_write declared-but-unwired v0.15.0).
+    //
+    // v0.16.8 — same class of bug, different field. ctx.agentId never
+    // populated at this entry point; runtime threads agentId through to
+    // McpDispatchCtx at dispatch time (runtime.ts), but with no source
+    // for agentId here, the connector dispatched under runtime identity
+    // regardless of who owned the skill. Sibling close: look up the
+    // named skill's author from SkillStore.metadata and populate
+    // ctx.agentId so the connector dispatch sees it. For source-form
+    // execute_skill (no name → no SkillStore lookup), agentId stays
+    // undefined — the caller is responsible for supplying it via other
+    // ExecuteContext paths if needed.
+    let agentId: string | undefined;
+    if (hasName && !hasSource) {
+      try {
+        const meta = await this.deps.skillStore.metadata(skillName as string);
+        if (meta.author !== undefined) agentId = meta.author;
+      } catch {
+        // SkillNotFoundError or other read failure — let downstream
+        // executeSkillByName surface the real error. ctx.agentId stays
+        // undefined; v0.16.8 ships the plumbing, not the failure mode.
+      }
+    }
     const ctx = {
       registry: this.deps.registry,
       mechanical,
       recursionDepth: 0,
       ...(this.deps.enableUnsafeShell !== undefined ? { enableUnsafeShell: this.deps.enableUnsafeShell } : {}),
+      ...(agentId !== undefined ? { agentId } : {}),
     } satisfies import("./runtime.js").ExecuteContext;
 
     try {
@@ -799,9 +842,18 @@ export class McpServer {
         if (msg.startsWith("skill_write:")) throw err;
       }
     }
+    // v0.16.8 — when `forceAlwaysDraft` is enabled, rewrite the body's
+    // `# Status:` header to Draft before persisting so the body and the
+    // VersionInfo agree. Same machinery as the in-skill bridge's
+    // Draft-by-default discipline (v0.15.0) — both converge on
+    // `forceDraftStatus` from skill-store-mcp. Adopters wanting stricter
+    // posture (every write requires explicit human promotion regardless
+    // of body claim) opt in via the flag at runtime startup. Per Perry's
+    // `787b6b95` Option A.
+    const bodyToStore = this.deps.forceAlwaysDraft === true ? forceDraftStatus(source) : source;
     // SkillStore.store() runs tier-1 lint as part of its contract and throws
     // LintFailureError on rejection. Surface that to the caller verbatim.
-    const versionInfo = await this.deps.skillStore.store(name, source);
+    const versionInfo = await this.deps.skillStore.store(name, bodyToStore);
     return {
       name: versionInfo.name,
       version: versionInfo.version,

@@ -181,7 +181,13 @@ export class SkillStoreMcpConnector implements McpConnector {
  * keep the existing "body declares status" behavior. The override lives
  * at the bridge — the boundary between in-skill dispatch and substrate.
  */
-function forceDraftStatus(body: string): string {
+/**
+ * v0.16.8 — exported so the outside-MCP `skill_write` handler can reuse
+ * the same draft-rewriting discipline when the `forceAlwaysDraft`
+ * adopter posture is enabled. Both the in-skill bridge (v0.15.0) and
+ * the outside-MCP handler converge on the same body-rewrite shape.
+ */
+export function forceDraftStatus(body: string): string {
   const draftLine = "# Status: Draft";
   const statusRe = /^#\s*Status\s*:.*$/m;
   if (statusRe.test(body)) {

@@ -1,5 +1,159 @@
 # Changelog
 
+## 0.16.8 — 2026-06-03 — Identity foundation: SkillMeta.author + connector honesty + approval posture
+
+**Cluster ring.** Six items on the SkillStore metadata + connector honesty
+layer per the consolidated v0.16.8 charter (`9af842f7`). Foundation for
+v0.16.9+ identity propagation work; this ring lands the capture + the
+honesty fixes without claiming end-to-end propagation (that requires
+per-identity session keying against session-pinning substrates — target
+later ring).
+
+Two cross-agent inputs shaped the ring:
+- Perry's `c497b479` finding (parser bug + lint false-positive) and
+  `787b6b95` approval-posture playbook ask
+- Warm-adopter's `1e1c9305` substrate-author findings + `299c0d20`
+  prototype validation against live AMP
+
+### 1. `SkillMeta.author` populated at SkillStore write
+
+The SkillStore IS the trust boundary — whoever's authenticated to write
+IS the owner. First-write captures the writer identity into the
+existing `SkillMeta.author` field (warm-adopter's `1e1c9305` revision —
+reuses the contract field rather than adding `metadata.owner`).
+
+**Locked at first-write** per Perry's `9d9aef14` — subsequent `store()`
+calls preserve the original author silently; an explicit
+`metadata.author` that disagrees throws `StorageConflictError`.
+Transfer of ownership is a substrate-specific privileged operation,
+not a side-effect of an authoring rewrite.
+
+`FilesystemSkillStore` defaults the author to `os.userInfo().username`
+when `metadata.author` is not supplied — trust-boundaried by FS perms,
+FS user IS the identity. Adopter stores capture from their auth header
+/ session via the `metadata.author` argument.
+
+Persistence via the existing versions log — first version's
+`changed_by` IS the canonical author. `buildMeta()` reads it on every
+`metadata()` / `query()` / `load()` call.
+
+### 2. `McpServerDeps.forceAlwaysDraft` flag
+
+Per Perry's `787b6b95` Option A. Strict approval posture for adopters
+who want "every skill needs explicit human promotion regardless of body
+declaration." Default `false` — preserves the v0.9.1 auto-stamp
+behavior (Tradita's current posture).
+
+When `true`: the outside-MCP `skill_write` handler rewrites the body's
+`# Status:` header to `Draft` before persisting, then `SkillStore.store()`
+records `status: Draft` in the VersionInfo. Body and persisted state
+agree. Same `forceDraftStatus` helper as the in-skill bridge's v0.15.0
+Draft-by-default discipline (now exported from `skill-store-mcp` for
+reuse).
+
+The in-skill bridge dispatch (`SkillStoreMcpConnector`) remains
+Draft-by-default regardless of this flag — that's a separate v0.15.0
+trust boundary.
+
+### 3. `HttpMcpConnector` ctx-reading + identity header (honesty fix)
+
+v0.16.5 shipped `HttpMcpConnector` declaring
+`supports_identity_propagation: true` but the impl ignored `ctx`
+entirely. Warm-adopter's `1e1c9305` empirical finding flagged this as
+false-advertising — same discipline-only-contracts pattern as
+`model=`/`|json`/etc bugs.
+
+**v0.16.8 changes:**
+- New `identityHeader?: string` config field. When set + `ctx.agentId`
+  supplied, the configured header is emitted per-call (e.g.
+  `identityHeader: "X-Agent-ID"` → requests carry
+  `X-Agent-ID: <ctx.agentId>`).
+- Adopter-configurable, empty default per substrate-neutrality
+  (`845bfab7` — no AMP-specific header conventions in bundled
+  defaults; adopters configure per their substrate's auth model).
+- **`supports_identity_propagation` flag flipped to `false`.** Per
+  warm-adopter's session-pinning finding: per-call header doesn't
+  propagate end-to-end against substrates that pin sessions per-
+  identity (which is the common case for Streamable HTTP MCP servers
+  including AMP). Real end-to-end propagation needs per-identity
+  session keying — that's v0.16.9+ work. The flag stays false until
+  it's honest.
+
+### 4. `execute_skill` ctx populates `agentId` from `SkillMeta.author`
+
+Class-sibling close to v0.15.4 `enableUnsafeShell-in-ctx` (Perry's
+`adf47c0b`). `ExecuteContext.agentId` field has existed since v0.x but
+was never populated at the `execute_skill` MCP entry — runtime threads
+`ctx.agentId` through to `McpDispatchCtx.agentId` at dispatch time
+(`runtime.ts:1026`), but with no source for agentId here, the
+connector dispatched under runtime identity regardless of skill owner.
+
+v0.16.8: named-skill `execute_skill` invocations look up the skill's
+`SkillMeta.author` from the SkillStore and populate `ctx.agentId`. The
+runtime threading was already wired; this lands the population path.
+
+Source-form `execute_skill` (no skill name → no SkillStore lookup
+possible) leaves `ctx.agentId` undefined — the caller is responsible
+for supplying it via other `ExecuteContext` paths (v0.16.9+).
+
+### 5. `object-iteration-advisory` wording softened + adopter-configurable suppression
+
+Per Perry's `c497b479` finding 2. Pre-v0.16.8 the advisory prescribed
+`.items` access specifically; authors trusting it against bare-array-
+returning tools got runtime "Unresolved variable reference" failures.
+Asymmetric failure mode: ignoring was invisible-success, trusting was
+silent-breakage.
+
+**v0.16.8:**
+- Wording acknowledges shape ambiguity ("the tool may return a bare
+  array OR an envelope shape — verify against the tool's actual
+  response"). No prescriptive field name.
+- New `LintOptions.bareArrayReturnTools?: string[]` config field —
+  adopter-configurable suppression list. Default empty
+  (substrate-neutral per `845bfab7` — no AMP-specific names in bundled
+  defaults).
+- Lint finding's `extras.tool_name` captures the source tool name for
+  audit / config-targeting.
+
+Tradita's bootstrap configures the AMP tool names post-ship (Perry's
+followup, not v0.16.8 scope).
+
+### 6. Playbook approval-posture section
+
+Atom-level documentation — Perry owns the playbook atom per the agreed
+split (`9af842f7` Q5). Covers Option A (this ring's `forceAlwaysDraft`
+flag) + Option B (subclass override) with the tradeoffs Perry laid out
+in `787b6b95`. Lands in the next playbook atom re-render.
+
+### Internal
+
+- `src/connectors/types.ts` — `SkillMeta.author` doc expanded; `SkillStore.store()` contract documented re: author capture + locking.
+- `src/connectors/skill-store.ts` — `os.userInfo()` import; `readFirstVersionAuthor()` helper; `buildMeta()` populates author from versions log; `store()` enforces first-write-locks discipline.
+- `src/connectors/skill-store-mcp.ts` — `forceDraftStatus` helper exported (reused by outside-MCP handler).
+- `src/connectors/http-mcp.ts` — `identityHeader` config; `call()` reads ctx; `post()` accepts `extraHeaders`; `supports_identity_propagation: false`.
+- `src/mcp-server.ts` — `McpServerDeps.forceAlwaysDraft` field; `skillWrite()` honors the flag via `forceDraftStatus`; `executeSkill()` populates `ctx.agentId` from named skill's metadata.
+- `src/lint.ts` — `BindingOrigin.toolName` field; `LintOptions.bareArrayReturnTools`; advisory wording rewritten; suppression check.
+- LOC ceiling nudged 10000 → 10100 (v0.16.8 cumulative additions).
+- +34 tests across `tests/v0.16.8-*.test.ts`. 1551 passing total (was 1517).
+
+### What's NOT in v0.16.8
+
+- Per-identity session keying (the actual end-to-end propagation fix
+  for session-pinning substrates) → v0.16.9 alongside warm-adopter's
+  prototype reference impl.
+- `# Identity: runtime` opt-OUT header → v0.16.9+.
+- RuntimeCapabilitiesConformance probe for both Level 1 + Level 2 →
+  v0.16.9 (no claim to gate in v0.16.8 since `supports_identity_propagation: false`).
+- `execute_skill` cross-vault identity semantic (the harder
+  setuid-shaped question) → deferred design discussion.
+
+### Counting
+
+15th instance of the discipline-only-contracts class closed since
+`d0fb1375`. HttpMcpConnector `supports_identity_propagation: true`
+being a lie was the same shape as model=/|json/etc bugs — class-sibling
+close.
+
 ## 0.16.7 — 2026-06-03 — Triple-quote parser: splitTopLevelCommas string-aware
 
 **Parser bug fix.** Triple-quote bodies containing a quoted phrase with
