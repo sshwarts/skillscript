@@ -832,17 +832,44 @@ function extractParenBody(text: string, openIdx: number): { body: string; endIdx
 /**
  * v0.7.0 — split a function-call argument list on top-level commas.
  * Respects matched single/double quotes and `[...]`/`{...}`/`(...)` nesting.
+ * v0.16.7 — also tracks triple-quote `"""..."""` state. Inside a triple-
+ * quote body, embedded single `"` chars are literal content, not toggle
+ * delimiters. Without this, a triple-quote body containing an odd number
+ * of `"` chars (e.g. `"""... "two-word"... "unbalanced` followed by a
+ * comma at the closing `"""`) was unbalancing inQuote and causing
+ * embedded commas to split args mid-body. Per Perry's `c497b479` finding.
  */
 function splitTopLevelCommas(text: string): string[] {
   const parts: string[] = [];
   let cur = "";
   let depth = 0;
   let inQuote: '"' | "'" | null = null;
+  let inTriple = false;
   for (let i = 0; i < text.length; i++) {
     const ch = text[i]!;
+    // Triple-quote state takes precedence over single-quote state: inside
+    // `"""..."""`, single `"` chars are content (mirrors tokenizeKeywordArgs
+    // discipline).
+    if (inTriple) {
+      cur += ch;
+      if (ch === '"' && text[i + 1] === '"' && text[i + 2] === '"') {
+        cur += text[i + 1]!;
+        cur += text[i + 2]!;
+        i += 2;
+        inTriple = false;
+      }
+      continue;
+    }
     if (inQuote !== null) {
       cur += ch;
       if (ch === inQuote) inQuote = null;
+      continue;
+    }
+    // Check for triple-quote OPEN before single-quote (greedy match).
+    if (ch === '"' && text[i + 1] === '"' && text[i + 2] === '"') {
+      cur += '"""';
+      i += 2;
+      inTriple = true;
       continue;
     }
     if (ch === '"' || ch === "'") { cur += ch; inQuote = ch; continue; }

@@ -1,5 +1,59 @@
 # Changelog
 
+## 0.16.7 — 2026-06-03 — Triple-quote parser: splitTopLevelCommas string-aware
+
+**Parser bug fix.** Triple-quote bodies containing a quoted phrase with
+an inner comma broke the function-call kwarg parser. Empirical repro
+from Perry's `stop-rule-check` skill (`c497b479` finding 1):
+
+```
+emit(text="""
+    Test 3: phrase ending with "comma inside, here".
+    Test 4: "more native spelling pending," with the exact failing literal.
+""")
+```
+
+→ `[malformed-op-grammar] Malformed function-call arg 'here". Test 4:
+"more native spelling pending' in 'emit(...)' — expected name=value.`
+
+**Root cause.** `splitTopLevelCommas` in `src/parser.ts` tracked
+single/double-quote state and bracket-nesting depth, but NOT
+triple-quote state. When the triple-quote body contained an odd-count
+of embedded `"` chars (which happens naturally with mid-body quoted
+phrases), the `inQuote` toggle accumulated to an unbalanced state.
+Top-level commas inside the body then split args mid-content; the
+closing `"""` landed as malformed kwargs.
+
+`tokenizeKeywordArgs` and `extractParenBody` had `inTriple` state
+tracking discipline since the original triple-quote work;
+`splitTopLevelCommas` was missing the same discipline.
+
+**Fix.** Extended `splitTopLevelCommas` to mirror the `inTriple`
+discipline from its sibling tokenizers. Inside a triple-quote body,
+embedded single `"` chars are literal content; commas are content;
+only the closing `"""` exits the state. Bounded change, no other
+parser paths affected.
+
+### Internal
+
+- `src/parser.ts` — `splitTopLevelCommas` gains `inTriple` state +
+  the triple-quote OPEN/CLOSE branches (mirrors `tokenizeKeywordArgs`)
+- +6 tests in `tests/v0.16.7-triple-quote-tokenizer.test.ts` covering
+  Perry's verbatim repro + 5 adjacent shapes (odd-count quotes, multi-
+  comma-inside-quoted, mid-body comma right before closing `"""`,
+  multi-kwarg with triple-quote + post-`"""` top-level comma, nested
+  `execute_skill` kwarg with embedded triple-quote)
+- 1517 passing (was 1511)
+
+### Deferred to v0.16.8
+
+The second finding from `c497b479` (`object-iteration-advisory`
+false-positive on bare-array-returning MCP tools) needs an adopter-
+configurable suppression list + softened advisory wording. Per Perry's
+sign-off on the substrate-neutrality concern, bundled defaults stay
+empty (no AMP-specific names in the public runtime); Tradita bootstrap
+configures its tool set.
+
 ## 0.16.6 — 2026-06-02 — `|contains:` filter + triple-quote `textwrap.dedent`
 
 Two pure-language additions per Perry's `98d6b60b` directive. Both
