@@ -444,6 +444,26 @@ function findTabIndentedLines(source: string): number[] {
   return offenders;
 }
 
+// v0.17.2 — Strip one layer of matched surrounding quotes from a `# Vars:`
+// default value. Closes the silent quote-leak Perry hit in dogfood (`1ea3d625`):
+// `# Vars: LOCATION="Valdese"` bound the literal 9-char `"Valdese"` (quotes
+// included), which URL-encoded with the quotes and broke downstream wttr.in
+// lookup. The split is "one layer of matched surrounding quotes" — quotes that
+// were doing real delimiting (e.g., for spaced values like `MSG="hello world"`)
+// disappear, and bare values stay bare. Mismatched / unbalanced quotes pass
+// through unchanged. Back-compat-positive: existing skills get more correct,
+// not less — `LOCATION=""` (two literal quote chars) starts binding empty
+// string, which is what their fallback paths want.
+function stripMatchedQuotes(s: string): string {
+  if (s.length < 2) return s;
+  const first = s[0];
+  const last = s[s.length - 1];
+  if ((first === '"' || first === "'") && first === last) {
+    return s.slice(1, -1);
+  }
+  return s;
+}
+
 // Top-level comma split — preserves commas inside `[...]` list literals.
 // v0.2.10 Bug 2: comma is a declaration boundary only when followed by
 // IDENT then `=`/`,`/`:`/end. Once the current segment has `=`, commas
@@ -1086,7 +1106,7 @@ export function parse(source: string): ParsedSkill {
             }
             return {
               name: varName,
-              default: trimmed.slice(eq + 1).trim(),
+              default: stripMatchedQuotes(trimmed.slice(eq + 1).trim()),
               required: false,
             };
           });

@@ -1,5 +1,49 @@
 # Changelog
 
+## 0.17.2 — 2026-06-04 — Parser: strip one layer of matched surrounding quotes from `# Vars:` defaults
+
+**Composition dogfood fix.** Perry's morning-brief dogfood (`1ea3d625`)
+surfaced a silent quote-leak: `# Vars: LOCATION="Valdese"` bound the
+literal 9-char string `"Valdese"` (quotes included), not the 7-char
+`Valdese`. URL-encoded with the quotes downstream, broke wttr.in
+lookup (IP-geolocation fell back to Berlin instead of Valdese).
+
+### What landed
+
+Parser strips exactly one layer of matched surrounding quotes from
+`# Vars:` default values at parse time:
+
+- `LOCATION="Valdese"` → `Valdese` (the load-bearing case)
+- `MSG="hello world"` → `hello world` (quotes were doing real
+  whitespace-delimiting work; one-layer strip preserves the space)
+- `WHO=world` → `world` (bare, unchanged)
+- `LOCATION=""` → empty string (two literal quote chars previously)
+- `Q='"x"'` → `"x"` (one-layer-only, not recursive)
+- `X="x'` → `"x'` (mismatched quotes pass through unchanged)
+- JSON literals (`TAGS=["a","b"]`, `CFG={"k":"v"}`) untouched —
+  square brackets / curly braces aren't quotes.
+
+### Back-compat-positive
+
+Existing skills get more correct, not less. The bundled example
+`HttpWebhookAgentConnector/README.md` uses `CHANNEL="slack"` — pre-fix
+that bound the 7-char `"slack"` (literal quotes); post-fix it binds
+`slack`, which is what the example always meant. No skill breaks; a
+few quietly start working right.
+
+### Known issue noted
+
+Perry's same dogfood (`1ea3d625` Finding 2) surfaced a separate
+`execute_skill` composition issue: `-> R` binding propagates the
+child's full `final_vars` into the parent, including internal scratch
+vars. His morning-brief blew the MCP token budget (252KB result) on a
+trivial 2-line emit. Workaround until v0.17.3+: prefer
+`${R.outputs.text}` over `${R.final_vars.X}`; design conversation on
+the right shape (explicit `# Returns:` surface vs size-cap vs MCP
+trim) deferred to a separate ring.
+
+---
+
 ## 0.17.1 — 2026-06-03 — Docs ring: adopter playbook identity-propagation + authoring posture; language reference re-render
 
 **Docs-only ring.** Two artifact updates bundled — the playbook gains
