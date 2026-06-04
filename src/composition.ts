@@ -55,6 +55,15 @@ export interface ExecuteSkillOpts {
 
 export interface ExecuteSkillResult {
   skill_name: string;
+  /**
+   * v0.17.5 — back-compat view of the declared `# Returns:` surface as
+   * a full filtered map, for programmatic iteration over all exports
+   * (`foreach K in ${R.final_vars}: ...`). The canonical *named* access
+   * is at the top level of the result envelope: `${R.SUMMARY}` not
+   * `${R.final_vars.SUMMARY}` (per spec). Both paths address the same
+   * data — the named path is the documented canonical, the map path
+   * is for iteration / introspection.
+   */
   final_vars: Record<string, unknown>;
   transcript: string[];
   outputs: Record<string, unknown>;
@@ -150,15 +159,22 @@ export async function executeSkillByName(
   // v0.17.3 — filter final_vars to the declared `# Returns:` surface.
   // Closes Perry's `1ea3d625` Finding 2: child's full execution state
   // (including unbounded scratch like a 39KB RAW JSON) leaked into the
-  // parent's bound `R`, compounding with composition depth. The cut:
-  // skills declare what they export; internal scratch stays local.
-  // No `# Returns:` declared → empty filter → no final_vars propagate
-  // (caller sees outputs + transcript + metadata only). Per skillscript's
-  // empirical pre-flight (`6fb6ac1c` — 0/16 skills reach final_vars), the
-  // migration is free: every current consumer reads `.outputs.text`.
+  // parent's bound `R`, compounding with composition depth.
+  // v0.17.5 — spread the filtered returns onto the result envelope's
+  // top level so `${R.SUMMARY}` is the canonical named-access path per
+  // spec. `final_vars` keeps the same filtered map as the iteration
+  // view (foreach over all exports). Per Perry's `e01f4148` ack:
+  // "skill is a function; declared returns ARE the result. `final_vars`
+  // is an implementation name — exposing it is an abstraction leak."
+  // The parser's reserved-name guard (RESERVED_ENVELOPE_FIELDS) blocks
+  // declared names from colliding with envelope fields, so the spread
+  // is safe — envelope-field literal kvs below win on order anyway
+  // (defense-in-depth even though parser should have caught collisions).
+  const filtered = filterFinalVarsByReturns(result.finalVars, compiled.parsed.returns);
   return {
+    ...filtered,
     skill_name: compiled.skillName ?? skillName,
-    final_vars: filterFinalVarsByReturns(result.finalVars, compiled.parsed.returns),
+    final_vars: filtered,
     transcript: result.emissions,
     outputs: result.outputs,
     errors: result.errors,
@@ -243,9 +259,13 @@ export async function executeSkillFromSource(
     childCtx,
   );
 
+  // v0.17.5 — same spread pattern as executeSkillByName; declared
+  // returns at top level + the iteration-view `final_vars` map.
+  const filtered = filterFinalVarsByReturns(result.finalVars, compiled.parsed.returns);
   return {
+    ...filtered,
     skill_name: compiled.skillName ?? "(inline)",
-    final_vars: filterFinalVarsByReturns(result.finalVars, compiled.parsed.returns),
+    final_vars: filtered,
     transcript: result.emissions,
     outputs: result.outputs,
     errors: result.errors,

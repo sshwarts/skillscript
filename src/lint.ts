@@ -2079,22 +2079,49 @@ const UNEXPORTED_FINAL_VAR_ACCESS: LintRule = {
       returnsCache.set(skillName, result);
       return result;
     };
-    // Step 3: walk ops looking for `${R.final_vars.X}` patterns where R
-    // is a known execute_skill binding. Check X against the called
-    // skill's returns.
+    // Step 3: walk ops looking for both `${R.final_vars.X}` (iteration-view
+    // explicit path) and `${R.X}` (canonical top-level path per v0.17.5).
+    // For top-level: skip always-exported envelope fields (outputs,
+    // transcript, etc. — those are valid sibling access). For
+    // final_vars-explicit: skip the `.final_vars` segment itself.
     const findings: LintFinding[] = [];
     const reported = new Set<string>();
-    // Match both `$(R.final_vars.X...)` and `${R.final_vars.X...}` forms.
-    // Capture the binding-var and the first field-name after final_vars.
-    const re = /\$[({]([A-Za-z_]\w*)\.final_vars\.([A-Za-z_]\w*)/g;
+    // Always-exported result-envelope fields. Top-level access to these
+    // is canonical and must NOT fire this rule. Source-of-truth aligned
+    // with parser's RESERVED_ENVELOPE_FIELDS — declared returns can't
+    // collide with these, so any top-level `${R.<field>}` where `<field>`
+    // is in this set is sibling-access to the envelope, not an
+    // unexported-return reach.
+    const ALWAYS_EXPORTED = new Set(["skill_name", "outputs", "transcript", "errors", "target_order", "fallbacks", "agent_delivery_receipts", "final_vars"]);
+    // Two regexes — explicit path `${R.final_vars.X}` and top-level
+    // path `${R.X}`. Both forms (`$(...)` legacy + `${...}` canonical).
+    // The top-level regex is more permissive — caller-side checks below
+    // filter out envelope-field hits and non-execute_skill bindings.
+    const reExplicit = /\$[({]([A-Za-z_]\w*)\.final_vars\.([A-Za-z_]\w*)/g;
+    const reTopLevel = /\$[({]([A-Za-z_]\w*)\.([A-Za-z_]\w*)/g;
     for (const [targetName, target] of ctx.parsed.targets) {
       const scanString = async (s: string): Promise<void> => {
+        // Collect both kinds of matches. Skip envelope fields in
+        // top-level matches (final_vars itself is in ALWAYS_EXPORTED so
+        // `${R.final_vars}` bare access doesn't fire — but
+        // `${R.final_vars.X}` triggers the explicit regex first).
+        type Match = { bindVar: string; fieldName: string; raw: string; via: "top-level" | "final_vars" };
+        const localMatches: Match[] = [];
         let m: RegExpExecArray | null;
-        const localMatches: Array<{ bindVar: string; fieldName: string; raw: string }> = [];
-        while ((m = re.exec(s)) !== null) {
-          localMatches.push({ bindVar: m[1]!, fieldName: m[2]!, raw: m[0] });
+        reExplicit.lastIndex = 0;
+        while ((m = reExplicit.exec(s)) !== null) {
+          localMatches.push({ bindVar: m[1]!, fieldName: m[2]!, raw: m[0], via: "final_vars" });
         }
-        for (const { bindVar, fieldName, raw } of localMatches) {
+        reTopLevel.lastIndex = 0;
+        while ((m = reTopLevel.exec(s)) !== null) {
+          // Skip `${R.final_vars.X}` matches — already captured by
+          // reExplicit above with the X named, not "final_vars".
+          if (m[2] === "final_vars") continue;
+          // Skip the other always-exported envelope fields.
+          if (ALWAYS_EXPORTED.has(m[2]!)) continue;
+          localMatches.push({ bindVar: m[1]!, fieldName: m[2]!, raw: m[0], via: "top-level" });
+        }
+        for (const { bindVar, fieldName, raw, via } of localMatches) {
           if (!bindings.has(bindVar)) continue;
           const calledSkill = bindings.get(bindVar)!;
           const returns = await loadReturns(calledSkill);
@@ -2104,12 +2131,15 @@ const UNEXPORTED_FINAL_VAR_ACCESS: LintRule = {
           if (reported.has(key)) continue;
           reported.add(key);
           const declared = returns.size === 0 ? "(none — skill has no `# Returns:` header)" : `[${Array.from(returns).join(", ")}]`;
+          const remediation = via === "top-level"
+            ? `Add '${fieldName}' to '${calledSkill}'\`s \`# Returns:\` (declared returns access via \`\${${bindVar}.<name>}\` top-level), or use \`\${${bindVar}.outputs.text}\` for the always-exported emission stream.`
+            : `Add '${fieldName}' to '${calledSkill}'\`s \`# Returns:\` or use \`\${${bindVar}.outputs.text}\` for the always-exported emission stream.`;
           findings.push({
             rule: "unexported-final-var-access",
             severity: "warning",
-            message: `\`${raw}...}\` in target '${targetName}' accesses '${fieldName}' on the result of \`execute_skill\` to '${calledSkill}', but '${fieldName}' isn't in that skill's \`# Returns:\` (declared: ${declared}). The runtime filter drops it; substitution renders empty. Add '${fieldName}' to '${calledSkill}' \`# Returns:\` or use \`\${${bindVar}.outputs.text}\` for the always-exported emission stream.`,
+            message: `\`${raw}...}\` in target '${targetName}' accesses '${fieldName}' on the result of \`execute_skill\` to '${calledSkill}', but '${fieldName}' isn't in that skill's \`# Returns:\` (declared: ${declared}). The runtime filter drops it; substitution renders empty. ${remediation}`,
             block: targetName,
-            extras: { bind_var: bindVar, called_skill: calledSkill, field: fieldName, declared_returns: Array.from(returns) },
+            extras: { bind_var: bindVar, called_skill: calledSkill, field: fieldName, declared_returns: Array.from(returns), access_path: via },
           });
         }
       };

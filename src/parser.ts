@@ -459,6 +459,25 @@ function findTabIndentedLines(source: string): number[] {
   return offenders;
 }
 
+// v0.17.5 — Reserved envelope-field names that a caller's bound `R`
+// (from `execute_skill ... -> R`) always exposes at top level. Declared
+// `# Returns:` names must NOT collide with these — collision would
+// silently shadow the structural field at substitution time. Per
+// Perry's `e01f4148` non-optional condition on the v0.17.5 returns-fix
+// ring. Source-of-truth alignment with `ExecuteSkillResult`
+// (src/composition.ts) and `RESERVED_ENVELOPE_FIELDS` re-export from
+// the runtime side — keep in sync if either side grows.
+export const RESERVED_ENVELOPE_FIELDS: ReadonlySet<string> = new Set([
+  "skill_name",
+  "outputs",
+  "transcript",
+  "errors",
+  "target_order",
+  "fallbacks",
+  "agent_delivery_receipts",
+  "final_vars",
+]);
+
 // v0.17.2 — Strip one layer of matched surrounding quotes from a `# Vars:`
 // default value. Closes the silent quote-leak Perry hit in dogfood (`1ea3d625`):
 // `# Vars: LOCATION="Valdese"` bound the literal 9-char `"Valdese"` (quotes
@@ -1152,6 +1171,19 @@ export function parse(source: string): ParsedSkill {
             }
             const diag = checkReserved(trimmed, "a return name", `${trimmed}_value`);
             if (diag !== null) result.parseErrors.push(diag);
+            // v0.17.5 — reserved-name guard against envelope-field
+            // collisions. With declared returns spread onto the caller's
+            // `R` top level (`${R.SUMMARY}` is canonical access), a name
+            // matching a structural envelope field would silently shadow
+            // it — the exact silent-wrong class this design exists to
+            // kill. Per Perry's `e01f4148` v0.17.5 ack: "treat the guard
+            // as part of the fix, not a follow-up."
+            if (RESERVED_ENVELOPE_FIELDS.has(trimmed)) {
+              result.parseErrors.push(
+                `\`# Returns: ${trimmed}\` — '${trimmed}' collides with a reserved result-envelope field (one of: ${Array.from(RESERVED_ENVELOPE_FIELDS).sort().join(", ")}). The caller's bound \`-> R\` always exposes these structural fields; declaring a return with the same name would silently shadow them. Rename the variable.`,
+              );
+              continue;
+            }
             names.push(trimmed);
           }
           result.returns = names;

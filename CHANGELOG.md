@@ -1,5 +1,78 @@
 # Changelog
 
+## 0.17.5 — 2026-06-04 — Returns at top level of R + reserved-name guard + lint catches top-level pattern
+
+Closes Perry's `0cd2bd5a` lint-question finding, which surfaced a
+spec/impl gap underneath the regex limitation he initially flagged.
+Three coordinated bugs in a row: spec said canonical access was
+`${R.SUMMARY}` (top-level), impl put declared returns inside
+`R.final_vars`, lint regex only caught the explicit `${R.final_vars.X}`
+path. Together: `${R.BOGUS}` resolved to empty at runtime AND wasn't
+flagged by lint. Perry's `e01f4148` ack confirmed direction (A) with
+one non-optional condition: reserved-name guard against envelope
+collisions.
+
+### (A) Declared returns spread onto R's top level
+
+`composition.ts` now spreads the filtered `# Returns:` surface onto
+the result envelope's top level alongside `outputs`/`transcript`/etc.
+`${R.SUMMARY}` is the canonical named-access path per spec. The
+existing `R.final_vars` map kept populated as the iteration-view of
+the same filtered data:
+
+- `${R.SUMMARY}` — canonical named access (what authors reach for)
+- `${R.final_vars}` — full filtered map for `foreach K in ${R.final_vars}` introspection
+
+Both paths address the same data — named is documented canonical,
+map is for iteration. Per Perry: "skill is a function; declared
+returns ARE the result. `final_vars` is an implementation name —
+exposing it is an abstraction leak."
+
+### (B) Reserved-name guard at parse time
+
+New `RESERVED_ENVELOPE_FIELDS` set in `parser.ts` enumerates the
+envelope fields a caller's `R` always exposes: `skill_name`, `outputs`,
+`transcript`, `errors`, `target_order`, `fallbacks`,
+`agent_delivery_receipts`, `final_vars`. Declared returns colliding
+with these are rejected at parse time with a clear error citing the
+full reserved set. Without this guard, `# Returns: outputs` would
+silently shadow the envelope field — exactly the silent-wrong class
+this whole ring exists to kill. Per Perry's non-optional condition:
+"treat the guard as part of the fix, not a follow-up."
+
+`RESERVED_ENVELOPE_FIELDS` is exported so adopters can introspect /
+align downstream tooling. Same source-of-truth aligned with
+composition.ts envelope structure — keep in sync if either grows.
+
+### (C) Lint regex extended to catch top-level pattern
+
+`unexported-final-var-access` now scans for both:
+- `${R.final_vars.X}` (the v0.17.4 explicit path)
+- `${R.<X>}` top-level — the canonical access path Perry's repro tested
+
+Top-level matches skip envelope-field sibling access
+(`${R.outputs.text}`, `${R.transcript}`, etc.) and bare iteration
+access (`${R.final_vars}` without further descent). Findings include
+an `extras.access_path` discriminator (`"top-level"` vs `"final_vars"`)
+so adopters with cross-skill tooling can distinguish the surfaces.
+
+### Test coverage
+
+20 new tests in `v0.17.5-returns-top-level.test.ts` covering:
+- All 8 reserved-name parse-time rejections
+- Mixed-declaration partial-acceptance (good names land, reserved names rejected)
+- `RESERVED_ENVELOPE_FIELDS` export shape
+- Runtime: top-level `${R.X}` resolves, `R.final_vars.X` still works (both paths)
+- Runtime: undeclared scratch never appears at R top level
+- Lint: top-level `${R.BOGUS}` fires, `${R.ALPHA}` silent, envelope-field
+  access silent, `${R.final_vars}` bare access silent
+- Lint: existing v0.17.4 `${R.final_vars.X}` behavior preserved
+- Lint: both paths fire when both used in same skill (no double-report on same ref)
+
+1664 tests total. Narrow-core LOC ceiling unchanged at 10500.
+
+---
+
 ## 0.17.4 — 2026-06-04 — `unexported-final-var-access` lint + `forceAlwaysDraft` adopter wiring (env + .env + config) + language reference re-render
 
 Three coordinated pieces, all under the v0.17 line theme of closing
