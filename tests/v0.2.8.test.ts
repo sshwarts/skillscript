@@ -240,8 +240,13 @@ describe("v0.2.8 — $ execute_skill in-skill composition", () => {
 
   it("v0.2.9 fix: $ execute_skill inputs={...} JSON kwarg propagates to child", async () => {
     const wired = bootstrap({ skillsDir: join(home, "skills"), traceDir: join(home, "traces") });
+    // v0.17.3 — `# Returns: WHO` declares WHO as the exported surface so
+    // the parent's `$(R.final_vars.WHO)` reach lands. Pre-Returns, every
+    // var leaked into `final_vars`; post-Returns, only declared names
+    // propagate. The test's intent (verify input reaches child) is
+    // unchanged.
     await wired.skillStore.store("hello",
-      "# Skill: hello\n# Status: Approved\n# Vars: WHO=world\ngreet:\n    emit(text=\"Hello, $(WHO)!\")\ndefault: greet\n");
+      "# Skill: hello\n# Status: Approved\n# Vars: WHO=world\n# Returns: WHO\ngreet:\n    emit(text=\"Hello, $(WHO)!\")\ndefault: greet\n");
     // Style 2 — Perry's repro syntax (thread 64445b4f). Was silently dropped in v0.2.8.
     await wired.skillStore.store("parent",
       "# Skill: parent\n# Status: Approved\n# Vars: TARGET_NAME=Perry\nm:\n    $ execute_skill skill_name=\"hello\" inputs={\"WHO\": \"$(TARGET_NAME)\"} -> R\n    emit(text=\"Child WHO: $(R.final_vars.WHO)\")\ndefault: m\n");
@@ -253,8 +258,9 @@ describe("v0.2.8 — $ execute_skill in-skill composition", () => {
 
   it("v0.2.9 fix: $ execute_skill bare-kwarg style continues to propagate inputs", async () => {
     const wired = bootstrap({ skillsDir: join(home, "skills"), traceDir: join(home, "traces") });
+    // v0.17.3 — same Returns: WHO declaration as above; see sibling test.
     await wired.skillStore.store("hello",
-      "# Skill: hello\n# Status: Approved\n# Vars: WHO=world\ngreet:\n    emit(text=\"Hello, $(WHO)!\")\ndefault: greet\n");
+      "# Skill: hello\n# Status: Approved\n# Vars: WHO=world\n# Returns: WHO\ngreet:\n    emit(text=\"Hello, $(WHO)!\")\ndefault: greet\n");
     // Style 1 — bare kwarg, natural skill grammar
     await wired.skillStore.store("parent",
       "# Skill: parent\n# Status: Approved\n# Vars: TARGET_NAME=Scott\nm:\n    $ execute_skill skill_name=\"hello\" WHO=\"$(TARGET_NAME)\" -> R\n    emit(text=\"Child WHO: $(R.final_vars.WHO)\")\ndefault: m\n");

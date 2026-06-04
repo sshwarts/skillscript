@@ -471,6 +471,48 @@ const UNDECLARED_VAR: LintRule = {
   },
 };
 
+// v0.17.3 — `# Returns: X, Y` where X (or Y) isn't bound anywhere in the
+// skill body. Tier-1: an undeclared export is structurally broken — the
+// skill claims to return something it never sets. Same shape as
+// `undeclared-var` but checked against the export-surface side. Per
+// Perry's `1ea3d625` Finding 2 + skillscript's `6fb6ac1c` empirical
+// pre-flight; the lint enforces the function-signature contract at
+// author time so the runtime-side Returns-filter doesn't silently
+// produce an absent value.
+const UNKNOWN_RETURNS_REF: LintRule = {
+  id: "unknown-returns-ref",
+  severity: "error",
+  description: "A name in `# Returns:` isn't bound anywhere in the skill body — not declared in `# Vars:`/`# Requires:`, not output-bound by any op, not a foreach iterator. The skill declares an export it never produces.",
+  remediation: "Bind the variable with `$set`, `-> VAR` on an op, a foreach iterator, or declare it in `# Vars:`/`# Requires:`. Or remove the name from `# Returns:` if it shouldn't be exported.",
+  check: (ctx) => {
+    if (ctx.parsed.returns.length === 0) return [];
+    const declared = new Set<string>();
+    for (const v of ctx.parsed.vars) declared.add(v.name);
+    for (const r of ctx.parsed.requires) declared.add(r.target);
+    for (const target of ctx.parsed.targets.values()) {
+      const collect = (op: SkillOp): void => {
+        if (op.setName !== undefined) declared.add(op.setName);
+        if (op.outputVar !== undefined) declared.add(op.outputVar);
+        if (op.foreachIter !== undefined) declared.add(op.foreachIter);
+      };
+      walkOps(target.ops, collect);
+      if (target.elseBlock !== undefined) walkOps(target.elseBlock, collect);
+    }
+    const findings: LintFinding[] = [];
+    for (const name of ctx.parsed.returns) {
+      if (declared.has(name)) continue;
+      findings.push({
+        rule: "unknown-returns-ref",
+        severity: "error",
+        message: `\`# Returns: ${name}\` — '${name}' isn't bound anywhere in the skill body. Bind it with \`$set ${name} = ...\` / \`-> ${name}\` on an op / a foreach iterator / \`# Vars: ${name}=...\`, or remove it from \`# Returns:\`.`,
+        block: "(frontmatter)",
+        extras: { referenced_name: name },
+      });
+    }
+    return findings;
+  },
+};
+
 const UNKNOWN_FILTER: LintRule = {
   id: "unknown-filter",
   severity: "error",
@@ -2660,6 +2702,7 @@ const RULES: LintRule[] = [
   ORPHAN_TARGET,
   UNKNOWN_CAPABILITY,
   UNDECLARED_VAR,
+  UNKNOWN_RETURNS_REF,
   UNKNOWN_FILTER,
   MALFORMED_OP_GRAMMAR,
   INVALID_CONDITIONAL_SYNTAX,

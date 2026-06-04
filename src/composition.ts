@@ -147,9 +147,18 @@ export async function executeSkillByName(
     childCtx,
   );
 
+  // v0.17.3 — filter final_vars to the declared `# Returns:` surface.
+  // Closes Perry's `1ea3d625` Finding 2: child's full execution state
+  // (including unbounded scratch like a 39KB RAW JSON) leaked into the
+  // parent's bound `R`, compounding with composition depth. The cut:
+  // skills declare what they export; internal scratch stays local.
+  // No `# Returns:` declared → empty filter → no final_vars propagate
+  // (caller sees outputs + transcript + metadata only). Per skillscript's
+  // empirical pre-flight (`6fb6ac1c` — 0/16 skills reach final_vars), the
+  // migration is free: every current consumer reads `.outputs.text`.
   return {
     skill_name: compiled.skillName ?? skillName,
-    final_vars: result.finalVars,
+    final_vars: filterFinalVarsByReturns(result.finalVars, compiled.parsed.returns),
     transcript: result.emissions,
     outputs: result.outputs,
     errors: result.errors,
@@ -157,6 +166,30 @@ export async function executeSkillByName(
     fallbacks: result.fallbacks,
     agent_delivery_receipts: result.agentDeliveryReceipts,
   };
+}
+
+/**
+ * v0.17.3 — Returns-filter. The declared `# Returns: X, Y, Z` surface
+ * names which `final_vars` keys propagate from the child to the caller.
+ * Empty returns array → no `final_vars` exported (the no-`# Returns:`
+ * default). Returns array with names → only those keys exported.
+ *
+ * Unbound declared names are silently absent — caught at lint time by
+ * `unknown-returns-ref` (tier-1), so reaching this point means parse
+ * succeeded but a declared name had no $set / op-binding. Filtering
+ * tolerates that asymmetry at runtime; the lint enforces it at author
+ * time.
+ */
+function filterFinalVarsByReturns(
+  finalVars: Record<string, unknown>,
+  returns: readonly string[],
+): Record<string, unknown> {
+  if (returns.length === 0) return {};
+  const filtered: Record<string, unknown> = {};
+  for (const name of returns) {
+    if (name in finalVars) filtered[name] = finalVars[name];
+  }
+  return filtered;
 }
 
 function resolveSkillStore(registry: Registry): SkillStore {
@@ -212,7 +245,7 @@ export async function executeSkillFromSource(
 
   return {
     skill_name: compiled.skillName ?? "(inline)",
-    final_vars: result.finalVars,
+    final_vars: filterFinalVarsByReturns(result.finalVars, compiled.parsed.returns),
     transcript: result.emissions,
     outputs: result.outputs,
     errors: result.errors,

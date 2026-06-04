@@ -24,8 +24,8 @@ const REPO_ROOT = join(__dirname, "..");
 const PACKAGE_JSON = JSON.parse(readFileSync(join(REPO_ROOT, "package.json"), "utf8")) as Record<string, unknown>;
 
 describe("T7 — package.json polish", () => {
-  it("1. version is 0.17.2 (parser: strip one layer of matched surrounding quotes from `# Vars:` defaults)", () => {
-    expect(PACKAGE_JSON["version"]).toBe("0.17.2");
+  it("1. version is 0.17.3 (`# Returns:` frontmatter: declared export surface for execute_skill composition; filters final_vars to prevent scratch-var leak)", () => {
+    expect(PACKAGE_JSON["version"]).toBe("0.17.3");
   });
 
   it("2. main + types + bin + engines.node ≥ 22.5 declared", () => {

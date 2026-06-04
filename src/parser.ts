@@ -168,6 +168,21 @@ export interface ParsedSkill {
    */
   timeout: number | string | null;
   vars: SkillVar[];
+  /**
+   * v0.17.3 — `# Returns: X, Y, Z` declared export surface. The variables
+   * whose final-state propagates from the child to the caller's bound
+   * `R` (via `execute_skill(...) -> R`). Internal scratch vars NOT listed
+   * here stay local to the child execution, never serialized into the
+   * caller's `final_vars` or the top-level MCP `execute_skill` response.
+   * Empty array when the header is omitted — caller sees `outputs` +
+   * `transcript` + execution metadata but no declared `final_vars`.
+   * Comma-separated identifiers, same split rules as `# Vars:`.
+   * Closes Perry's `1ea3d625` Finding 2 (compound state propagation
+   * blew the MCP token budget; the empirical pre-flight from skillscript
+   * showed zero existing skills reach `${R.final_vars.X}`, so the
+   * default-export-outputs-only cut is migration-free).
+   */
+  returns: string[];
   /** Variable resolution declarations — `user-var:key -> VAR (fallback: X)` shape. */
   requires: SkillRequire[];
   /**
@@ -987,6 +1002,7 @@ export function parse(source: string): ParsedSkill {
     approvalToken: null,
     timeout: null,
     vars: [],
+    returns: [],
     requires: [],
     requiredCapabilities: [],
     useWhen: null,
@@ -1110,6 +1126,35 @@ export function parse(source: string): ParsedSkill {
               required: false,
             };
           });
+        }
+      } else if (key === "returns") {
+        // v0.17.3 — declared export surface. Comma-separated identifier
+        // list. Simpler split than `# Vars:` because entries are bare
+        // names (no `=value` to nest commas in). Empty / `(none)` → empty
+        // array (no declared exports; caller sees outputs + transcript
+        // only).
+        if (value.toLowerCase() === "(none)" || value === "") {
+          result.returns = [];
+        } else {
+          const names: string[] = [];
+          for (const entry of value.split(",")) {
+            const trimmed = entry.trim();
+            if (trimmed === "") continue;
+            // # Returns: doesn't accept defaults — only identifiers.
+            // `# Returns: X=foo` is a parse error; the export surface is
+            // a declaration of which vars are public, not a definition.
+            const eq = trimmed.indexOf("=");
+            if (eq !== -1) {
+              result.parseErrors.push(
+                `\`# Returns: ${trimmed}\` — \`# Returns:\` declares export names only; no defaults. Did you mean \`# Vars: ${trimmed}\` (input default) or \`# Returns: ${trimmed.slice(0, eq).trim()}\` (export declaration)?`,
+              );
+              continue;
+            }
+            const diag = checkReserved(trimmed, "a return name", `${trimmed}_value`);
+            if (diag !== null) result.parseErrors.push(diag);
+            names.push(trimmed);
+          }
+          result.returns = names;
         }
       } else if (key === "use when") {
         result.useWhen = value;

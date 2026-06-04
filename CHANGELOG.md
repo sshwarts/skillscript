@@ -1,5 +1,92 @@
 # Changelog
 
+## 0.17.3 — 2026-06-04 — `# Returns:` frontmatter: declared export surface for execute_skill composition
+
+Closes Perry's `1ea3d625` Finding 2 (`execute_skill` leaks full child
+`final_vars` into the parent — 252KB MCP-response blowup on a 2-line
+emit). Substrate-author's `6fb6ac1c` empirical pre-flight (0/16 skills
+reach `${R.final_vars.X}`) confirmed the migration-free cut. Three-way
+convergence: Perry's design ack (`8ffa16d6`) + substrate-author's
+pre-flight (`6fb6ac1c`) + Perry's discipline-corrected catch
+(`5a7e4041`) shaped the final scope.
+
+### Skills are functions — declare what you return
+
+New `# Returns: X, Y, Z` frontmatter header declares the export surface
+for `execute_skill` composition. The runtime filter at the composition
+boundary (`src/composition.ts:filterFinalVarsByReturns`) drops every
+`final_vars` entry whose name isn't in the declared list. Internal
+scratch (large JSON, intermediate computations, debug values) stays
+local to the child execution — never serialized into the caller's `R`
+or the top-level MCP `execute_skill` response.
+
+**Concrete shape:**
+
+```
+# Skill: get-weather
+# Vars: LOCATION=Valdese
+# Returns: SUMMARY, TEMP_F, CONDITIONS
+
+fetch:
+    shell(command="curl -s 'wttr.in/${LOCATION|url}?format=j1'") -> RAW
+    $ json_parse ${RAW} -> PARSED
+
+shape: fetch
+    $set TEMP_F = ${PARSED.current_condition.0.temp_F}
+    $set CONDITIONS = ${PARSED.current_condition.0.weatherDesc.0.value}
+    $set SUMMARY = "${LOCATION}: ${TEMP_F}°F and ${CONDITIONS}"
+    emit(text="${SUMMARY}")
+default: shape
+```
+
+Caller binding `-> R` gets `R.final_vars = {SUMMARY, TEMP_F, CONDITIONS}` —
+NOT `RAW` or `PARSED`. Always-exported (no declaration needed): `outputs`,
+`transcript`, `errors`, `target_order`, `fallbacks`, `agent_delivery_receipts`.
+
+### Default: no Returns → no final_vars exported
+
+Skills without `# Returns:` export nothing from `final_vars`. Caller still
+sees `outputs` + `transcript` + execution metadata — the natural pattern
+substrate-author's audit found in 100% of existing composers.
+Pre-adoption rule (per `project_pre_adoption_rule`) makes the breaking
+cut cheap; the migration is free for the canonical `${R.outputs.text}`
+pattern.
+
+### New lint: `unknown-returns-ref` (tier-1)
+
+Fires when a name in `# Returns:` isn't bound anywhere in the skill body
+(not in `# Vars:`/`# Requires:`, not output-bound, not a foreach iterator).
+The skill claims to return something it never produces — structurally
+broken, hard-blocked at compile.
+
+### Watch-items (not built, documented)
+
+- **`transcript` nests across composition depth.** When A calls B calls C,
+  A's `R.transcript` holds B's emissions; B's `R.transcript` (visible via
+  declared returns or transcript-of-transcript chains) can hold C's.
+  Bounded by intended emits per child; additive across siblings. Per
+  Perry's `5a7e4041` discipline-corrected catch — fix-ahead-of-need not
+  warranted today; revisit if deep-composition-with-large-emits bites.
+- **`unexported-final-var-access` (tier-2 advisory)** — deferred to
+  v0.17.4. Would catch `${R.X}` where X isn't in the called skill's
+  `# Returns:`. Requires cross-skill resolution + accessor-pattern
+  parsing; warrants its own ring.
+
+### Test coverage
+
+16 new tests (parser: 6, lint: 5, runtime: 5). Three-test discipline per
+`feedback_three_test_discipline_per_dispatch_shape`. Full suite: 1613
+tests pass.
+
+### Migration
+
+Bundled examples + scaffold skills: zero changes needed. None reach
+`${R.final_vars.X}` today (verified by substrate-author's audit). When
+adopters want structured access to a composed child's results, they
+add `# Returns: X` to the child skill.
+
+---
+
 ## 0.17.2 — 2026-06-04 — Parser: strip one layer of matched surrounding quotes from `# Vars:` defaults
 
 **Composition dogfood fix.** Perry's morning-brief dogfood (`1ea3d625`)
