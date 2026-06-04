@@ -264,12 +264,14 @@ inline(skill="common-prelude")
 
 ### \`execute_skill(name="...", ...kwargs) -> R\` — runtime skill composition
 
-Invokes another stored skill end-to-end against the runtime's connectors. Returns the full execution record (final vars, transcript, outputs). Access via \`\${R.final_vars.FIELD}\`, \`\${R.transcript}\`, etc.
+Invokes another stored skill end-to-end against the runtime's connectors. Returns the child's execution record — \`outputs\` + \`transcript\` + \`errors\` + \`target_order\` + (filtered) \`final_vars\`. Access via \`\${R.outputs.text}\`, \`\${R.transcript}\`, \`\${R.final_vars.FIELD}\`, etc.
 
 \`\`\`
 execute_skill(name="extract-json-number", JSON_BLOB="\${RAW}", FIELD_PATH="total_count") -> RESULT
-emit(text="Extracted: \${RESULT.final_vars.VALUE|trim}")
+emit(text="Extracted: \${RESULT.outputs.text}")
 \`\`\`
+
+**v0.17.3 — Returns filter.** \`R.final_vars\` is filtered to the called skill's \`# Returns: X, Y, Z\` declaration. Skills without \`# Returns:\` declared export nothing from \`final_vars\` — the caller sees \`outputs\` + \`transcript\` + execution metadata, but no internal vars. Internal scratch (large JSON, intermediate computations, debug values) stays local to the child and never serializes into the caller's \`R\`. To expose a value for caller consumption, declare it in the called skill's \`# Returns:\` header.
 
 \`name\` is the canonical kwarg, aligning with \`skill_read({name})\` / \`skill_write({name})\` / \`skill_status({name})\`. \`skill_name\` is accepted as a silent back-compat alias.
 
@@ -407,7 +409,8 @@ Skill files open with \`# Key: value\` headers. Order isn't significant.
 
 - \`# Description: <prose>\` — human-readable explanation; surfaces in dashboards.
 - \`# Type: procedural | data\` — \`procedural\` (default) for runtime-fired skills; \`data\` for compile-time-inlined fragments referenced by \`inline(skill="...")\`.
-- \`# Vars: NAME=default, OTHER\` — declared variables. \`NAME=default\` provides a default; bare \`NAME\` is required at invocation.
+- \`# Vars: NAME=default, OTHER\` — declared variables. \`NAME=default\` provides a default; bare \`NAME\` is required at invocation. Quoted defaults (\`NAME="hello world"\`) strip one matched layer of surrounding quotes at parse time — quoted-spaced values bind correctly; bare values bind unchanged.
+- \`# Returns: X, Y, Z\` — declared export surface for \`execute_skill\` composition. Names that propagate from this skill's \`final_vars\` into the caller's bound \`R\`. Internal scratch vars NOT listed here stay local — never serialized into the caller's result. Skills without \`# Returns:\` export nothing from \`final_vars\` (outputs + transcript + metadata still flow). Symmetric with \`# Vars:\` (input surface ↔ output surface).
 - \`# Triggers: cron: 0 9 * * *, session: start\` — autonomous-dispatch sources. Comma-separated entries split by source-keyword boundary; cron expressions with commas (\`30,45 9 * * 1-5\`) parse correctly.
 - \`# Output: text | agent: <name> | template: <name> | file: path | none\` — output routing. Five kinds, all substrate-neutral. **Two substrate-neutral lifecycle hooks**: \`agent: <name>\` routes via AgentConnector as augment-kind delivery; \`template: <name>\` routes as template-kind delivery (receiving agent executes the rendered playbook). Both default to **joined emissions string** (the \`emit(text=...)\` lines concatenated with newlines). \`text\` / \`file:\` default to the **last-bound variable value** (structured), falling back to the emissions array when no var was bound. If your skill emits multiple lines and a downstream consumer only sees the final tool output via \`outputs.text\`, that's the structured-default behavior — use \`# Output: agent: <name>\` (or another text-coerced kind) to publish the joined emissions instead. **For substrate-specific delivery destinations** (Slack, WhatsApp, Discord, pagerduty, custom dashboards, etc.) — that's contract-between-the-skill-and-the-substrate territory, downstream of the language. Two paths: (1) \`$ <connector>.<tool> ...\` inside the skill body to dispatch through an adopter-wired MCP connector, or (2) deliver via \`agent: <name>\` to an agent whose AgentConnector decides how to surface the result.
 - \`# OnError: <fallback-skill-name>\` — error-handler skill invoked when an op fails and no target-level \`else:\` catches.
@@ -708,7 +711,33 @@ Two kwarg-forwarding styles, both supported:
 - **Bare kwargs** — \`USER="\${USER_NAME}"\` natural skill grammar
 - **\`inputs={...}\` JSON** — useful when forwarding many fields verbatim
 
-The bound \`-> R\` carries the child's full execution record (final_vars, transcript, outputs) into the host's scope. Access via \`\${R.final_vars.FIELD}\`, \`\${R.transcript}\`, \`\${R.outputs.text}\`, etc.
+The bound \`-> R\` carries the child's execution record into the host's scope:
+- \`\${R.outputs.text}\` — the joined emission stream (the canonical accessor, what 100% of composers reach for)
+- \`\${R.transcript}\` — array of individual emit lines
+- \`\${R.final_vars.FIELD}\` — the child's declared exports (see \`# Returns:\` below)
+- \`\${R.errors}\`, \`\${R.target_order}\` — execution metadata
+
+**Declaring what gets exported (v0.17.3).** The child skill controls what's visible to the caller via its \`# Returns: X, Y, Z\` frontmatter header. Internal scratch (large JSON, intermediate computations) stays local; only declared names propagate into \`R.final_vars\`. Skills without \`# Returns:\` export nothing from \`final_vars\` — outputs + transcript + metadata still flow.
+
+\`\`\`
+# Skill: get-weather
+# Vars: LOCATION=Valdese
+# Returns: SUMMARY, TEMP_F
+
+fetch:
+    shell(command="curl -s 'wttr.in/\${LOCATION|url}?format=j1'") -> RAW
+    $ json_parse \${RAW} -> PARSED
+
+shape: fetch
+    $set TEMP_F = \${PARSED.current_condition.0.temp_F}
+    $set SUMMARY = "\${LOCATION}: \${TEMP_F}°F"
+    emit(text="\${SUMMARY}")
+default: shape
+\`\`\`
+
+Caller binding \`-> R\` sees \`R.final_vars = {SUMMARY, TEMP_F}\` — NOT \`RAW\` or \`PARSED\` (internal scratch, filtered out by the Returns surface). Closes the "skills are functions; declare what you return" contract: internal state stays internal.
+
+Lint \`unknown-returns-ref\` (tier-1) catches names declared in \`# Returns:\` that aren't bound anywhere in the skill body.
 
 ## Limits & lint signals
 
