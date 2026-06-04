@@ -2029,6 +2029,109 @@ const SET_JSON_LITERAL_ADVISORY: LintRule = {
 // substitution and advise. False positives possible (if a user binds a
 // non-composition var named with `.transcript`), but the suggestion
 // reads as a helpful nudge either way.
+// v0.17.4 — `${R.final_vars.X}` where R was bound by `$ execute_skill
+// skill_name="<child>" ... -> R` and `X` isn't in `<child>`'s declared
+// `# Returns:`. The runtime filter drops the value silently — the
+// caller gets `undefined`/empty at substitution time. Lint catches the
+// asymmetry between caller's reach and child's declared export.
+// Sibling to v0.17.3's `unknown-returns-ref` (tier-1) on the
+// declaration side; this rule is tier-2 advisory on the consumer side.
+//
+// Forward-reference deferred: if the called skill isn't in the
+// SkillStore at lint time, skip — `unknown-skill-reference` (tier-2)
+// already flags the missing-ref case. Once the called skill exists,
+// this rule fires the next time the host is linted.
+const UNEXPORTED_FINAL_VAR_ACCESS: LintRule = {
+  id: "unexported-final-var-access",
+  severity: "warning",
+  description: "A `${R.final_vars.X}` reference accesses a name not declared in the called skill's `# Returns:` header. The runtime filter drops the value; the substitution renders empty.",
+  remediation: "Add `X` to the called skill's `# Returns:` header (to export it), or remove the access (if you meant `${R.outputs.text}` or another always-exported field).",
+  check: async (ctx) => {
+    if (ctx.skillStore === undefined) return [];
+    // Step 1: build a map of execute_skill bindings — { boundVar: calledSkillName }
+    const bindings = new Map<string, string>();
+    for (const target of ctx.parsed.targets.values()) {
+      walkOps(target.ops, (op) => {
+        if (op.kind !== "$" || op.outputVar === undefined) return;
+        if (!/^execute_skill\b/.test(op.body)) return;
+        // v0.15.2 — accept either `name` or `skill_name` (back-compat alias).
+        const m = /\b(?:skill_name|name)\s*=\s*(?:"([^"]+)"|'([^']+)'|([A-Za-z_][\w-]*))/.exec(op.body);
+        if (m === null) return;
+        const skillName = m[1] ?? m[2] ?? m[3];
+        if (skillName === undefined || skillName === "") return;
+        bindings.set(op.outputVar, skillName);
+      });
+    }
+    if (bindings.size === 0) return [];
+    // Step 2: load each referenced skill's parsed.returns. Cache the
+    // lookup so multiple references to the same child resolve once.
+    const returnsCache = new Map<string, Set<string> | null>();
+    const loadReturns = async (skillName: string): Promise<Set<string> | null> => {
+      if (returnsCache.has(skillName)) return returnsCache.get(skillName)!;
+      let result: Set<string> | null;
+      try {
+        const loaded = await ctx.skillStore!.load(skillName);
+        const parsed = parse(loaded.source);
+        result = new Set(parsed.returns);
+      } catch {
+        result = null; // missing skill — forward-reference deferred to unknown-skill-reference
+      }
+      returnsCache.set(skillName, result);
+      return result;
+    };
+    // Step 3: walk ops looking for `${R.final_vars.X}` patterns where R
+    // is a known execute_skill binding. Check X against the called
+    // skill's returns.
+    const findings: LintFinding[] = [];
+    const reported = new Set<string>();
+    // Match both `$(R.final_vars.X...)` and `${R.final_vars.X...}` forms.
+    // Capture the binding-var and the first field-name after final_vars.
+    const re = /\$[({]([A-Za-z_]\w*)\.final_vars\.([A-Za-z_]\w*)/g;
+    for (const [targetName, target] of ctx.parsed.targets) {
+      const scanString = async (s: string): Promise<void> => {
+        let m: RegExpExecArray | null;
+        const localMatches: Array<{ bindVar: string; fieldName: string; raw: string }> = [];
+        while ((m = re.exec(s)) !== null) {
+          localMatches.push({ bindVar: m[1]!, fieldName: m[2]!, raw: m[0] });
+        }
+        for (const { bindVar, fieldName, raw } of localMatches) {
+          if (!bindings.has(bindVar)) continue;
+          const calledSkill = bindings.get(bindVar)!;
+          const returns = await loadReturns(calledSkill);
+          if (returns === null) continue; // forward-ref, deferred
+          if (returns.has(fieldName)) continue;
+          const key = `${targetName}:${raw}`;
+          if (reported.has(key)) continue;
+          reported.add(key);
+          const declared = returns.size === 0 ? "(none — skill has no `# Returns:` header)" : `[${Array.from(returns).join(", ")}]`;
+          findings.push({
+            rule: "unexported-final-var-access",
+            severity: "warning",
+            message: `\`${raw}...}\` in target '${targetName}' accesses '${fieldName}' on the result of \`execute_skill\` to '${calledSkill}', but '${fieldName}' isn't in that skill's \`# Returns:\` (declared: ${declared}). The runtime filter drops it; substitution renders empty. Add '${fieldName}' to '${calledSkill}' \`# Returns:\` or use \`\${${bindVar}.outputs.text}\` for the always-exported emission stream.`,
+            block: targetName,
+            extras: { bind_var: bindVar, called_skill: calledSkill, field: fieldName, declared_returns: Array.from(returns) },
+          });
+        }
+      };
+      const collect = async (op: SkillOp): Promise<void> => {
+        if (op.body !== undefined) await scanString(op.body);
+        if (op.setValue !== undefined) await scanString(op.setValue);
+      };
+      const walkAsync = async (ops: SkillOp[]): Promise<void> => {
+        for (const op of ops) {
+          await collect(op);
+          if (op.foreachBody !== undefined) await walkAsync(op.foreachBody);
+          if (op.ifBranches !== undefined) for (const b of op.ifBranches) await walkAsync(b.body);
+          if (op.ifElseBody !== undefined) await walkAsync(op.ifElseBody);
+        }
+      };
+      await walkAsync(target.ops);
+      if (target.elseBlock !== undefined) await walkAsync(target.elseBlock);
+    }
+    return findings;
+  },
+};
+
 const TRANSCRIPT_FOOTGUN: LintRule = {
   id: "transcript-footgun",
   severity: "warning",
@@ -2744,6 +2847,7 @@ const RULES: LintRule[] = [
   DEPRECATED_ADDRESSED_TO,
   LEGACY_FRONTMATTER_HEADER,
   TRANSCRIPT_FOOTGUN,
+  UNEXPORTED_FINAL_VAR_ACCESS,
   SET_JSON_LITERAL_ADVISORY,
   SKILL_NAME_COLLISION,
   UNKNOWN_LLM_MODEL,

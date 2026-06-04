@@ -59,6 +59,24 @@ export interface BootstrapOpts {
   pollIntervalSeconds?: number;
   /** Forwarded to scheduler/runtime. Default false. */
   enableUnsafeShell?: boolean;
+  /**
+   * v0.17.4 — approval-posture override. When true, the outside-MCP
+   * `skill_write` handler forces every write to land in `Draft` status
+   * regardless of what the body declares. Adopters wanting strict
+   * posture ("every skill needs explicit human promotion regardless of
+   * body claim") opt in. Default `false` — preserves the v0.9.1
+   * self-approval-via-body-declaration behavior.
+   *
+   * The in-skill `$ skill_write` bridge has always been Draft-default
+   * (v0.15.0); this flag is the outside-MCP equivalent that closes the
+   * agent-self-approval path when adopters want a human approval gate.
+   *
+   * Adopter surfaces (cascade — most-specific wins):
+   * 1. `bootstrap({ forceAlwaysDraft: true, ... })` — programmatic
+   * 2. `SKILLSCRIPT_FORCE_ALWAYS_DRAFT=true` env var (CLI reads it)
+   * 3. `{ "forceAlwaysDraft": true }` in `skillscript.config.json`
+   */
+  forceAlwaysDraft?: boolean;
   /** When set, scheduler-driven fires record traces via the result's traceStore. */
   trace?: TraceConfig;
   /**
@@ -352,6 +370,7 @@ export function bootstrap(opts: BootstrapOpts): BootstrapResult {
     enableUnsafeShell,
     runtimeMode: mode,
     ...(opts.triggersFilePath !== undefined ? { triggersFilePath: opts.triggersFilePath } : {}),
+    ...(opts.forceAlwaysDraft === true ? { forceAlwaysDraft: true } : {}),
   });
 
   return {

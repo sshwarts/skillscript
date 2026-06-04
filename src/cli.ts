@@ -28,9 +28,17 @@ import { healthMetrics } from "./metrics.js";
 import { DashboardServer } from "./dashboard/server.js";
 import { bootstrap, defaultRegistry, wireDeclarativeTriggers } from "./bootstrap.js";
 import { loadSkillscriptConfig } from "./runtime-config.js";
+import { loadEnvFile } from "./dotenv-loader.js";
 import { createHash } from "node:crypto";
 
 const HOME_DIR = process.env["SKILLSCRIPT_HOME"] ?? join(homedir(), ".skillscript");
+// v0.17.4 — auto-load `$SKILLSCRIPT_HOME/.env` at CLI startup, before any
+// config or env-var reads downstream. Missing file → no-op. Shell-set
+// vars take precedence over file values (standard dotenv contract).
+// Lets adopters drop a `.env` next to `skillscript.config.json` for
+// posture switches like `SKILLSCRIPT_FORCE_ALWAYS_DRAFT=true`.
+loadEnvFile({ path: join(HOME_DIR, ".env"), log: (msg) => process.stderr.write(`[cli] ${msg}\n`) });
+
 const SKILLS_DIR = join(HOME_DIR, "skills");
 const DATA_DB = join(HOME_DIR, "data.db");
 const EXAMPLES_DIR = join(HOME_DIR, "examples");
@@ -344,6 +352,11 @@ async function cmdInit(): Promise<number> {
     );
   }
   await copyScaffoldFile(join(scaffoldRoot, "connectors.json"), join(HOME_DIR, "connectors.json"));
+  // v0.17.4 — seed `.env.example` so adopters discover the dotenv
+  // surface without grepping the source. We write `.env.example` (not
+  // `.env`) so re-running init doesn't overwrite operator-edited
+  // values; the operator copies `.env.example` → `.env` themselves.
+  await copyScaffoldFile(join(scaffoldRoot, ".env.example"), join(HOME_DIR, ".env.example"));
 
   process.stdout.write(`Initialized ${HOME_DIR}
   skills/         ${SKILLS_DIR}
@@ -352,6 +365,7 @@ async function cmdInit(): Promise<number> {
   plugins/        ${PLUGINS_DIR}
   config.toml     ${join(HOME_DIR, "config.toml")}
   connectors.json ${join(HOME_DIR, "connectors.json")}
+  .env.example    ${join(HOME_DIR, ".env.example")} (cp → .env to set runtime env vars)
 
 Next:
   skillfile dashboard --host 0.0.0.0 --port 7878
@@ -676,13 +690,28 @@ async function cmdRuntimeHost(args: string[], opts: { mode: "serve" | "dashboard
   const configPath = extractFlag(args, "--config") ?? join(HOME_DIR, "skillscript.config.json");
   const { config: fileConfig, errors: configErrors } = loadSkillscriptConfig({ path: configPath });
   for (const err of configErrors) process.stderr.write(`[cli] ${err}\n`);
-  const portStr = extractFlag(args, "--port");
+  // v0.17.4 — env-cascade for operator-config switches. Precedence:
+  // CLI flag (most specific, per-invocation) > env var (per-process,
+  // drop in `.env`) > JSON config (per-deployment) > built-in default.
+  // This mirrors the standard layered-config pattern adopters expect
+  // from any well-behaved Node service.
+  const portStr = extractFlag(args, "--port") ?? process.env["SKILLSCRIPT_PORT"];
   const port = portStr !== undefined ? parseInt(portStr, 10) : fileConfig.dashboard?.port ?? 7878;
   // --host is the bind address inside the running process. 127.0.0.1 is
   // the safe default for local invocation; container deployments pass
   // --host 0.0.0.0 so the host-side port-forward can reach the listener
   // (host port mapping still enforces 127.0.0.1 externally).
-  const host = extractFlag(args, "--host") ?? fileConfig.dashboard?.host ?? "127.0.0.1";
+  const host = extractFlag(args, "--host") ?? process.env["SKILLSCRIPT_HOST"] ?? fileConfig.dashboard?.host ?? "127.0.0.1";
+  // v0.17.4 — env cascade for the v0.17.0 inbound caller-identity header.
+  // Operator-config surface; env-natural for installer workflows.
+  const mcpCallerIdentityHeader = process.env["SKILLSCRIPT_MCP_CALLER_IDENTITY_HEADER"] ?? fileConfig.dashboard?.mcpCallerIdentityHeader;
+  // v0.17.4 — env cascade for the unsafe-shell posture switch.
+  // Security-relevant; env-natural so operators can flip without
+  // editing JSON.
+  const envUnsafeShell = process.env["SKILLSCRIPT_ENABLE_UNSAFE_SHELL"];
+  const enableUnsafeShell = envUnsafeShell !== undefined
+    ? envUnsafeShell === "true"
+    : fileConfig.enableUnsafeShell;
   const triggersFilePath = fileConfig.triggersFilePath ?? join(HOME_DIR, "triggers.json");
   // v0.4.3 — auto-discover connectors.json from HOME_DIR. Closes the
   // last-mile gap of the v0.4.x arc: pre-v0.4.3 the loader + lint +
@@ -690,6 +719,15 @@ async function cmdRuntimeHost(args: string[], opts: { mode: "serve" | "dashboard
   // didn't read connectors.json. --connectors <path> overrides the
   // default for non-standard layouts. Loader is graceful on missing.
   const connectorsConfigPath = extractFlag(args, "--connectors") ?? fileConfig.connectorsConfigPath ?? join(HOME_DIR, "connectors.json");
+  // v0.17.4 — forceAlwaysDraft cascade: env var > config file > default
+  // false. SKILLSCRIPT_FORCE_ALWAYS_DRAFT=true forces every outside-MCP
+  // skill_write to land Draft regardless of body declaration. Closes
+  // the agent-self-approval path for adopters wanting a human approval
+  // gate. Drop a `.env` with the value, restart — done.
+  const envForceAlwaysDraft = process.env["SKILLSCRIPT_FORCE_ALWAYS_DRAFT"];
+  const forceAlwaysDraft = envForceAlwaysDraft !== undefined
+    ? envForceAlwaysDraft === "true"
+    : fileConfig.forceAlwaysDraft;
   const wired = bootstrap({
     skillsDir: fileConfig.skillsDir ?? SKILLS_DIR,
     traceDir: fileConfig.traceDir ?? TRACE_DIR,
@@ -698,7 +736,8 @@ async function cmdRuntimeHost(args: string[], opts: { mode: "serve" | "dashboard
     connectorsConfigPath,
     mode: opts.mode,
     ...(fileConfig.pollIntervalSeconds !== undefined ? { pollIntervalSeconds: fileConfig.pollIntervalSeconds } : {}),
-    ...(fileConfig.enableUnsafeShell !== undefined ? { enableUnsafeShell: fileConfig.enableUnsafeShell } : {}),
+    ...(enableUnsafeShell !== undefined ? { enableUnsafeShell } : {}),
+    ...(forceAlwaysDraft === true ? { forceAlwaysDraft: true } : {}),
     // Scheduler-fired skills record traces by default; `fires` / `health` /
     // `health_metrics` (MCP) all read from the trace store.
     trace: { mode: "on" },
@@ -713,9 +752,7 @@ async function cmdRuntimeHost(args: string[], opts: { mode: "serve" | "dashboard
     port,
     bindAddress: host,
     mountSpa: opts.mode === "dashboard",
-    ...(fileConfig.dashboard?.mcpCallerIdentityHeader !== undefined
-      ? { mcpCallerIdentityHeader: fileConfig.dashboard.mcpCallerIdentityHeader }
-      : {}),
+    ...(mcpCallerIdentityHeader !== undefined ? { mcpCallerIdentityHeader } : {}),
   });
   await server.start();
   const label = opts.mode === "dashboard" ? "dashboard" : "serve (headless)";

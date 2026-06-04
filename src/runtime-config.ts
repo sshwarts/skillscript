@@ -36,6 +36,16 @@ export interface SkillscriptConfig {
   pollIntervalSeconds?: number;
   /** When true, `shell(unsafe=true)` ops are permitted. Default false. */
   enableUnsafeShell?: boolean;
+  /**
+   * v0.17.4 — when true, outside-MCP `skill_write` forces every write
+   * to land Draft regardless of body declaration. Closes the
+   * agent-self-approval path for adopters wanting an explicit human
+   * approval gate. Default `false` (v0.9.1 self-approval preserved).
+   *
+   * Env-var override: `SKILLSCRIPT_FORCE_ALWAYS_DRAFT=true` takes
+   * precedence over this config field (the CLI applies the cascade).
+   */
+  forceAlwaysDraft?: boolean;
   /** Runtime mode label surfaced via `runtime_capabilities`. */
   mode?: "serve" | "dashboard";
   /** Imperative-trigger persistence file path. */
@@ -137,6 +147,14 @@ export function loadSkillscriptConfig(opts: LoadSkillscriptConfigOpts): LoadSkil
       errors.push(`skillscript.config.json: field 'enableUnsafeShell' must be a boolean.`);
     } else {
       config.enableUnsafeShell = obj["enableUnsafeShell"];
+    }
+  }
+
+  if (obj["forceAlwaysDraft"] !== undefined) {
+    if (typeof obj["forceAlwaysDraft"] !== "boolean") {
+      errors.push(`skillscript.config.json: field 'forceAlwaysDraft' must be a boolean.`);
+    } else {
+      config.forceAlwaysDraft = obj["forceAlwaysDraft"];
     }
   }
 

@@ -39,6 +39,81 @@ Every derived path now lives under `~/.skillscript-adopter/`; the dev instance a
 
 ---
 
+## Environment variables + `.env` file
+
+The CLI auto-loads `$SKILLSCRIPT_HOME/.env` at startup and populates `process.env` for any key not already set in the shell. Drop a `.env` next to `skillscript.config.json` and posture switches are picked up at next restart — the installer/operator pattern.
+
+### Direct env-var reads — the runtime checks `process.env` for these
+
+| Env var | Effect | Cascade precedence |
+|---|---|---|
+| `SKILLSCRIPT_HOME` | Config root (default `~/.skillscript`) | shell-set only — read before `.env` loads |
+| `SKILLSCRIPT_FORCE_ALWAYS_DRAFT=true` | Force outside-MCP `skill_write` to Draft; closes the agent-self-approval path | env > config > default `false` |
+| `SKILLSCRIPT_ENABLE_UNSAFE_SHELL=true` | Permit `shell(unsafe=true)` ops | env > config > default `false` |
+| `SKILLSCRIPT_PORT=8080` | Dashboard / serve HTTP port | `--port` flag > env > config > default `7878` |
+| `SKILLSCRIPT_HOST=0.0.0.0` | Bind address | `--host` flag > env > config > default `127.0.0.1` |
+| `SKILLSCRIPT_MCP_CALLER_IDENTITY_HEADER=X-Agent-Id` | Inbound caller-identity header name (multi-agent MCP hosts only — see [adopter playbook](adopter-playbook.md)) | env > config > default unset |
+| `OLLAMA_BASE_URL=http://...` | Ollama endpoint for LocalModel (default `http://localhost:11434`) | env > built-in default |
+
+`SKILLSCRIPT_HOME` is the chicken-and-egg case — the path to `.env` requires it, so `.env` can't set it. Use shell, Docker `-e`, or systemd `Environment=` instead.
+
+### Indirect via `${VAR}` substitution in config files
+
+Once `.env` populates `process.env`, both `skillscript.config.json` (`runtime-config.ts`) and `connectors.json` (`connectors/config.ts`) resolve `${VAR}` references in string values at load time. So a `.env`-set var flows into:
+
+- **`skillscript.config.json`** — any string field. Examples: `dashboard.host: "${BIND_HOST}"`, `triggersFilePath: "${TRIGGERS_PATH}"`.
+- **`connectors.json`** — the big one for adopter wiring. Endpoints, auth tokens, child-process `env` blocks. Example:
+
+  ```json
+  {
+    "amp": {
+      "class": "HttpMcpConnector",
+      "config": {
+        "endpoint": "${AMP_ENDPOINT}",
+        "headers": { "Authorization": "Bearer ${AMP_TOKEN}" },
+        "identityHeader": "X-Agent-Id"
+      }
+    }
+  }
+  ```
+
+  `AMP_ENDPOINT` and `AMP_TOKEN` in `.env`; declarative shape committed to `connectors.json`.
+
+### `.env` file format
+
+Standard dotenv conventions:
+
+```
+# comment lines start with #
+KEY=value
+KEY_WITH_SPACES="value with spaces"
+URL=https://example.com/path?key=value
+```
+
+Supported: `KEY=value`, quoted strings (double + single), `#` comment lines, blank lines, embedded equals signs in values. Rejected (logged as warnings, skipped): malformed entries without `=`, invalid key names. Missing file → no-op.
+
+NOT supported (deliberately — use JSON config or shell-escape for these): multi-line values, variable interpolation within values (`${OTHER_VAR}` inside a value), `export KEY=value` prefix, inline comments after a value.
+
+### Precedence summary (most-specific wins)
+
+1. CLI flag (e.g., `--port 8080`)
+2. Shell-set env var (`export SKILLSCRIPT_PORT=8080`)
+3. `.env` file in `$SKILLSCRIPT_HOME`
+4. `skillscript.config.json` field
+5. Built-in default
+
+### `skillfile init` seeds `.env.example`
+
+Running `skillfile init` writes `$SKILLSCRIPT_HOME/.env.example` documenting every recognized env var. Operators copy to `.env` and edit. Re-running init never overwrites operator-edited `.env` — only writes the template.
+
+### Adopter credential discipline
+
+- Commit `connectors.json` with `${VAR}` references; never literal secrets.
+- `.gitignore` `.env` (the file with real values); commit `.env.example` (the template).
+- See [Credential discipline](#credential-discipline) below for the broader pattern.
+
+---
+
 ## Quick start
 
 A typical out-of-the-box `~/.skillscript/connectors.json`:

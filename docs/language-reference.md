@@ -190,7 +190,7 @@ default: sweep
 The joined `emit()` stream becomes the augment-kind payload delivered to the on-call agent (per `# Output: agent: oncall` declaration). The agent sees the briefing inline at next-turn dispatch.
 
 **Three layers of declaration:**
-1. **Header metadata** (`# Key: value` lines) — name, description, declared variables, triggers, `# Output:` routing, optional `# Autonomous:` flag, error fallbacks
+1. **Header metadata** (`# Key: value` lines) — name, description, declared variables (`# Vars:`), declared returns (`# Returns:` — the export surface, output-side mirror of `# Vars:`; see Composition), triggers, `# Output:` routing, optional `# Autonomous:` flag, error fallbacks
 2. **Targets** — named blocks of typed ops, optionally with `needs:` dependencies
 3. **`default:`** — names the goal target the runtime walks toward
 
@@ -454,6 +454,8 @@ shell(command="curl -s example.com | jq '.field' > /tmp/out", unsafe=true)
 
 Bash's `$(command)` and arithmetic `$((expr))` pass through to bash without escape because skillscript's substitution is braced (`${VAR}`).
 
+**Pipes need unsafe; sandboxed multi-call + temp file is the unsafe-free alternative.** A pipe (`curl ... | jq ...`) is a shell metacharacter and requires `unsafe=true`. To compute-in-tools without unsafe, split into sequential sandboxed calls sharing a temp file: `shell(command="curl -s -o /tmp/x.json ...")` then `shell(command="jq -c '<filter>' /tmp/x.json") -> R`. Sequential sandboxed calls share the runtime's filesystem within an execution. Caveat: a fixed temp path races under concurrent invocation (no built-in uniquifier short of a `mktemp` call) — for a large fetched intermediate, keeping it in an execution-scoped var + filtering exports via `# Returns:` is usually cleaner than either shell form.
+
 ### `file_read` / `file_write` — file I/O
 
 ```
@@ -475,7 +477,7 @@ brief:
 
 Inlines an Approved `# Type: data` skill into the host skill's compiled artifact at the call site. Resolved at `compile()` time; the data skill's `content_hash` is recorded in the host's provenance. `skillscript audit` detects stale recompiles when a referenced data skill changes.
 
-**Identity semantic.** Inlined helpers run under the **host skill's identity** — compile-time paste makes the inlined ops part of the host body, so there is no runtime identity boundary to cross. Contrast with `execute_skill` where the called skill runs under its own author identity. Bringing code in via `inline` is an act of taking responsibility for it.
+**Data-only — not executable composition.** `inline` brings in *data* — the `# Type: data` skill's emitted text, resolved and baked at compile time — not executable logic. The inlined skill is not run at runtime, so there is no identity boundary: the baked text is simply part of the host's compiled artifact, attributed to the host. For *executable* composition (running another skill's logic at runtime), use `execute_skill`, where the called skill runs in its own frame under its own author identity. The two are not interchangeable — `inline` is compile-time data inclusion; `execute_skill` is runtime executable composition. There is no executable form of `inline`.
 
 See Composition section for the distinction between `inline` (compile-time), `execute_skill` (in-skill runtime call), and dispatched skills.
 
@@ -487,6 +489,8 @@ classify:
 ```
 
 Runtime-resolved against the SkillStore. Recursion-depth-guarded (default 10).
+
+**Returns.** The caller's `-> R` binding receives `outputs` + `transcript` + execution metadata always, plus the child's declared `# Returns:` surface (each declared var accessible as `${R.X}`). Undeclared scratch is filtered — a child with no `# Returns:` yields `final_vars: {}`. This is what keeps composition from compounding (a child's internal state never propagates up). Full contract in Composition § Return contract.
 
 **Identity semantic.** Calls run under the **called skill's author identity** (`SkillMeta.author`), not the caller's — same rule as direct dispatch. When skill A (authored by Alice) invokes skill B (authored by Bob) via `execute_skill`, B runs as Bob. Each skill is its own identity unit; the dispatcher does not loan its identity to the callee. Cross-author delegation (caller-identity threaded as a separate context) is a future-ring design surface.
 
@@ -1633,7 +1637,44 @@ execute_skill({
 })
 ```
 
-**Returns:** `{ final_vars, transcript, outputs, errors, target_order, provenance }`.
+**Returns:** `{ final_vars, transcript, outputs, errors, target_order, provenance }`. **`final_vars` is filtered to the child's declared `# Returns:` surface** (see Return contract below) — a child with no `# Returns:` returns `final_vars: {}`. `outputs`, `transcript`, and execution metadata always propagate.
+
+## Return contract: `# Returns:`
+
+A skill declares its export surface with a `# Returns:` frontmatter header — the output-side mirror of `# Vars:` (input side). Skills are functions: `# Vars:` is the parameter list, `# Returns:` is the return signature.
+
+```
+# Skill: get-weather
+# Status: Approved
+# Vars: LOCATION="Valdese"
+# Returns: SUMMARY, TEMP_F, CONDITIONS
+
+fetch:
+    shell(command="curl -s 'wttr.in/${LOCATION|url}?format=j1'") -> RAW
+    $ json_parse ${RAW} -> PARSED
+    $set TEMP_F = ${PARSED.current_condition.0.temp_F}
+    $set CONDITIONS = ${PARSED.current_condition.0.weatherDesc.0.value}
+    $set SUMMARY = "${LOCATION}: ${TEMP_F}°F and ${CONDITIONS}"
+    emit(text="${SUMMARY}")
+default: fetch
+```
+
+**What the caller's `-> R` binding receives:**
+- `R.outputs` — the delivery (emit) stream. Always exported.
+- `R.transcript` — execution trace. Always exported.
+- `R.errors`, `R.target_order`, `R.fallbacks`, `R.agent_delivery_receipts` — execution metadata. Always exported.
+- `R.SUMMARY`, `R.TEMP_F`, `R.CONDITIONS` — the declared returns, accessible at top level: `${R.SUMMARY}`, NOT `${R.final_vars.SUMMARY}`.
+- **NOT** `R.RAW`, `R.PARSED` — internal scratch. Not declared, not exported.
+
+**Default — no `# Returns:` exports nothing from final_vars.** A skill without a `# Returns:` header returns `final_vars: {}`. Its `outputs`/`transcript`/metadata still propagate, so emit-driven skills (whose consumers read `${R.outputs.text}`) need no `# Returns:` at all. Declare `# Returns:` only when a caller needs structured access to specific variables.
+
+**Per-level contract — composition doesn't compound.** Each skill's `# Returns:` governs only what *its* caller sees of it. In `A → B → C`, B's `# Returns:` governs what A sees of B; C's scratch never reaches A. This is what makes deep composition safe: internal state stays execution-scoped and is filtered at each boundary, so a stack of composed skills can't accumulate each other's scratch (the failure mode that motivated the contract — an undeclared large intermediate propagating up the whole chain).
+
+**Top-level MCP result is filtered too.** A direct `execute_skill` MCP call of a no-`# Returns:` skill returns `final_vars: {}` — the filter applies to direct invocation, not just child-propagation. Adopters inspecting `final_vars` via the MCP tool see the declared-returns surface, not the full variable dump.
+
+**Lint:**
+- `unknown-returns-ref` (tier-1) — `# Returns: X` where `X` isn't bound anywhere in the skill body. Same shape as undeclared-var, for the export side.
+- `unexported-final-var-access` (tier-2 advisory) — caller accesses `${R.X}` where `X` isn't in the called skill's `# Returns:`. Catches the "forgot to export it" footgun (forward-reference deferred-resolution if the called skill isn't yet stored).
 
 ## Semantics
 
@@ -1641,7 +1682,7 @@ execute_skill({
 
 **Input override.** `inputs` map keys must match the child's `# Vars:` declarations. Undeclared keys are ignored. Required vars without defaults must be supplied or dispatch fails before the child starts.
 
-**Variable threading.** The parent's variable scope is sealed from the child's; the child sees only its declared `# Vars:` plus the inputs override plus ambient refs. The child's emitted result binds to the parent's named variable via `-> RESULT`. The child's transcript surfaces through the parent's transcript with provenance attribution.
+**Variable threading.** The parent's variable scope is sealed from the child's; the child sees only its declared `# Vars:` plus the inputs override plus ambient refs. The child's emitted result binds to the parent's named variable via `-> RESULT` (filtered to the child's `# Returns:` surface). The child's transcript surfaces through the parent's transcript with provenance attribution.
 
 **Mechanical mode (the TestFlight property).** When `mechanical: true`, the dispatch graph renders without firing side-effect ops. `$` dispatch ops bind null; runtime-intrinsic side-effect ops bind self-describing placeholder strings. The mechanical flag propagates through recursive `execute_skill` calls — the whole sub-graph previews end-to-end, no real services touched. Authors use this to validate a multi-skill composition chain before committing to any real call.
 
@@ -1665,7 +1706,7 @@ Skill references (`inline(skill=...)`, `execute_skill(skill_name=...)`) are vali
 
 Three distinct cases that look similar but have different intents:
 
-1. **Get a value back from another skill.** Use `execute_skill(skill_name="...") -> RESULT` and use `${RESULT}` locally. This is the composition primitive case.
+1. **Get a value back from another skill.** Use `execute_skill(skill_name="...") -> RESULT` and use `${RESULT}` locally — reaching declared returns (`${RESULT.X}`) or the output stream (`${RESULT.outputs.text}`). This is the composition primitive case.
 
 2. **Delegate work to an agent as a task.** Use `# Output: template: <agent>` to route a compiled artifact through AgentConnector. The receiving agent acts on the prompt. *This is the Template-skill story* — uses compile-as-delivery, not execute-and-bind.
 
@@ -1694,21 +1735,36 @@ default: greet
 
 call_greeting:
     execute_skill(skill_name="greeting") -> GREETING_RESULT
-    emit(text="Greeting skill said: ${GREETING_RESULT}")
+    emit(text="Greeting skill said: ${GREETING_RESULT.outputs.text}")
 
 default: call_greeting
 ```
 
-**Composition with input override:**
+(greeting is emit-only — no `# Returns:` needed; the parent reads `.outputs.text`.)
+
+**Composition with input override + declared return:**
+
+```
+# Skill: classifier
+# Status: Approved
+# Vars: TEXT=""
+# Returns: VERDICT
+
+classify:
+    $ llm prompt="Classify: ${TEXT}" -> VERDICT
+    emit(text="${VERDICT}")
+
+default: classify
+```
 
 ```
 # Skill: parent-with-inputs
 # Status: Approved
-# Vars: TARGET_NAME=alice
+# Vars: INPUT="some text"
 
 call_with_inputs:
-    execute_skill(skill_name="greeting", inputs={"NAME": "${TARGET_NAME}"}) -> RESULT
-    emit(text="Customized greeting: ${RESULT}")
+    execute_skill(skill_name="classifier", inputs={"TEXT": "${INPUT}"}) -> R
+    emit(text="Classified as: ${R.VERDICT}")
 
 default: call_with_inputs
 ```
@@ -1721,7 +1777,7 @@ default: call_with_inputs
 
 call_maybe_missing:
     execute_skill(skill_name="might-not-exist") -> RESULT (fallback: "child unavailable")
-    emit(text="Result: ${RESULT}")
+    emit(text="Result: ${RESULT.outputs.text}")
 
 default: call_maybe_missing
 ```
@@ -1741,11 +1797,12 @@ Renders the full dispatch chain — parent's targets in topo order, plus the chi
 
 For *data skills* (skills marked `# Type: data`), the compile-time inline primitive `inline(skill="<name>")` resolves the data skill at compile time and bakes its emitted text into the parent's compiled artifact. The data skill's `content_hash` is recorded in the host's provenance; `skillfile audit` detects stale recompiles when a referenced data skill changes.
 
-`inline()` is compile-time; `execute_skill()` is runtime. Different mechanisms, different use cases.
+`inline()` is compile-time and brings in *data* (the data skill's emitted text); `execute_skill()` is runtime and brings in *behavior* (the child runs in its own frame, returns its declared `# Returns:` surface). Different mechanisms, different use cases. There is no executable form of `inline`.
 
 ## Authoring discipline
 
 - Treat composition as a real cost. Each `execute_skill()` dispatch incurs the child's full execution time + side effects. Don't compose for trivial cases that could be inlined.
+- Declare `# Returns:` when a caller needs structured access to a child's variables. Leave it off for emit-only skills whose consumers read `.outputs.text` — the default-empty filter keeps scratch from propagating.
 - Pair composition with `(fallback: ...)` when the child skill might fail and the parent has a sensible degraded path.
 - Use mechanical mode to TestFlight any multi-skill chain before shipping it as a Headless skill on a cron trigger.
 - Forward references work — author sibling skills in any order, validate independently. The tier-2 warning surfaces the deferred-resolution path; runtime catches genuine misses.
@@ -2120,5 +2177,5 @@ Hung dispatches hang the skill without explicit timeout configuration. Lean: ski
 
 ---
 
-*Rendered from `skillscript/skillscript-language-reference` — 2026-06-03 18:08 EDT*  
+*Rendered from `skillscript/skillscript-language-reference` — 2026-06-04 11:28 EDT*  
 *Source of truth: AMP (`amp_render_document("skillscript/skillscript-language-reference")`)*

@@ -1,5 +1,134 @@
 # Changelog
 
+## 0.17.4 — 2026-06-04 — `unexported-final-var-access` lint + `forceAlwaysDraft` adopter wiring (env + .env + config) + language reference re-render
+
+Three coordinated pieces, all under the v0.17 line theme of closing
+identity/approval surfaces:
+
+### A. `unexported-final-var-access` (tier-2 advisory)
+
+Sibling consumer-side rule to v0.17.3's tier-1 `unknown-returns-ref`
+(declaration-side). Closes the symmetric gap: when a caller writes
+`${R.final_vars.X}` and X isn't in the called skill's `# Returns:`,
+the runtime filter drops the value silently — substitution renders
+empty. This lint catches the asymmetry at author time so the silent
+empty doesn't survive into trace inspection.
+
+### What landed
+
+- `unexported-final-var-access` (tier-2 advisory) — catches
+  `${R.final_vars.X}` (and `$(R.final_vars.X)`) where R was bound by
+  `$ execute_skill skill_name="<child>" -> R` and X isn't in
+  `<child>`'s declared returns.
+- Forward-reference deferred: missing child skills are still flagged
+  by `unknown-skill-reference` (tier-2); this rule skips them so we
+  don't double-report.
+- Skips when SkillStore isn't provided (lint surface that can't
+  resolve references stays silent).
+- Per-(target, ref) dedup — one finding per unique reference per
+  target, not per call site.
+
+### B. Env-cascade for operator-config switches
+
+Five operator/installer-relevant config fields now have an env-var
+surface alongside CLI flags (where applicable) and JSON config:
+
+| Env var | Effect | Cascade precedence |
+|---|---|---|
+| `SKILLSCRIPT_FORCE_ALWAYS_DRAFT=true` | Force outside-MCP `skill_write` to Draft; closes agent-self-approval path | env > config > default `false` |
+| `SKILLSCRIPT_ENABLE_UNSAFE_SHELL=true` | Permit `shell(unsafe=true)` ops | env > config > default `false` |
+| `SKILLSCRIPT_PORT=8080` | Dashboard / serve HTTP port | `--port` flag > env > config > default `7878` |
+| `SKILLSCRIPT_HOST=0.0.0.0` | Bind address | `--host` flag > env > config > default `127.0.0.1` |
+| `SKILLSCRIPT_MCP_CALLER_IDENTITY_HEADER=X-Agent-Id` | v0.17.0 inbound caller-identity header name | env > config > default unset |
+
+The `forceAlwaysDraft` policy lever existed inside McpServer since
+v0.16.8 but wasn't reachable through the adopter surface; this ring
+closes that gap and extends the pattern across the four siblings.
+`BootstrapOpts.forceAlwaysDraft` + `SkillscriptConfig.forceAlwaysDraft`
+also wired for programmatic + JSON-config use.
+
+When `forceAlwaysDraft` is true, outside-MCP `skill_write` rewrites the
+body's `# Status:` header to `Draft` before persisting. In-skill
+`$ skill_write` was already Draft-default unconditionally (v0.15.0
+bridge); this is the symmetric outside-MCP path.
+
+### C. `.env` file auto-loader
+
+New `src/dotenv-loader.ts` reads `$SKILLSCRIPT_HOME/.env` at CLI
+startup and populates `process.env` with `KEY=value` pairs. Shell-set
+vars take precedence (standard dotenv contract). Drop a `.env` next to
+`skillscript.config.json` and posture switches like
+`SKILLSCRIPT_FORCE_ALWAYS_DRAFT=true` are picked up at next restart —
+the installer-friendly "drop a file, restart, done" UX.
+
+Hand-rolled parser (no npm dep) supports: `KEY=value`, quoted strings
+(double + single), comment lines (`#`), blank lines, embedded equals
+signs in values. Rejects: malformed entries (no `=`), invalid key names
+(must match identifier regex). Missing file → no-op (graceful).
+Multi-line values + variable interpolation deliberately not supported.
+
+The loader also benefits indirect env-var consumers: `${VAR}`
+substitution in `skillscript.config.json` and `connectors.json` reads
+`process.env`, so `.env`-set values flow into those configs too.
+Practical adopter pattern: secrets + endpoints in `.env`, declarative
+config in JSON.
+
+### D. `scaffold/.env.example` seeded by `skillfile init`
+
+New scaffold file documents every env var the runtime recognizes —
+posture switches, network bind config, multi-agent identity header,
+LocalModel endpoint, and the indirect `${VAR}` substitution pattern
+for `connectors.json` (the common AMP_TOKEN / API_TOKEN case). Copied
+to `$SKILLSCRIPT_HOME/.env.example` by `skillfile init`. Adopters copy
+to `.env` and edit. Re-running init is idempotent — only writes the
+`.env.example` template, never overwrites an operator-edited `.env`.
+
+### E. `docs/configuration.md` env-var section
+
+New "Environment variables + `.env` file" section near the top of
+the configuration doc. Covers: full table of direct env-var reads
+with cascade precedence, indirect `${VAR}` substitution in JSON
+configs, `.env` file format + supported/unsupported syntax,
+precedence summary (CLI flag > env > .env > JSON > default),
+`skillfile init` seeding behavior, and credential discipline. Closes
+the docs gap where these surfaces existed in code but adopters had
+no canonical reference.
+
+### Test coverage
+
+35 new tests in three files:
+- `v0.17.4-unexported-final-var-access.test.ts` — 9 lint tests
+- `v0.17.4-force-always-draft-wiring.test.ts` — 8 cascade tests
+- `v0.17.4-dotenv-loader.test.ts` — 14 loader tests (quotes, comments,
+  blanks, malformed, precedence, missing file, embedded equals, etc.)
+
+1644 tests total. Narrow-core LOC ceiling bumped 10400 → 10500 (the
+unexported-final-var-access rule is ~90 lines of substitution-pattern
+parsing + cross-skill resolution; per the signal-not-budget rule,
+clear code wins).
+
+### Language reference re-rendered
+
+Picks up Perry's atom updates to the AMP doc tree
+(`skillscript-language-reference`, 15 sections). Substantive content
+this re-render brings local-side:
+
+- New "Return contract: `# Returns:`" section in Composition — worked
+  example, always-exported set spelled out, per-level contract
+  explanation, top-level MCP filter note (substrate-author's
+  `52ab738f` nit on the v0.17.3 thread now documented), both new
+  lint rules cited.
+- Inline section refined: "Data-only — not executable composition."
+  The reader can no longer plausibly think `inline()` runs procedural
+  code; the contrast with `execute_skill` is explicit. Closes the
+  spec/impl mismatch flagged in v0.17.2's CHANGELOG.
+- Header metadata list updated to mention `# Returns:` alongside
+  `# Vars:` as the output-side mirror.
+- New "Pipes need unsafe" caveat in the shell section (composition-in-
+  tools pattern, sandboxed multi-call temp-file alternative).
+
+---
+
 ## 0.17.3 — 2026-06-04 — `# Returns:` frontmatter: declared export surface for execute_skill composition
 
 Closes Perry's `1ea3d625` Finding 2 (`execute_skill` leaks full child
