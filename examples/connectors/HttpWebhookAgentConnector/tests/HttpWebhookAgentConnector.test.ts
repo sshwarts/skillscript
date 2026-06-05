@@ -278,17 +278,20 @@ describe("HttpWebhookAgentConnector — list_agents / health_check / wake / requ
     expect(await conn.health_check()).toBe(true);
   });
 
-  it("wake throws when wake_url not configured for the agent", async () => {
+  it("wake degrades gracefully when wake_url not configured (v0.18.2 — returns woken: false instead of throwing)", async () => {
     const conn = new HttpWebhookAgentConnector({ agents: { "agent-x": { url: mock.url } } });
-    await expect(conn.wake("agent-x")).rejects.toThrow(/no wake_url configured/);
+    const receipt = await conn.wake("agent-x");
+    expect(receipt.woken).toBe(false);
+    expect(typeof receipt.woken_at).toBe("number");
   });
 
-  it("wake POSTs to wake_url when configured", async () => {
+  it("wake POSTs to wake_url when configured + reports woken: true", async () => {
     const conn = new HttpWebhookAgentConnector({
       agents: { "agent-x": { url: mock.url, wake_url: `${mock.url}/wake` } },
     });
     const receipt = await conn.wake("agent-x");
     expect(typeof receipt.woken_at).toBe("number");
+    expect(receipt.woken).toBe(true);
     expect(mock.received).toHaveLength(1);
     expect(mock.received[0]!.url).toBe("/wake");
   });

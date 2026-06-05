@@ -233,13 +233,17 @@ export class HttpWebhookAgentConnector implements AgentConnector {
   async wake(agent_id: string, _opts?: WakeOpts): Promise<WakeReceipt> {
     const cfg = this.agents[agent_id];
     if (cfg === undefined) {
+      // Caller misconfiguration (agent not in HTTP_WEBHOOK_AGENTS) — still
+      // throws. Distinct from the substrate-can't-wake case below.
       throw new Error(`wake('${agent_id}'): agent not configured`);
     }
     if (cfg.wake_url === undefined) {
-      throw new Error(
-        `wake('${agent_id}'): no wake_url configured for this agent. ` +
-        `Add "wake_url" to the agent's config entry in HTTP_WEBHOOK_AGENTS if your substrate supports wake.`,
-      );
+      // v0.18.2 — graceful degradation. No wake URL configured for this
+      // agent means this connector is "passive" for them — webhook can
+      // deliver content but can't interrupt. Per Perry's degradation
+      // requirement: conform by degrading, never by erroring. Caller
+      // reads `woken: false` and knows the wake was downgraded.
+      return { woken_at: Date.now(), woken: false };
     }
     // Adopter-specific wake protocol; bundled example just POSTs to the URL.
     const response = await fetch(cfg.wake_url, {
@@ -249,9 +253,11 @@ export class HttpWebhookAgentConnector implements AgentConnector {
       signal: AbortSignal.timeout(this.timeout_ms),
     });
     if (response.status >= 400) {
+      // Real substrate-side failure — still throws. Distinct from the
+      // graceful-degradation case above (no wake URL configured at all).
       throw new Error(`wake('${agent_id}'): HTTP ${response.status}`);
     }
-    return { woken_at: Date.now() };
+    return { woken_at: Date.now(), woken: true };
   }
 
   async health_check(): Promise<boolean> {

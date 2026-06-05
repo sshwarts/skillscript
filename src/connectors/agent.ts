@@ -129,6 +129,14 @@ export interface DeliveryReceipt {
   /** Substrate-specific id for callers to correlate later. */
   delivery_id?: string;
   /**
+   * v0.18.2 — the session that received the delivery. Set when the
+   * substrate routes to a specific session (mailbox-pull per terminal,
+   * webhook per running-tab, etc.). Omit if the substrate is
+   * agent-level only (Slack DM, email — no session concept) or if the
+   * substrate elected to fan out / accept without specific session.
+   */
+  session_id?: string;
+  /**
    * Adopter signals "accepted but not pushed to the agent" — agent offline,
    * rate-limit drop, tmux session exists but agent hasn't read, etc.
    * Distinct from outright dispatch failure (which throws). Runtime echoes
@@ -168,10 +176,40 @@ export interface WakeOpts {
   context?: string;
   /** `"immediate"` (default) or a unix-ms timestamp for scheduled wake. */
   when?: "immediate" | number;
+  /**
+   * v0.18.2 — optional structured session targeting. Alternative to
+   * embedding `agent@session` in the `agent_id` opaque string. Callers
+   * with the session already separated (e.g., dashboard's per-session
+   * "wake this terminal" action) pass it here. Substrates that don't
+   * track sessions ignore the field; substrates that do route the wake
+   * to the named session. Per Perry's `e1ef003`-thread session-granular
+   * targeting requirement.
+   */
+  session_id?: string;
 }
 
+/**
+ * v0.18.2 — `woken` is the required honesty signal. Wake-capable
+ * substrates (live tmux session, browser-tab open, push-channel
+ * connected) set `woken: true` after delivering an attention signal.
+ * Passive substrates (webhook, file-drop, store-only) can't interrupt
+ * and degrade gracefully: deliver the content, set `woken: false`. Per
+ * Perry's graceful-degradation requirement — "conform by degrading,
+ * never by erroring." Callers reading the receipt distinguish
+ * interrupted-them from delivered-only without needing per-substrate
+ * knowledge.
+ */
 export interface WakeReceipt {
   woken_at: number;
+  /** `true` if substrate actually woke the session; `false` if degraded to deliver-only. */
+  woken: boolean;
+  /**
+   * The session that received the wake (or delivery, if degraded). Set
+   * when the substrate knows; omit if the substrate doesn't track
+   * sessions. With session-targeted wake input, this typically echoes
+   * the requested session; with bare `agent_id`, the substrate's
+   * choice if it picks one.
+   */
   session_id?: string;
 }
 
@@ -207,7 +245,35 @@ export type AgentStatus = "active" | "idle" | "asleep" | "unknown";
  */
 export interface AgentConnector {
   list_agents(): Promise<AgentDescriptor[]>;
+  /**
+   * Durable put — "it's in their inbox, no interrupt."
+   *
+   * `agent_id` is an opaque string. The substrate may treat it as:
+   * - a bare agent identifier (Slack `@user`, email address, Discord user ID)
+   * - a composite `agent@session` (e.g., `"perry@kitchen-terminal"`) when the
+   *   substrate tracks multiple live sessions per identity — the substrate
+   *   decomposes the composite if it cares; non-session substrates ignore
+   *   the suffix or treat the whole string as the address.
+   *
+   * Per Perry's v0.18.2 session-granular-targeting requirement: every
+   * messaging substrate needs to address either a bare identity or a
+   * specific live session. The opaque-composite form keeps the contract
+   * substrate-neutral while preserving the routing capability.
+   */
   deliver(agent_id: string, payload: DeliveryPayload): Promise<DeliveryReceipt>;
+  /**
+   * Attention signal — "go look at this now."
+   *
+   * `agent_id` accepts the same opaque/composite form as `deliver` (bare
+   * identity or `agent@session`). `opts.session_id` is the structured
+   * alternative for callers with the session already separated.
+   *
+   * Passive substrates that can't interrupt (webhook, file-drop, store-only)
+   * degrade gracefully — deliver the payload as if it were a `deliver()`
+   * call and set `woken: false` on the receipt. The contract's graceful-
+   * degradation rule (never throw for missing wake-capability) keeps
+   * non-wake-capable substrates conformant.
+   */
   wake(agent_id: string, opts?: WakeOpts): Promise<WakeReceipt>;
   /**
    * Bootstrap-time health probe. Adopter returns `true` if the substrate

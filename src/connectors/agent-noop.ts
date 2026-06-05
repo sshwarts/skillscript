@@ -52,7 +52,12 @@ export class NoOpAgentConnector implements AgentConnector {
     process.stderr.write(
       `[NoOpAgentConnector] wake(${agent_id}) — no substrate wired; wake skipped.\n`,
     );
-    return { woken_at: Date.now() };
+    // v0.18.2 — graceful degradation: NoOp can't interrupt anything, so
+    // it reports `woken: false`. Callers reading the receipt distinguish
+    // delivered-only from actually-woke without needing per-substrate
+    // knowledge. Per Perry's degradation requirement: conform by
+    // degrading, never by erroring.
+    return { woken_at: Date.now(), woken: false };
   }
 
   async health_check(): Promise<boolean> {

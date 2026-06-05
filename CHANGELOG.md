@@ -1,5 +1,78 @@
 # Changelog
 
+## 0.18.2 — 2026-06-05 — AgentConnector contract robustness: session-granular targeting + graceful wake degradation
+
+Closes Perry's two requirements on the AgentConnector contract before
+substrate-author wires their adopter-side impl. The verbs were already
+well-generalized (his endorsement: `list_agents` / `deliver` / `wake`
+maps cleanly across Slack / Discord / tmux / webhook / email / queue —
+nothing substrate-specific leaks in). v0.18.2 bakes in the two robustness
+properties that keep the contract substrate-neutral as adoption grows.
+
+### A. `WakeReceipt.woken: boolean` — explicit honesty signal
+
+New required field on the wake receipt. Wake-capable substrates set
+`woken: true`; passive substrates that can't interrupt (webhook,
+file-drop, store-only) degrade gracefully — return `woken: false`
+instead of throwing. Per Perry's degradation requirement: "conform by
+degrading, never by erroring."
+
+Callers reading the receipt distinguish interrupted-them from
+delivered-only without per-substrate knowledge. The pattern mirrors
+`DeliveryReceipt.delivery_skipped` (v0.9.6 — adopter signals
+accepted-but-not-pushed).
+
+`NoOpAgentConnector.wake()` now returns `{woken: false, ...}` (it
+can't actually interrupt anything).
+
+`HttpWebhookAgentConnector` example: when no `wake_url` configured for
+an agent, returns `{woken: false}` instead of throwing. Real HTTP
+failures (POST to configured wake_url returns 4xx/5xx) still throw —
+distinct from the substrate-capability case.
+
+### B. Session-granular targeting — `agent@session` composite
+
+`agent_id` parameter on `deliver` and `wake` now documented as opaque
+composite the substrate decomposes. Bare identifier (Slack `@user`,
+email address) and composite (`perry@kitchen-terminal`,
+`alice@browser-tab-3`) both supported — substrate parses if it tracks
+sessions, ignores the suffix if it doesn't.
+
+`WakeOpts.session_id?: string` — structured alternative for callers
+with the session already separated (e.g., dashboard's per-session
+"wake this terminal" action). Substrate impl chooses which signal to
+honor when both are present.
+
+`DeliveryReceipt.session_id?: string` — symmetric reflection: when
+delivery routed to a specific session, the receipt names it.
+
+Per Perry: "One-identity-many-live-sessions isn't an AMP quirk — it's
+general (multiple terminals, multiple chat sessions). If the contract
+only knows bare agents, it can't express the wake-class targeting we
+just built."
+
+### Tests
+
+8 new tests in `v0.18.2-agent-contract-degradation.test.ts`:
+- `WakeReceipt.woken` honest across NoOp + HttpWebhook
+- Caller misconfiguration still throws (distinct from
+  substrate-can't-wake case)
+- `agent@session` composite parsing through a CompositeAwareConnector
+  test impl
+- `WakeOpts.session_id` structured form wins over embedded suffix
+- Bare `agent_id` (no `@`) still works
+
+1690 tests total. Narrow-core LOC ceiling 10500 → 10600.
+
+### Contract diff for adopters writing impls
+
+Existing impls compile but won't typecheck without the new required
+`WakeReceipt.woken` field. Per the pre-adoption rule, this is a cheap
+breaking change — the only known impl-in-flight (substrate-author's
+AmpAgentConnector) is being written against this contract.
+
+---
+
 ## 0.18.1 — 2026-06-05 — AgentConnector declarative-wiring symmetry
 
 Closes the long-standing asymmetry across the four substrate slots.
