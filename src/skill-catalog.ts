@@ -34,7 +34,14 @@ export async function buildSkillCatalog(
 
   // Query the underlying store for status-filtered metas; the discovery
   // surface always defaults to Approved (cold authors don't see Drafts).
-  const metas = await skillStore.query({ status });
+  // v0.18.6 — author filter threaded through to SkillStore.query so
+  // substrates that natively track authorship can filter at the
+  // substrate layer; bundled stores ignore unknown filter keys and the
+  // catalog layer re-filters in-memory below (graceful degradation per
+  // Perry's spec, thread 1f278e5e).
+  const storeFilter: { status: typeof status; author?: string } = { status };
+  if (filter.author !== undefined) storeFilter.author = filter.author;
+  const metas = await skillStore.query(storeFilter);
 
   const entries: SkillEntry[] = [];
   for (const meta of metas) {
@@ -44,6 +51,14 @@ export async function buildSkillCatalog(
     if (filter.domain_tags !== undefined && filter.domain_tags.length > 0) {
       const skillTags = (meta.metadata_bag?.["domain_tags"] as string[] | undefined) ?? meta.metadata_bag?.["tags"] as string[] | undefined ?? [];
       if (!filter.domain_tags.every((t) => skillTags.includes(t))) continue;
+    }
+    // v0.18.6 — in-memory author filter for substrates that returned
+    // unfiltered metas. AND-composes with the substrate-level filter
+    // above: substrates that honored it already filtered, so this is a
+    // no-op for them; substrates that didn't get the filter applied
+    // here. Either way the user sees only matching authors.
+    if (filter.author !== undefined && meta.author !== filter.author) {
+      continue;
     }
 
     let parsed;
@@ -63,11 +78,12 @@ export async function buildSkillCatalog(
         vars: [],
         output: [],
         triggers: [],
+        ...(meta.author !== undefined ? { author: meta.author } : { author: null }),
       });
       continue;
     }
 
-    const entry = buildEntry(meta.name, meta.description ?? extractFirstProse(source), meta.status, parsed);
+    const entry = buildEntry(meta.name, meta.description ?? extractFirstProse(source), meta.status, parsed, meta.author);
 
     // trigger_kind filter — narrow to entries with at least one trigger of the requested kind
     if (filter.trigger_kind !== undefined && !entry.triggers.some((t) => t.kind === filter.trigger_kind)) {
@@ -90,6 +106,7 @@ export function buildEntry(
   description: string,
   status: SkillEntry["status"],
   parsed: { outputs: OutputDecl[]; triggers: TriggerDecl[]; vars: Array<{ name: string; default?: string; required?: boolean }> },
+  author?: string,
 ): SkillEntry {
   return {
     name,
@@ -99,6 +116,9 @@ export function buildEntry(
     vars: renderVars(parsed.vars),
     output: renderOutputs(parsed.outputs),
     triggers: renderTriggers(parsed.triggers),
+    // v0.18.6 — surface author when the substrate populated it; null
+    // when not (substrate-neutral graceful degradation).
+    author: author ?? null,
   };
 }
 

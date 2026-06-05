@@ -339,6 +339,17 @@ export interface SkillEntry {
   description: string;
   status: SkillStatus;
   /**
+   * v0.18.6 — optional connector-provided authorship attribution.
+   * `null` when the substrate doesn't track or expose author per skill.
+   * Bundled stores populate from `SkillMeta.author` (captured at first
+   * write per the v0.16.x identity ring). Adopter substrates can map
+   * onto their own ownership concept (e.g., AMP's `author:<id>` tag).
+   *
+   * Per Perry's spec (thread `1f278e5e`): generic, connector-implemented,
+   * graceful-degrading. Substrate-neutral.
+   */
+  author?: string | null;
+  /**
    * Vars derived from `# Vars:` frontmatter per the `73c79a28` addendum:
    *   `NAME` (bare)         → { required: true,  default: null }
    *   `NAME=`               → { required: false, default: "" }
@@ -377,6 +388,16 @@ export interface SkillListFilter {
   domain_tags?: string[];
   /** Adopter-side scoping (e.g., per-project filtering by name convention). */
   name_prefix?: string;
+  /**
+   * v0.18.6 — narrow to skills authored by a specific identity. AND-composes
+   * with other filters. Threaded through to `SkillStore.query({author: ...})`
+   * for substrates that honor it natively; bundled stores also filter
+   * in-memory against `SkillMeta.author` so adopters get a working filter
+   * without substrate-side work. Per Perry's spec (thread `1f278e5e`):
+   * graceful degradation — substrates that don't track authorship return
+   * all rows and the catalog layer filters in-memory.
+   */
+  author?: string;
 }
 
 export interface SkillStore {

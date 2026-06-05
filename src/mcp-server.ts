@@ -273,7 +273,7 @@ export class McpServer {
   private registerBuiltinTools(): void {
     this.registerTool({
       name: "skill_list",
-      description: "Discover skills in the configured SkillStore (v0.9.8). Returns a `SkillCatalog` pre-grouped by audience-derived category: `receives` (skills that push to the calling agent via `# Output: agent:`), `skills` (skills the agent can invoke), `headless` (admin-view only). Category derived from each skill's `# Output:` declarations. Filter by audience / status / trigger_kind / domain_tags / name_prefix (AND-composed). Default: audience=\"agent\", status=\"Approved\".",
+      description: "Discover skills in the configured SkillStore (v0.9.8). Returns a `SkillCatalog` pre-grouped by audience-derived category: `receives` (skills that push to the calling agent via `# Output: agent:`), `skills` (skills the agent can invoke), `headless` (admin-view only). Category derived from each skill's `# Output:` declarations. Filter by audience / status / trigger_kind / domain_tags / name_prefix / author (AND-composed). Default: audience=\"agent\", status=\"Approved\". v0.18.6 — `author` filter narrows to skills authored by a specific identity; entries carry `author` for substrates that track it (null when not).",
       inputSchema: {
         type: "object",
         properties: {
@@ -285,6 +285,7 @@ export class McpServer {
               trigger_kind: { type: "string", enum: ["cron", "session", "webhook", "event"] },
               domain_tags: { type: "array", items: { type: "string" } },
               name_prefix: { type: "string" },
+              author: { type: "string", description: "Narrow to skills authored by this identity. AND-composes with other filters. Graceful degradation: substrates that don't track authorship return all rows and the runtime filters in-memory (per skill_meta.author)." },
             },
             additionalProperties: false,
           },

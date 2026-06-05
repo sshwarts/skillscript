@@ -250,6 +250,14 @@ The cold-adopter Phase 3 dogfood (writing AmpSkillStore + AmpDataStore against A
 
 ### SkillStore conventions
 
+**`author` field on SkillMeta + filter on `query()` (v0.18.6).** `SkillMeta.author` is optional; substrates that track authorship populate it (bundled `FilesystemSkillStore` reads from `os.userInfo().username`; `SqliteSkillStore` stores at write time). Substrates without an authorship concept leave it `undefined`; the catalog layer surfaces `null` to the wire.
+
+`SkillStore.query({ author: "X" })` is an optional substrate-honored filter. Substrates that natively track authorship can filter at the substrate layer; substrates that don't return all status-matching rows and the `buildSkillCatalog()` layer filters in-memory per `meta.author`. Either way the caller sees only matching authors. Per Perry's spec (thread `1f278e5e`): generic, connector-implemented, graceful-degrading. The substrate-neutrality property holds — adopters wire whichever shape fits their ownership model.
+
+Adopter substrates with their own ownership concept (e.g., AMP's `author:<id>` tag) should map the filter onto their native query so subset-fetching stays efficient. Adopters with no ownership concept can leave `query()` unchanged and let the catalog-layer in-memory filter handle narrowing.
+
+
+
 **`content_hash` semantics.** Bundled impls (`FilesystemSkillStore`, `SqliteSkillStore`) compute `content_hash = sha256(approval-stamped body)` — i.e., the SHA-256 of the canonicalized skill source *including* the `# Status: Approved vN:<token>` line. Diverge from this convention and cross-impl version equality breaks (skill content_hashes won't match across substrates even when the body is identical). The contract doesn't require SHA-256, but the convention is load-bearing for cross-substrate skill identity.
 
 **`version` derivation.** `version = first 12 hex chars of content_hash`. Opaque-substrate-declared per the contract (`SkillSource.version` is just a string), but the 12-hex convention is what the bundled impls use. Adopters can derive their own scheme, but if other tools (lint diagnostics, dashboard) parse versions, the divergence shows.

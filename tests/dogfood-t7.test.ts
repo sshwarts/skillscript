@@ -24,8 +24,8 @@ const REPO_ROOT = join(__dirname, "..");
 const PACKAGE_JSON = JSON.parse(readFileSync(join(REPO_ROOT, "package.json"), "utf8")) as Record<string, unknown>;
 
 describe("T7 — package.json polish", () => {
-  it("1. version is 0.18.5 (address-routed notify/lifecycle: @session → wake(), bare → deliver(); WakeReceipt.warnings symmetric with DeliveryReceipt.warnings; tier-3 info lint for visibility)", () => {
-    expect(PACKAGE_JSON["version"]).toBe("0.18.5");
+  it("1. version is 0.18.6 (author surfaced on skill discovery: SkillEntry.author on catalog output; skill_list({filter:{author:'X'}}) narrows; substrate-neutral graceful degradation via in-memory filter at catalog layer)", () => {
+    expect(PACKAGE_JSON["version"]).toBe("0.18.6");
   });
 
   it("2. main + types + bin + engines.node ≥ 22.5 declared", () => {

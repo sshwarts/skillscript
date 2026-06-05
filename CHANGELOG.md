@@ -1,5 +1,66 @@
 # Changelog
 
+## 0.18.6 — 2026-06-05 — author surfaced on skill discovery (skill_list filter + entry field)
+
+Closes Perry's spec request (thread `1f278e5e`): an optional, generic,
+connector-implemented `author` field on the skill discovery surface
+plus an `author` filter on `skill_list`. Use case: "here's your
+toolbox" session-start context limited to the agent's own skills.
+Substrate-neutral — populating + filtering is the connector's job;
+adopters with no authorship concept get graceful degradation.
+
+### A. SkillEntry.author on catalog output
+
+`buildSkillCatalog()` now surfaces `SkillMeta.author` on each `SkillEntry`.
+Bundled stores already track author (`FilesystemSkillStore` reads from
+`os.userInfo().username`, `SqliteSkillStore` stores at write time);
+adopter substrates that don't track authorship surface `null` per the
+contract's graceful-degradation rule.
+
+### B. skill_list filter.author
+
+`SkillListFilter.author` AND-composes with the existing filters
+(audience/status/trigger_kind/domain_tags/name_prefix). The catalog
+layer threads the filter through to `SkillStore.query({ author: ... })`
+so substrates that honor it natively can narrow at the substrate
+layer; the catalog ALSO applies the filter in-memory against
+`meta.author` so substrates that ignore the filter still produce the
+right result (graceful degradation).
+
+`SkillFilter.author` was already a declared field on the contract;
+v0.18.6 wires the catalog + MCP surface to actually thread it through.
+
+### Tests
+
+6 new tests in `v0.18.6-author-discovery.test.ts`:
+- Author surfaced on entries
+- filter.author narrows correctly + entries carry matching author
+- Empty result on no match (no error)
+- AND-composes with name_prefix
+- Graceful degradation: substrate ignores filter, catalog narrows
+- author === null when substrate doesn't populate (mock store)
+
+1719 tests total; typecheck clean. No LOC ceiling bump needed
+(catalog edits absorbed within budget).
+
+### Docs
+
+- `mcp-server.ts` skill_list tool docstring lists the new filter +
+  documents graceful degradation
+- `docs/connector-contract-reference.md` SkillStore conventions section
+  adds author-field convention + filter passthrough rule
+
+### Adopter-side action (substrate-author backfill — out of scope)
+
+Connectors backed by substrates with an existing authorship concept
+need to either honor the new `filter.author` in their `query()` natively
+(better performance) or rely on the catalog-layer in-memory filter
+(works out of the box). Substrates with legacy data missing author tags
+(e.g., skills predating identity-stamping) need data-side backfill —
+substrate-author work, not a language change.
+
+---
+
 ## 0.18.5 — 2026-06-05 — Address-routed notify() + lifecycle hooks (skills can wake a session)
 
 Closes the last skill-author-surface gap from the Phase 8 substrate-author
