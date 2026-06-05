@@ -117,7 +117,12 @@ describe("v0.9.6 Q8 — DeliveryMeta envelope on lifecycle hook + notify()", () 
     expect(t.delivered[0]!.payload.meta.origin.trigger_kind).toBe("cron");
   });
 
-  it("caller_agent_id flows from ctx.agentId when present", async () => {
+  it("caller_agent_id flows from ctx.callerAgentId when present (v0.18.4 — was ctx.agentId pre-v0.18.4)", async () => {
+    // v0.18.4 — caller_agent_id now reads from ctx.callerAgentId, not
+    // ctx.agentId. The semantic split: agentId = skill OWNER (outbound
+    // connector scoping); callerAgentId = authenticated CALLER
+    // (DeliveryMeta attribution). Pre-v0.18.4 they were conflated;
+    // Perry's Q5a + the connector-agent adoption finding split them.
     const reg = new Registry();
     const t = new TestAgentConnector(["ops"]);
     await reg.registerAgentConnector("primary", t);
@@ -126,20 +131,26 @@ describe("v0.9.6 Q8 — DeliveryMeta envelope on lifecycle hook + notify()", () 
     const compiled = await compile(src);
     await execute(compiled.parsed, compiled.resolvedVariables, compiled.targetOrder, {
       registry: reg,
-      agentId: "scott",
+      callerAgentId: "scott",
     });
 
     expect(t.delivered[0]!.payload.meta.origin.caller_agent_id).toBe("scott");
   });
 
-  it("caller_agent_id absent when ctx.agentId not set (cron/cli/inline path)", async () => {
+  it("caller_agent_id absent when ctx.callerAgentId not set (cron/cli/inline path; ctx.agentId is NOT used as fallback per v0.18.4)", async () => {
     const reg = new Registry();
     const t = new TestAgentConnector(["ops"]);
     await reg.registerAgentConnector("primary", t);
 
     const src = `# Skill: probe\n# Status: Approved\nm:\n    notify(agent="ops", message="x")\ndefault: m\n`;
     const compiled = await compile(src);
-    await execute(compiled.parsed, compiled.resolvedVariables, compiled.targetOrder, { registry: reg });
+    // ctx.agentId set (skill owner present) but NO callerAgentId.
+    // v0.18.4: caller_agent_id stays undefined — the owner is NOT
+    // promoted as a fallback for the caller.
+    await execute(compiled.parsed, compiled.resolvedVariables, compiled.targetOrder, {
+      registry: reg,
+      agentId: "alice",
+    });
 
     expect("caller_agent_id" in t.delivered[0]!.payload.meta.origin).toBe(false);
   });

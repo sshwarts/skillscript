@@ -1,5 +1,104 @@
 # Changelog
 
+## 0.18.4 — 2026-06-05 — Caller-identity threading + DeliveryReceipt.warnings
+
+Closes the architectural gap surfaced by the substrate-author's Phase 8
+adoption finding (Perry's Q5a): MCP `/rpc` callers identified via the
+configured `X-Agent-Id` header were not reaching
+`DeliveryMeta.origin.caller_agent_id` on the resulting notify/deliver
+envelope. The runtime had been reading `ctx.agentId` (skill *owner*,
+used for outbound substrate scoping) instead of the authenticated
+caller. This shipped half-pieces across v0.16.8 (owner threading) and
+v0.17.0 (MCP-boundary capture); v0.18.4 separates the two semantics
+cleanly so both work without conflict.
+
+### A. ExecuteContext gets `callerAgentId`
+
+New optional field — the authenticated caller who fired the dispatch.
+Distinct from `agentId` (owner). When agent `cc` invokes a skill owned
+by Alice, `ctx.agentId="alice"` (outbound connector scoping) and
+`ctx.callerAgentId="cc"` (DeliveryMeta attribution). Per Perry's Q5a:
+notifications author as the authenticated caller, NOT the skill's
+owner.
+
+`DeliveryMeta.origin.caller_agent_id` now reads from
+`ctx.callerAgentId`. Cron / session / cli / dashboard / inline triggers
+leave it undefined (no human caller); the owner is NOT promoted as a
+fallback.
+
+### B. MCP boundary threads callerIdentity → ctx.callerAgentId
+
+`execute_skill` handler now accepts `McpRequestCtx` and threads
+`callerIdentity` (captured from the configured `mcpCallerIdentityHeader`
+at the `/rpc` boundary) into `ctx.callerAgentId`. Existing
+`ctx.agentId` plumbing (skill author from SkillStore.metadata) stays
+intact for outbound scoping. Adopters with `mcpCallerIdentityHeader`
+configured get the correct DeliveryMeta attribution with no
+configuration changes.
+
+### C. Composition preserves callerAgentId; scheduler leaves it unset
+
+Composition (`composition.ts`) spreads parent ctx into child unchanged
+— the caller IS the chain originator regardless of composition depth.
+Owner (`ctx.agentId`) still flips per child's `metadata.author` (the
+v0.16.9 cross-author behavior is preserved).
+
+Scheduler (`scheduler.ts`) never sets `callerAgentId` — cron / session
+/ event triggers have no human caller; the timer fired them. Resulting
+envelope is `caller_agent_id: undefined`.
+
+### D. DeliveryReceipt.warnings — additive contract field
+
+```typescript
+interface DeliveryReceipt {
+  // ... existing fields ...
+  warnings?: string[];
+}
+```
+
+Substrate signals non-fatal notes about a delivery (e.g.,
+`"stripped @session suffix — deliver is mailbox-class"`, `"rate-limit
+hint: backoff 5s"`, `"fan-out: delivered to 3 sessions"`). Runtime
+echoes onto `AgentDeliveryReceiptRecord.receipt.warnings`; dashboards
++ observability surfaces render them instead of substrate-side stderr
+noise. Distinct from `delivery_skipped` (accepted-not-pushed) and
+thrown errors (delivery failed) — warnings are advisory: the delivery
+succeeded; the substrate just has commentary.
+
+### Tests
+
+10 new tests in `v0.18.4-caller-identity-threading.test.ts`:
+- `ctx.callerAgentId` set → `caller_agent_id` reflects caller
+- `ctx.agentId` set, callerAgentId unset → `caller_agent_id` undefined
+  (owner is NOT fallback)
+- both set → `caller_agent_id` is the caller (owner never wins this)
+- neither set → undefined
+- `# Output: agent: X` lifecycle hook honors callerAgentId
+- end-to-end MCP `/rpc` repro: `skill_write` with `X-Agent-Id: alice` +
+  `execute_skill` with `X-Agent-Id: cc` → `caller_agent_id: cc`
+- MCP without callerIdentity → undefined (no owner fallback)
+- composition preserves callerAgentId across owner-flip
+- scheduler-fired (triggerCtx.source=cron) → undefined
+- `DeliveryReceipt.warnings` rides through to
+  `agent_delivery_receipts[].receipt.warnings`
+
+1700 tests total.
+
+### Docs
+
+- `docs/connector-contract-reference.md` — `caller_agent_id` field
+  semantics clarified (authenticated caller, NOT owner; owner is NOT
+  fallback); `DeliveryReceipt.warnings` documented
+- `docs/adopter-playbook.md` — two new patterns in the AgentConnector
+  section: pattern 4 (read `caller_agent_id` for attribution, not
+  scope) + pattern 5 (surface non-fatal notes via warnings)
+
+No language-guide changes — skill syntax unchanged. The fix is in
+who-is-attributed at the dispatch boundary, not in how skills are
+authored.
+
+---
+
 ## 0.18.3 — 2026-06-05 — AgentConnector docs catchup for substrate-author adoption
 
 Docs-only ring. The v0.18.1 declarative-wiring symmetry and v0.18.2

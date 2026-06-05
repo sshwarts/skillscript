@@ -332,6 +332,12 @@ export class Scheduler {
       // original framing: a skill that writes to its author's mailbox
       // now dispatches under the author's identity even when fired by
       // the scheduler under a different process identity.
+      //
+      // v0.18.4 — `callerAgentId` (authenticated caller) is deliberately
+      // NOT set here. Scheduler-fired skills have no human caller — the
+      // timer fired them. Resulting DeliveryMeta.origin.caller_agent_id
+      // is `undefined`, which is the contract's "no calling agent" form
+      // per Q8 (cron / session / cli / dashboard / inline triggers).
       ...(loaded.metadata.author !== undefined ? { agentId: loaded.metadata.author } : {}),
     };
     const defaults = this.buildEventDefaults();

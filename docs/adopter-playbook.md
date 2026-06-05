@@ -331,6 +331,10 @@ Callers reading `WakeReceipt.woken` distinguish "the substrate woke them" from "
 
 **Pattern 3 — session echo on receipts.** When your substrate routes to a specific session, echo it back on `DeliveryReceipt.session_id` / `WakeReceipt.session_id`. Dashboards rendering "delivered to perry@kitchen-terminal" rather than just "delivered to perry" depend on this.
 
+**Pattern 4 — read `meta.origin.caller_agent_id` to attribute, not for scope.** The `DeliveryMeta` envelope your `deliver()` receives carries `origin.caller_agent_id` = the *authenticated caller* who fired the dispatch (not the skill's owner — those are separate semantics; see [Connector Contract Reference](connector-contract-reference.md) §field semantics). Use it for *attribution* — rendering "from cc" on the receiving end, audit logs, accountability — not for authorization scoping. Outbound substrate scoping should derive from the *skill owner* (which the runtime applies at the connector layer via `ctx.agentId`, not via the envelope). If `caller_agent_id` is undefined on a delivery you receive, it means the chain originated from a non-human trigger (cron / scheduler / session-start) — your substrate should attribute it as "system-fired" or similar, not assume an identity.
+
+**Pattern 5 — surface non-fatal notes via `DeliveryReceipt.warnings`.** When your substrate needs to signal something non-fatal about a delivery — "stripped @session because verb is deliver", "rate-limit hint", "fan-out: delivered to 3 sessions" — return them as `warnings: string[]` on the receipt instead of writing to stderr. The runtime echoes warnings onto `AgentDeliveryReceiptRecord.receipt.warnings`, where the dashboard can render them and observability tools can scrape them. Stderr noise gets lost; receipt warnings are structured + caller-visible.
+
 ### When to fork vs. when to write fresh
 
 - **Fork `HttpWebhookAgentConnector`** when your substrate is HTTP-shaped and your changes are: tweaked auth (OAuth, mTLS), retry policy, different routing model. Most production deployments end up here.

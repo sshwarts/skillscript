@@ -141,6 +141,12 @@ export async function executeSkillByName(
   // identity — NOT Alice's. Same invariant for every skill run:
   // `ctx.agentId = skill.author`. v0.17+ adds dual-identity for the
   // delegation case (Alice on-behalf-of-Bob).
+  //
+  // v0.18.4 — `callerAgentId` (authenticated caller) propagates via
+  // `...ctx` and is NOT reset on composition. When agent `cc` invokes
+  // parent A (Alice) which composes child B (Bob), B's notify() emits
+  // `caller_agent_id: cc` (not Alice, not Bob). The caller IS the
+  // chain originator — composition doesn't reset who fired the chain.
   const childCtx: ExecuteContext = {
     ...ctx,
     recursionDepth: depth,

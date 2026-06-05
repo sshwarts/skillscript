@@ -147,6 +147,19 @@ export interface DeliveryReceipt {
    * Runtime preserves NoOp-fallback inference when adopter doesn't set it.
    */
   delivery_skipped?: boolean;
+  /**
+   * v0.18.4 — non-fatal substrate notes about the delivery. Surfaced
+   * onto `AgentDeliveryReceiptRecord` so the dashboard + observability
+   * surfaces show them instead of substrate-side stderr noise. Examples:
+   *  - "stripped @session suffix — deliver is mailbox-class, only wake honors session"
+   *  - "rate-limit hint: backoff 5s before next deliver"
+   *  - "fan-out: delivered to 3 active sessions"
+   *
+   * Distinct from `delivery_skipped` (which signals "accepted-not-pushed")
+   * and from thrown errors (which signal "delivery failed"). Warnings are
+   * advisory — the delivery succeeded; the substrate just has commentary.
+   */
+  warnings?: string[];
 }
 
 /**

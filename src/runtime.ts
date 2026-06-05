@@ -48,8 +48,34 @@ import type { TraceConfig, TraceStore } from "./trace.js";
 
 export interface ExecuteContext {
   registry: Registry;
-  /** Identity the skill runs as. Threaded through to McpConnector dispatch overrides. */
+  /**
+   * The skill's OWNER identity — used for outbound substrate scoping.
+   * Set from `SkillMeta.author` at every dispatch entry-point (composition,
+   * scheduler, MCP execute_skill-by-name). Threaded through to McpConnector
+   * dispatch overrides so substrate reads/writes land in the owner's scope.
+   *
+   * NOT the same as the authenticated caller — for that, see `callerAgentId`
+   * below. v0.16.9 wired this for outbound scoping; v0.18.4 split it from
+   * caller-identity which had been conflating into `DeliveryMeta.caller_agent_id`.
+   */
   agentId?: string;
+  /**
+   * v0.18.4 — the AUTHENTICATED CALLER who fired this execution.
+   * Distinct from `agentId` (owner): a request from agent `cc` invoking
+   * a skill owned by agent `alice` produces `callerAgentId=cc, agentId=alice`.
+   *
+   * Captured at the MCP `/rpc` boundary from `McpRequestCtx.callerIdentity`
+   * (when `mcpCallerIdentityHeader` is configured) and threaded through into
+   * `DeliveryMeta.origin.caller_agent_id` so notifications correctly
+   * attribute the firing agent. Inherited through composition (child skills
+   * preserve the original caller even when child runs under a different
+   * owner). Scheduler-fired skills (cron, session) leave this undefined —
+   * no human caller fired them.
+   *
+   * Per Perry's Q5a — notifications author as the authenticated caller,
+   * NOT the skill author/owner.
+   */
+  callerAgentId?: string;
   /** Test escape hatch: dispatch `$` ops bare-named tools through this callback when no `primary` McpConnector is registered. */
   toolDispatch?: (toolName: string, args: Record<string, unknown>) => Promise<unknown>;
   /** Invoked when target ops fail with no target-level `else:` but the skill declares `# OnError:`. */
@@ -211,8 +237,13 @@ interface ExecOpsResult {
  *   `inline` is the fallback when no triggerCtx is set.
  * - `origin.entry_skill_name` propagates from `ctx.entrySkillName` (set when
  *   composition runs an inner skill).
- * - `origin.caller_agent_id` propagates from `ctx.agentId` when the chain was
- *   started by an agent (cron/cli/dashboard/inline triggers leave it undefined).
+ * - `origin.caller_agent_id` propagates from `ctx.callerAgentId` (v0.18.4) —
+ *   the AUTHENTICATED CALLER who fired the dispatch. Distinct from
+ *   `ctx.agentId` (skill OWNER, used for outbound substrate scoping). Cron /
+ *   session triggers leave it undefined (no human caller); MCP execute_skill
+ *   under `X-Agent-Id: X` populates it from the inbound header; composition
+ *   inherits it from the parent context (child skills preserve the original
+ *   caller even when run under a different owner).
  * - `event_type` precedence: opOverrides.event_type ?? parsed.eventType ?? undefined.
  *   `notify(event_type=...)` kwarg wins; `# Event-type:` frontmatter is the fallback.
  * - `correlation_id` only set when explicitly passed via opOverrides (notify()
@@ -236,7 +267,7 @@ function buildLifecycleMeta(
         ? { entry_skill_name: ctx.entrySkillName }
         : {}),
       trigger_kind: triggerKind,
-      ...(ctx.agentId !== undefined ? { caller_agent_id: ctx.agentId } : {}),
+      ...(ctx.callerAgentId !== undefined ? { caller_agent_id: ctx.callerAgentId } : {}),
     },
     ...(eventType !== undefined ? { event_type: eventType } : {}),
     ...(opOverrides?.correlation_id !== undefined ? { correlation_id: opOverrides.correlation_id } : {}),

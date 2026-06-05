@@ -602,7 +602,7 @@ export class McpServer {
           },
         },
       },
-      handler: async (args) => this.executeSkill(args),
+      handler: async (args, ctx) => this.executeSkill(args, ctx),
     });
 
     this.registerTool({
@@ -622,7 +622,7 @@ export class McpServer {
     });
   }
 
-  private async executeSkill(args: Record<string, unknown>): Promise<Record<string, unknown>> {
+  private async executeSkill(args: Record<string, unknown>, callerCtx: McpRequestCtx = {}): Promise<Record<string, unknown>> {
     // v0.15.2 — `name` is the canonical kwarg; `skill_name` is a silent
     // back-compat alias. Aligns the surface with the other skill_* tools
     // (skill_read / skill_metadata / skill_status / skill_write all take
@@ -684,12 +684,21 @@ export class McpServer {
         // undefined; v0.16.8 ships the plumbing, not the failure mode.
       }
     }
+    // v0.18.4 — thread the MCP caller-identity into ctx.callerAgentId so
+    // `DeliveryMeta.origin.caller_agent_id` reflects the authenticated
+    // caller (NOT the skill owner). Closes Perry's Q5a + the connector-
+    // agent adoption finding where execute_skill via /rpc with
+    // X-Agent-Id: cc landed caller_agent_id: <skill-author> on the
+    // deliver() envelope. Reqs `mcpCallerIdentityHeader` to be
+    // configured; absent header / unset config → callerAgentId stays
+    // undefined (back-compat with the v0.16.8 owner-only semantics).
     const ctx = {
       registry: this.deps.registry,
       mechanical,
       recursionDepth: 0,
       ...(this.deps.enableUnsafeShell !== undefined ? { enableUnsafeShell: this.deps.enableUnsafeShell } : {}),
       ...(agentId !== undefined ? { agentId } : {}),
+      ...(callerCtx?.callerIdentity !== undefined ? { callerAgentId: callerCtx.callerIdentity } : {}),
     } satisfies import("./runtime.js").ExecuteContext;
 
     try {

@@ -69,7 +69,7 @@ interface DeliveryMeta {
 
 - **`meta.origin.trigger_kind`**: how the originating skill was fired. Receiver routes on this without parsing content (cron-fired triage vs agent-initiated request vs webhook from external system).
 
-- **`meta.origin.caller_agent_id`**: root-trigger agent IF identifiable, else undefined. The general rule: if the chain was initiated by an agent, that agent is the caller regardless of how deep the call stack is when the emit happens. Cron / session / cli / dashboard / inline triggers leave it undefined.
+- **`meta.origin.caller_agent_id`**: the AUTHENTICATED CALLER who fired the dispatch — distinct from the skill's author/owner. When an MCP `/rpc` call carries the configured caller-identity header (e.g., `X-Agent-Id: cc`), that value flows here. The chain originator is preserved across composition: if `cc` invokes Alice's skill A which composes Bob's skill B, B's notify() still emits `caller_agent_id: cc`. Cron / session / cli / dashboard triggers leave it undefined (no human caller); direct `execute_skill` without an identity header also leaves it undefined (the owner is NOT used as fallback — that would be the v0.16.8-era confusion that v0.18.4 split). See [Adopter Playbook](adopter-playbook.md) §"Identity propagation" for the inbound-header wiring.
 
 - **`meta.event_type`**: adopter-defined routing vocabulary — opaque to skillscript. Set via `notify(event_type=...)` kwarg (per-emit) OR `# Event-type:` skill frontmatter (skill-wide fallback). Kwarg takes precedence per-emit.
 
@@ -83,6 +83,7 @@ interface DeliveryReceipt {
   delivery_id?: string;
   session_id?: string;
   delivery_skipped?: boolean;
+  warnings?: string[];
 }
 ```
 
@@ -90,6 +91,7 @@ interface DeliveryReceipt {
 - **`delivery_id`**: substrate-specific id for callers to correlate later.
 - **`session_id`**: the session that received the delivery. Set when the substrate routes to a specific session (e.g., per-terminal mailbox, per-tab webhook). Omitted when the substrate is agent-level only (Slack DM, email — no session concept) or when the substrate fans out / accepts without committing to a session. See *agent@session targeting* below.
 - **`delivery_skipped`**: adopter signals "accepted but not pushed to the agent" — offline, rate-limit drop, tmux session exists but agent hasn't read, etc. Distinct from outright failure (which throws). Runtime echoes this on the receipt record for dashboard observability.
+- **`warnings`** (v0.18.4): non-fatal substrate notes about the delivery. Surfaced onto `AgentDeliveryReceiptRecord` so the dashboard + observability surfaces show them instead of substrate-side stderr noise. Examples: `"stripped @session suffix — deliver is mailbox-class"`, `"rate-limit hint: backoff 5s before next deliver"`, `"fan-out: delivered to 3 active sessions"`. Distinct from `delivery_skipped` (accepted-not-pushed) and from thrown errors (delivery failed) — warnings are advisory; the delivery succeeded, the substrate just has commentary.
 
 ### WakeOpts + WakeReceipt
 
@@ -267,4 +269,4 @@ The shape-vs-semantics split is deliberate (see [[ARCHITECTURE INVARIANT 88df79c
 
 ---
 
-*This doc reflects the v0.9.6 AgentConnector interface lock, v0.13.8 storage-conventions addition, and v0.18.2 receipt-shape refinements (woken-honesty + session targeting + graceful degradation). Future contract changes update this file alongside the code.*
+*This doc reflects the v0.9.6 AgentConnector interface lock, v0.13.8 storage-conventions addition, v0.18.2 receipt-shape refinements (woken-honesty + session targeting + graceful degradation), and v0.18.4 caller-identity-threading + `DeliveryReceipt.warnings`. Future contract changes update this file alongside the code.*

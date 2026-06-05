@@ -24,8 +24,8 @@ const REPO_ROOT = join(__dirname, "..");
 const PACKAGE_JSON = JSON.parse(readFileSync(join(REPO_ROOT, "package.json"), "utf8")) as Record<string, unknown>;
 
 describe("T7 — package.json polish", () => {
-  it("1. version is 0.18.3 (AgentConnector docs catchup: configuration.md + connector-contract-reference.md + adopter-playbook.md + HttpWebhookAgentConnector README updated for v0.18.1 declarative wiring + v0.18.2 contract robustness)", () => {
-    expect(PACKAGE_JSON["version"]).toBe("0.18.3");
+  it("1. version is 0.18.4 (caller-identity threading: ctx.callerAgentId separate from ctx.agentId; MCP X-Agent-Id flows to DeliveryMeta.origin.caller_agent_id; composition preserves caller; DeliveryReceipt.warnings additive)", () => {
+    expect(PACKAGE_JSON["version"]).toBe("0.18.4");
   });
 
   it("2. main + types + bin + engines.node ≥ 22.5 declared", () => {
