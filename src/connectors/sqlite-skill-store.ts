@@ -20,6 +20,7 @@ import {
   StorageConflictError,
 } from "../errors.js";
 import { extractStatusFromBody, stampApprovalToken } from "../approval.js";
+import { parse as parseSkillSource } from "../parser.js";
 
 const CONTRACT_VERSION = "1.0.0";
 
@@ -535,6 +536,15 @@ export class SqliteSkillStore implements SkillStore {
     };
     if (typeof row["description"] === "string") meta.description = row["description"];
     if (typeof row["status_changed_at"] === "number") meta.status_changed_at = row["status_changed_at"];
+    // v0.18.0 — populate vars + returns from parsed source for the
+    // dashboard composition contract display + adopter introspection.
+    // Mirrors FilesystemSkillStore.buildMeta(); source is selected by
+    // skillRow() so no extra DB roundtrip.
+    if (typeof row["source"] === "string") {
+      const parsed = parseSkillSource(row["source"]);
+      if (parsed.vars.length > 0) meta.vars = parsed.vars.map((v) => v.name);
+      if (parsed.returns.length > 0) meta.returns = parsed.returns;
+    }
     if (typeof row["metadata_json"] === "string") {
       const parsed = safeParseJson(row["metadata_json"]);
       if (parsed !== null && typeof parsed === "object") {

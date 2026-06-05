@@ -1,5 +1,74 @@
 # Changelog
 
+## 0.18.0 — 2026-06-05 — Dashboard composition contract expansion + SkillMeta surface completion
+
+Reviewer-friendly approval UX. When a human opens a composing skill in
+the dashboard to review-and-approve, the body shows
+`execute_skill(skill_name="get-weather") -> R` and `inline(skill="voice-rules")`
+references — but to understand "the whole picture" they previously had
+to leave the page and pull up each called skill manually. v0.18.0
+collapses that into an inline expansion: click the call site, see the
+called skill's contract (Description + Vars + Returns) without leaving
+the page.
+
+### A. `SkillMeta` surface completion (prerequisite)
+
+Closes a long-standing gap: `SkillMeta` declared `vars?: string[]`
+since v0.7, but `FilesystemSkillStore.buildMeta()` only populated
+`description`. The dashboard composition expansion needs the full
+contract (description + vars + returns) — and now everyone calling
+`skill_metadata` MCP gets it.
+
+- Added `returns?: string[]` to `SkillMeta` interface (matches the
+  existing `vars?: string[]` shape)
+- `FilesystemSkillStore.buildMeta()` now parses the source and
+  populates `vars` + `returns` from `parsed.vars` / `parsed.returns`
+- `SqliteSkillStore.metadataRowToMeta()` mirrors — source is already
+  selected by `skillRow()`, no extra DB roundtrip
+- `skill_metadata` MCP tool surfaces them naturally (no MCP-server
+  change needed; the interface returns SkillMeta as-is)
+
+### B. Dashboard composition expansion (the headline)
+
+New "Composes" section in the skill detail view, between Source and
+Triggers. Client-side regex over the skill source finds every
+`execute_skill(skill_name="X")` and `inline(skill="X")` reference,
+deduplicated by `(kind, name)`. Each ref renders collapsed as
+`→ execute_skill: get-weather (runtime invocation)` or
+`→ inline: voice-rules (compile-time data inline)`.
+
+Click to expand — lazy-loads the called skill's metadata via
+`skill_metadata` MCP and renders a contract panel:
+- `# Description:` — intent
+- `# Vars:` — inputs (the parameter list)
+- `# Returns:` — outputs (the return signature)
+- Author badge + "Open in detail view →" drill link
+
+For `inline` (data-only): also fetches the body via `skill_read` and
+renders it under a "Inlined body (bakes at compile)" collapsible —
+since the data skill's body literally lands in the host's compiled
+artifact at compile time, the reviewer sees what gets baked.
+
+Lazy-load is cached inline (re-collapsing preserves the rendered
+panel; re-opening is free). Recursive — each expanded panel can
+itself expand its compositions.
+
+Implementation: vanilla JS + native `<details>` disclosure, no
+state framework. Toggle event listener via capture-phase document
+delegation since `toggle` doesn't bubble natively.
+
+### Tests
+
+7 new tests in `v0.18.0-skillmeta-surface.test.ts` covering: description
+populated, vars populated (with parser quirk note for bare names in
+mixed lists), returns populated, all-three together, omitted-when-absent,
+`query()` per-skill surface. Dashboard SPA logic verified via build +
+e2e probe (visual smoke-check on the served app).
+
+1671 tests total. Narrow-core LOC ceiling unchanged at 10500.
+
+---
+
 ## 0.17.5 — 2026-06-04 — Returns at top level of R + reserved-name guard + lint catches top-level pattern
 
 Closes Perry's `0cd2bd5a` lint-question finding, which surfaced a

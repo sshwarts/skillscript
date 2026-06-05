@@ -15,6 +15,7 @@ import type {
 import { VALID_SKILL_STATUSES, isSkillStatus } from "./types.js";
 import { SkillNotFoundError, VersionNotFoundError, StorageConflictError } from "../errors.js";
 import { stampApprovalToken, extractStatusFromBody } from "../approval.js";
+import { parse } from "../parser.js";
 
 const CONTRACT_VERSION = "1.0.0";
 
@@ -394,6 +395,14 @@ export class FilesystemSkillStore implements SkillStore {
     // skill stored before author capture landed — meta.author stays
     // undefined rather than guessing).
     const author = await this.readFirstVersionAuthor(name);
+    // v0.18.0 — populate vars + returns from parsed source so the
+    // contract surface (what the skill takes + gives back) is visible
+    // via skill_metadata for dashboard composition expansion + adopter
+    // introspection. Pre-v0.18.0, only description was populated even
+    // though the SkillMeta interface declared the broader surface.
+    const parsed = parse(source);
+    const vars = parsed.vars.map((v) => v.name);
+    const returns = parsed.returns;
     const meta: SkillMeta = {
       name,
       version,
@@ -403,6 +412,8 @@ export class FilesystemSkillStore implements SkillStore {
       updated_at,
     };
     if (description !== null) meta.description = description;
+    if (vars.length > 0) meta.vars = vars;
+    if (returns.length > 0) meta.returns = returns;
     if (author !== null) meta.author = author;
     return meta;
   }

@@ -185,6 +185,7 @@ async function renderSkillDetail(name) {
       ? `<div class="remediation" style="margin-top: 12px;"><strong>Approval token stale.</strong> ${esc(approval.reason ?? "")}. Re-transition to Approved to stamp a fresh token.</div>`
       : "";
     return `
+      <div style="margin-bottom: 8px;"><a href="#" onclick="event.preventDefault(); window.history.back();" style="font-size: 0.9em; color: #6c757d;">← Back</a></div>
       <h2>Skill: ${esc(metadata.name)} <span class="badge ${esc(metadata.status)}">${esc(metadata.status)}</span>${approvalBadge}</h2>
 
       <section>
@@ -204,6 +205,8 @@ async function renderSkillDetail(name) {
         <h2>Source</h2>
         ${source ? `<pre>${esc(source)}</pre>` : `<div class="empty">Source not available.</div>`}
       </section>
+
+      ${renderComposesSection(name, source)}
 
       <section>
         <h2>Triggers (${triggersForSkill.length})</h2>
@@ -370,7 +373,7 @@ function renderConnectors() {
     <section>
       <h3>Activity</h3>
       ${activity.length === 0
-        ? `<div class="empty">No connector activity yet. Run a skill that uses <code>$</code>/<code>~</code>/<code>&gt;</code> ops.</div>`
+        ? `<div class="empty">No connector activity yet. Run a skill that uses <code>$ &lt;connector&gt;.&lt;tool&gt;</code> ops.</div>`
         : `<table>
             <thead><tr><th>Connector</th><th>Calls</th><th>Errors</th><th>p50</th><th>p95</th><th>p99</th><th>Last success</th></tr></thead>
             <tbody>
@@ -426,6 +429,128 @@ window.setTriggerEnabled = async function (id, enabled) {
     alert(`Trigger state update failed: ${err.message}`);
   }
 };
+
+// ─── Composes section (v0.18.0) ─────────────────────────────────────────────
+// Surfaces every skill this one composes via `execute_skill(...)` or
+// `inline(...)`. Each ref renders collapsed; click expands to fetch the
+// called skill's metadata and render its contract (Description + Vars +
+// Returns) — the function-signature view that lets a reviewer see "the
+// whole picture" without leaving the page.
+
+function extractCompositionRefs(source) {
+  if (!source) return [];
+  const refs = [];
+  // execute_skill(skill_name="X") or execute_skill(name="X"). Both single
+  // and double quotes; back-compat alias accepted.
+  const executeRe = /execute_skill\s*\(\s*(?:skill_name|name)\s*=\s*["']([^"']+)["']/g;
+  let m;
+  while ((m = executeRe.exec(source)) !== null) {
+    refs.push({ kind: "execute_skill", name: m[1] });
+  }
+  // inline(skill="X")
+  const inlineRe = /inline\s*\(\s*skill\s*=\s*["']([^"']+)["']/g;
+  while ((m = inlineRe.exec(source)) !== null) {
+    refs.push({ kind: "inline", name: m[1] });
+  }
+  // Dedup: one entry per (kind, name) — multiple call sites for the same
+  // skill render as a single row.
+  const seen = new Set();
+  return refs.filter((r) => {
+    const key = `${r.kind}:${r.name}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
+function renderComposesSection(currentName, source) {
+  const refs = extractCompositionRefs(source);
+  if (refs.length === 0) {
+    return `<section><h2>Composes</h2><div class="empty">This skill doesn't compose other skills (no <code>execute_skill</code> or <code>inline</code> refs).</div></section>`;
+  }
+  return `
+    <section>
+      <h2>Composes (${refs.length})</h2>
+      <div style="display: flex; flex-direction: column; gap: 6px;">
+        ${refs.map((r) => `
+          <details data-compose-ref="${esc(r.kind)}:${esc(r.name)}" data-parent="${esc(currentName)}">
+            <summary style="cursor: pointer; padding: 8px 12px; background: #f6f8fa; border-radius: 4px; font-family: monospace;">
+              <span class="badge ${r.kind === "execute_skill" ? "ok" : "info"}" style="margin-right: 8px;">${esc(r.kind)}</span>
+              <strong>${esc(r.name)}</strong>
+              <span style="color: #6c757d; margin-left: 8px; font-size: 0.85em;">${r.kind === "execute_skill" ? "(runtime invocation)" : "(compile-time data inline)"}</span>
+            </summary>
+            <div class="compose-panel" style="padding: 12px 16px; border-left: 2px solid #e6e8eb; margin-left: 12px; margin-top: 8px;">
+              <div class="empty">Loading contract…</div>
+            </div>
+          </details>
+        `).join("")}
+      </div>
+    </section>
+  `;
+}
+
+// Lazy-loads the called skill's contract on first expansion. Cached
+// inline (re-collapsed details preserve their innerHTML) so subsequent
+// opens are free.
+async function loadComposeContract(detailsEl) {
+  const panel = detailsEl.querySelector(".compose-panel");
+  if (!panel || panel.dataset.loaded === "true") return;
+  panel.dataset.loaded = "true";
+  const [kind, name] = detailsEl.dataset.composeRef.split(":");
+  try {
+    const meta = await callTool("skill_metadata", { name });
+    const m = meta.metadata;
+    // For inline (data-only), also fetch the body since it bakes at
+    // compile time — reviewer sees what literally lands in the
+    // compiled artifact.
+    let inlinedBody = null;
+    if (kind === "inline") {
+      const readResult = await callTool("skill_read", { name }).catch(() => null);
+      inlinedBody = readResult?.source ?? null;
+    }
+    panel.innerHTML = renderContractPanel(name, kind, m, inlinedBody);
+  } catch (err) {
+    panel.innerHTML = `<div class="remediation"><strong>Failed to load:</strong> ${esc(err.message)}</div>`;
+  }
+}
+
+function renderContractPanel(name, kind, meta, inlinedBody) {
+  const desc = meta.description
+    ? `<div style="margin-bottom: 12px;">${esc(meta.description)}</div>`
+    : `<div class="empty" style="margin-bottom: 12px;">(no <code># Description:</code> declared)</div>`;
+  const vars = Array.isArray(meta.vars) && meta.vars.length > 0
+    ? `<dl class="kv"><dt>Takes (<code># Vars:</code>)</dt><dd>${meta.vars.map((v) => `<code>${esc(v)}</code>`).join(", ")}</dd></dl>`
+    : `<dl class="kv"><dt>Takes</dt><dd><span class="empty">(no declared <code># Vars:</code>)</span></dd></dl>`;
+  const returns = Array.isArray(meta.returns) && meta.returns.length > 0
+    ? `<dl class="kv"><dt>Returns (<code># Returns:</code>)</dt><dd>${meta.returns.map((r) => `<code>${esc(r)}</code>`).join(", ")}</dd></dl>`
+    : `<dl class="kv"><dt>Returns</dt><dd><span class="empty">(no declared <code># Returns:</code> — caller sees <code>outputs</code> + <code>transcript</code> only)</span></dd></dl>`;
+  const authorBadge = meta.author ? ` <span style="color: #6c757d; font-size: 0.85em;">by ${esc(meta.author)}</span>` : "";
+  const drillLink = `<a href="#skill/${encodeURIComponent(name)}" style="font-size: 0.85em;">Open in detail view →</a>`;
+  const inlineBodyBlock = inlinedBody !== null
+    ? `<details style="margin-top: 12px;"><summary style="cursor: pointer; color: #6c757d; font-size: 0.85em;">Inlined body (bakes at compile)</summary><pre style="margin-top: 8px; font-size: 12px;">${esc(inlinedBody)}</pre></details>`
+    : "";
+  return `
+    <div style="font-size: 0.95em;">
+      <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px;">
+        <strong>${esc(name)}</strong>${authorBadge}
+        ${drillLink}
+      </div>
+      ${desc}
+      ${vars}
+      ${returns}
+      ${inlineBodyBlock}
+    </div>
+  `;
+}
+
+// Delegate the toggle event so dynamically-rendered <details> elements
+// in the Composes section trigger the lazy-load. Native `toggle` event
+// doesn't bubble, so listen via capture phase on the document.
+document.addEventListener("toggle", (e) => {
+  if (e.target.tagName === "DETAILS" && e.target.open && e.target.dataset.composeRef) {
+    loadComposeContract(e.target);
+  }
+}, true);
 
 // ─── Routing ────────────────────────────────────────────────────────────────
 

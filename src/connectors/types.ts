@@ -237,6 +237,15 @@ export interface SkillMeta {
   status: SkillStatus;
   description?: string;
   vars?: string[];
+  /**
+   * v0.18.0 — declared export surface from `# Returns: X, Y, Z` header.
+   * The output-side mirror of `vars` (input surface). Empty array when
+   * the skill has no `# Returns:` header declared (default — caller
+   * sees only `outputs`/`transcript`/execution metadata, no exports
+   * from `final_vars`). Surfaces through `skill_metadata` MCP for
+   * dashboard contract display + adopter introspection.
+   */
+  returns?: string[];
   requires?: string[];
   triggers?: Array<{ source: string; name: string; agent_id?: string }>;
   outputs?: string[];
