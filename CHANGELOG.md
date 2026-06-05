@@ -1,5 +1,59 @@
 # Changelog
 
+## 0.18.3 — 2026-06-05 — AgentConnector docs catchup for substrate-author adoption
+
+Docs-only ring. The v0.18.1 declarative-wiring symmetry and v0.18.2
+contract robustness landed without updates to the adopter-facing
+surfaces; substrate-authors reading the playbook saw stale information
+about the wake-shape, no `agent@session` convention, and no
+graceful-degradation rule. This ring closes that gap so the adopter
+walking up to v0.18.x sees a coherent picture across configuration,
+contract, playbook, and worked example.
+
+### What changed
+
+- **`docs/configuration.md`** — substrate slot table covers
+  `agent_connector` (short-form `"noop"`, per-type config row,
+  null-explicit example). Programmatic-opts precedence section names
+  the four slots symmetrically. Custom-form section shows
+  AgentConnector alongside SkillStore.
+- **`docs/connector-contract-reference.md`** — AgentConnector section
+  documents:
+  - `DeliveryReceipt.session_id?` field
+  - New `WakeOpts` + `WakeReceipt` subsection with `woken: boolean`
+    required + `session_id?` echo
+  - `agent@session` targeting convention with Form A (composite in
+    `agent_id`) + Form B (structured `WakeOpts.session_id`)
+  - Graceful-degradation table distinguishing capability-gap
+    (degrade) from operational-fault (throw)
+  - Implementation-checklist item 3 (`wake`) updated for degradation
+    + session honoring
+- **`docs/adopter-playbook.md`** — new "Wiring the AgentConnector"
+  section: two wiring paths (programmatic + declarative),
+  precedence rules, worked example pointer, three copy-when-forking
+  patterns (`agent@session` opaque composite, graceful wake
+  degradation, session echo on receipts), fork-vs-write-fresh
+  guidance.
+- **`examples/connectors/HttpWebhookAgentConnector/README.md`** —
+  `wake_url` config field updated for degradation behavior,
+  `DeliveryReceipt` inbound shape includes `session_id`, new
+  "Wake — capability gap vs. operational fault" table, new
+  "`agent@session` targeting" section with cross-link to the
+  contract reference.
+
+No code changes; package-shipped docs (`files` array) auto-include
+the updates on next publish.
+
+### Why a docs-only ring
+
+The contract+impl are done. The block was discoverability: substrate-
+author writing an AgentConnector against v0.18.2 without updated
+adopter docs would either miss the new requirements or have to read
+the diff. Per Phase-1-briefing-scope discipline: docs are part of the
+adoption-readiness atom, not a follow-up.
+
+---
+
 ## 0.18.2 — 2026-06-05 — AgentConnector contract robustness: session-granular targeting + graceful wake degradation
 
 Closes Perry's two requirements on the AgentConnector contract before

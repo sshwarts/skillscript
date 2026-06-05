@@ -4,7 +4,7 @@ How to configure a skillscript-runtime deployment.
 
 The single config file is **`~/.skillscript/connectors.json`** (or any path passed via `--connectors`). It has two top-level concerns:
 
-1. **`substrate`** — which `SkillStore`, `DataStore`, and `LocalModel` the runtime hosts (MCP server + web dashboard) use.
+1. **`substrate`** — which `SkillStore`, `DataStore`, `LocalModel`, and `AgentConnector` the runtime hosts (MCP server + web dashboard) use.
 2. **Named MCP connector instances** — `youtrack`, `github`, etc. — invoked via `$ <name>` in skill source.
 
 The runtime loads `connectors.json` at startup. Missing file → graceful empty config (substrate defaults to filesystem skills + conditional sqlite memories; no MCP connectors). Malformed JSON or unknown fields → structured errors surfaced at bootstrap.
@@ -123,12 +123,13 @@ A typical out-of-the-box `~/.skillscript/connectors.json`:
   "substrate": {
     "skill_store": "filesystem",
     "data_store": "sqlite",
-    "local_model": null
+    "local_model": null,
+    "agent_connector": null
   }
 }
 ```
 
-Equivalent to omitting the file entirely — these are the base config defaults.
+Equivalent to omitting the file entirely — these are the base config defaults. `agent_connector: null` falls back to the silent `NoOpAgentConnector` — skills with `# Output: agent: X` complete cleanly with a stderr warning; replace with `"noop"` for the same behavior stated explicitly, or with a `"custom"` entry to wire an adopter impl.
 
 To switch skills storage to SQLite:
 
@@ -165,14 +166,16 @@ Valid short-form values per slot:
 | `skill_store` | `"filesystem"` \| `"sqlite"` |
 | `data_store` | `"sqlite"` |
 | `local_model` | (none — `"ollama"` requires the object form with `defaultModelTag`; see below) |
+| `agent_connector` | `"noop"` (explicit silent fallback; same behavior as `null`) |
 
 ### Null — explicit "no substrate"
 
 ```json
-"local_model": null
+"local_model": null,
+"agent_connector": null
 ```
 
-The runtime doesn't register a connector for this slot. Useful for explicitly disabling LocalModel when nothing local is available.
+The runtime doesn't register a real connector for this slot. `local_model: null` leaves `$ llm` un-wired (skills calling it error at execute time). `agent_connector: null` falls back to `NoOpAgentConnector` — `# Output: agent:` declarations complete with a stderr warning instead of throwing, so a runtime can start without any agent harness wired.
 
 ### Object form — override defaults
 
@@ -193,6 +196,7 @@ The runtime doesn't register a connector for this slot. Useful for explicitly di
 | `sqlite` (skill_store) | `dbPath` (default: `$SKILLSCRIPT_HOME/skills/skills.db`) |
 | `sqlite` (data_store) | `dbPath` (default: `$SKILLSCRIPT_HOME/data.db`; `DATA_DB` env overrides) |
 | `ollama` (local_model) | `baseUrl` (default: `OLLAMA_BASE_URL` env or `http://localhost:11434`), **`defaultModelTag` (required — e.g., `"gemma2:9b"`, `"llama3.1:8b"`)** |
+| `noop` (agent_connector) | none — silent fallback (warn + resolve). Real adopter impls use the `custom` form below. |
 
 > **`SqliteDataStore` feature surface.** The bundled `sqlite` data_store is a deliberately minimal reference implementation: `supports_writes` + `supports_tag_filter` are true; `supports_semantic`, `supports_pinning`, `supports_decay_model`, `supports_thread_status_filter` are all false. Rich features (semantic retrieval, pinning, decay scoring, thread-status workflow) come from substrate impls — adopters fork `examples/connectors/DataStoreTemplate/` and wire their backing system (memory broker, vector DB, AMP, etc.). The bundled impl exists so the runtime works out-of-box; adopters with richer query semantics write their own.
 
@@ -218,17 +222,28 @@ Pin the model tag explicitly — must be a tag your Ollama instance has pulled (
 ```json
 "skill_store": {
   "type": "custom",
-  "module": "./my-amp-skill-store.js",
-  "export": "AmpSkillStore",
+  "module": "./my-skill-store.js",
+  "export": "MySkillStore",
   "config": {
     "vault": "team"
   }
 }
 ```
 
-References an adopter-written class implementing the relevant contract. `module` is the path to the JS file; `export` is the named export (defaults to `default`); `config` is passed to the constructor.
+References an adopter-written class implementing the relevant contract. `module` is the path to the JS file; `export` is the named export (defaults to `default`); `config` is passed to the constructor. The same shape works for any substrate slot:
 
-> **Limitation**: sync `bootstrap()` can't dynamic-import. Custom-via-connectors.json surfaces a clear error and falls back to the default. Adopters wanting custom impls today write a programmatic bootstrap that calls `registry.registerSkillStore("primary", new AmpSkillStore(...))` directly — same pattern as the runtime's reference `bootstrap()`. Async-bootstrap with dynamic-import support is planned.
+```json
+"agent_connector": {
+  "type": "custom",
+  "module": "./my-agent-connector.js",
+  "export": "MyHttpWebhookAgentConnector",
+  "config": {
+    "endpoint": "${AGENT_ENDPOINT}"
+  }
+}
+```
+
+> **Limitation**: sync `bootstrap()` can't dynamic-import. Custom-via-connectors.json surfaces a clear error and falls back to the default. Adopters wanting custom impls today write a programmatic bootstrap that calls `registry.registerSkillStore("primary", new MySkillStore(...))` (or `registry.registerAgentConnector(...)`) directly — same pattern as the runtime's reference `bootstrap()`. Async-bootstrap with dynamic-import support is planned.
 
 ---
 
@@ -236,9 +251,9 @@ References an adopter-written class implementing the relevant contract. `module`
 
 When multiple config sources speak:
 
-1. **Programmatic opts** (`opts.skillStore` passed to `bootstrap()`) — explicit, highest priority
+1. **Programmatic opts** (`opts.skillStore` / `opts.dataStore` / `opts.localModel` / `opts.agentConnector` passed to `bootstrap()`) — explicit, highest priority
 2. **`connectors.json` substrate section** — declarative, deployment-durable
-3. **Built-in default** — fallback (filesystem skill_store; conditional sqlite data_store; no local_model)
+3. **Built-in default** — fallback (filesystem skill_store; conditional sqlite data_store; no local_model; NoOpAgentConnector)
 
 If two configs disagree, the higher-priority one wins; lower-priority is ignored without error.
 

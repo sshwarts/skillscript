@@ -230,6 +230,114 @@ SKILLSCRIPT_HOME=/path/to/adopter skillfile dashboard --config /path/to/adopter/
 
 Each instance reads its own config; ports/paths/db files don't collide.
 
+## Wiring the AgentConnector
+
+`AgentConnector` is the substrate-neutral delivery surface for `# Output: agent: X` / `# Output: template: X` lifecycle hooks and `notify()` / `exchange()` ops. The runtime calls into the contract; your impl decides where the payload lands (webhook, tmux session, file drop, IPC pipe, Slack thread, your own agent harness, etc.).
+
+The full contract surface — methods, payload shapes, receipt shapes, the `agent@session` targeting convention, the graceful-degradation rule — lives in [Connector Contract Reference](connector-contract-reference.md) §AgentConnector. This section covers the **wiring path** for adopters: how to bring an impl online so the runtime uses it.
+
+### Two wiring paths
+
+Same shape as the other substrate slots — programmatic (recommended for custom impls today) or declarative (`connectors.json`, restricted to bundled types).
+
+**(a) Programmatic — for adopter-written impls.** Construct the connector in your bootstrap and pass it via `BootstrapOpts.agentConnector`:
+
+```typescript
+import { bootstrap } from "skillscript-runtime";
+import { MyAgentConnector } from "./my-agent-connector.js";
+
+const { registry, scheduler, server } = await bootstrap({
+  agentConnector: new MyAgentConnector({
+    endpoint: process.env["MY_AGENT_ENDPOINT"],
+    api_key: process.env["MY_AGENT_API_KEY"],
+  }),
+});
+```
+
+`bootstrap()` calls `registry.registerAgentConnector("primary", ...)` for you. `health_check()` fires during registration — wiring failures throw at boot, not at first delivery.
+
+**(b) Declarative `connectors.json`** — for bundled types and the (deferred) custom-via-dynamic-import path:
+
+```json
+{
+  "substrate": {
+    "agent_connector": "noop"
+  }
+}
+```
+
+Bundled short-form values:
+
+| Value | Behavior |
+|---|---|
+| `null` (or omitted) | `NoOpAgentConnector` — silent fallback. `deliver()` / `wake()` log + resolve; `# Output: agent:` declarations complete with a stderr warning. Lets a runtime start with no harness wired. |
+| `"noop"` | Same as `null` but explicitly stated. |
+| Object with `"type": "custom"` | Adopter impl resolved by dynamic-import (deferred — surfaces a clear error today; use programmatic path). |
+
+For full configuration shape, see [Configuration](configuration.md) §"The substrate section."
+
+### Precedence
+
+Same as other substrate slots:
+
+1. **Programmatic** `BootstrapOpts.agentConnector` — explicit, highest priority.
+2. **Declarative** `connectors.json` `substrate.agent_connector` — deployment-durable.
+3. **Built-in default** — `NoOpAgentConnector`. Skills with `# Output: agent:` fire warnings, not errors.
+
+The NoOp fallback is the design choice that makes "runtime works out of box without any AgentConnector wiring" hold. Adopters who want strictness should explicitly wire their connector and let `health_check()` throw if it can't start.
+
+### Worked example
+
+The canonical bundled example is `examples/connectors/HttpWebhookAgentConnector/` — a complete `AgentConnector` impl against an HTTP-webhook substrate. It demonstrates:
+
+- Per-agent URL routing (`HTTP_WEBHOOK_AGENTS` JSON env)
+- Optional `wake_url` per agent — present means wake-capable, absent means degrade-on-wake
+- Bearer + HMAC auth (combinable)
+- Tolerant receipt synthesis (substrate returns substrate-shaped JSON; connector translates to canonical `DeliveryReceipt`)
+- Tests covering the deliver / wake / health-check / request-response surface
+
+Three patterns to copy when forking it for your substrate:
+
+**Pattern 1 — `agent@session` opaque composite.** Every messaging substrate needs either bare-identity OR specific-live-session addressing. The contract keeps `agent_id` opaque; sessions ride as `"perry@kitchen-terminal"` or via `WakeOpts.session_id`. Substrates that care decompose; substrates that don't ignore. Pick one form for your fork and document it in your impl's README:
+
+```typescript
+async wake(agent_id: string, opts?: WakeOpts): Promise<WakeReceipt> {
+  // Form A — composite in agent_id
+  const [agent, embeddedSession] = agent_id.split("@");
+  // Form B — opts.session_id wins if both supplied
+  const session = opts?.session_id ?? embeddedSession;
+  // ... route to (agent, session)
+  return { woken_at: Date.now(), woken: true, ...(session ? { session_id: session } : {}) };
+}
+```
+
+**Pattern 2 — graceful degradation on wake.** `wake()` must not throw because your substrate lacks interrupt capability. Distinguish capability-gap (degrade) from operational-fault (throw):
+
+```typescript
+async wake(agent_id: string, _opts?: WakeOpts): Promise<WakeReceipt> {
+  const cfg = this.agents[agent_id];
+  if (!cfg) throw new Error(`agent not configured: ${agent_id}`);  // operational fault
+  if (!cfg.wake_url) {
+    // capability gap — no interrupt channel for this agent — degrade
+    return { woken_at: Date.now(), woken: false };
+  }
+  const response = await fetch(cfg.wake_url, { ... });
+  if (!response.ok) throw new DeliveryFailedError(...);  // operational fault
+  return { woken_at: Date.now(), woken: true };
+}
+```
+
+Callers reading `WakeReceipt.woken` distinguish "the substrate woke them" from "the substrate stored the payload for later" without needing per-substrate knowledge.
+
+**Pattern 3 — session echo on receipts.** When your substrate routes to a specific session, echo it back on `DeliveryReceipt.session_id` / `WakeReceipt.session_id`. Dashboards rendering "delivered to perry@kitchen-terminal" rather than just "delivered to perry" depend on this.
+
+### When to fork vs. when to write fresh
+
+- **Fork `HttpWebhookAgentConnector`** when your substrate is HTTP-shaped and your changes are: tweaked auth (OAuth, mTLS), retry policy, different routing model. Most production deployments end up here.
+- **Write fresh** when your substrate is fundamentally non-HTTP (tmux, file drop, gRPC, websocket-push). Implement the five required methods (`list_agents`, `deliver`, `wake`, `health_check`, `request_response`) + optional `agent_status`. Use `NoOpAgentConnector` as the minimal-shape reference.
+
+In either case: write tests against the contract methods (the bundled example's `tests/HttpWebhookAgentConnector.test.ts` is a useful template), wire via `BootstrapOpts.agentConnector`, and let `health_check()` enforce the "fail-at-boot, not at first delivery" property.
+
 ## Authoring posture — who owns the skills you write
 
 Every skill stored in a `SkillStore` carries a `SkillMeta.author` field captured at first-write. The author is then load-bearing at dispatch time: the runtime threads it into `ctx.agentId` so identity-scoped substrates (memory stores, multi-tenant DBs) read and write under that scope.

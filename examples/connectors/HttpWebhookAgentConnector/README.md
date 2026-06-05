@@ -46,7 +46,7 @@ Three env vars; see `.env.example`.
 ```
 
 - `url` (required) — POST destination for `deliver()` calls
-- `wake_url` (optional) — POST destination for `wake()` calls; throws if missing + skill calls `wake()`
+- `wake_url` (optional) — POST destination for `wake()` calls. When absent, `wake()` degrades gracefully: returns `WakeReceipt {woken: false}` instead of throwing. Distinguishes capability-gap (this agent has no interrupt channel) from operational fault (HTTP error), per the contract's graceful-degradation rule.
 - `status_url` (optional) — GET probe for `agent_status?()` + `health_check()`; skipped if missing
 
 `HTTP_WEBHOOK_TIMEOUT_MS` — total request duration (connect + send + receive + parse). Default `5000`.
@@ -105,6 +105,7 @@ Return JSON body matching canonical `DeliveryReceipt`:
 {
   "delivered_at": 1700000000005,
   "delivery_id": "your-substrate-id-optional",
+  "session_id": "kitchen-terminal-optional",
   "delivery_skipped": false
 }
 ```
@@ -113,6 +114,7 @@ Return JSON body matching canonical `DeliveryReceipt`:
 
 - `delivered_at` ← receiver's value, else `Date.now()`
 - `delivery_id` ← `delivery_id` / `id` / `ts` (first match)
+- `session_id` ← receiver's value if present (substrate-routed to a specific session)
 - `delivery_skipped` ← receiver's value if `true`
 
 Adopters with strict substrate shape can replace the `synthesizeReceipt()` helper. Bundled example is permissive.
@@ -123,6 +125,25 @@ Adopters with strict substrate shape can replace the `synthesizeReceipt()` helpe
 - **4xx** → throw `DeliveryFailedError(kind: "http_status")` — permanent failure
 - **5xx** → throw `DeliveryFailedError(kind: "http_status")` — transient (adopter with retry policy forks around this)
 - **Network error / timeout** → throw `DeliveryFailedError(kind: "network" | "timeout")`
+
+### Wake — capability gap vs. operational fault
+
+`wake()` distinguishes two failure modes per the contract's graceful-degradation rule:
+
+| Situation | `wake()` behavior | `WakeReceipt.woken` |
+|---|---|---|
+| `wake_url` configured for `agent_id`, POST returns 2xx | Send attention signal | `true` |
+| `wake_url` NOT configured for `agent_id` (capability gap — this substrate has no interrupt channel for this agent) | No-op, return receipt | `false` |
+| `agent_id` not configured at all (caller misconfiguration) | Throw `Error("agent not configured: ...")` | — |
+| `wake_url` configured but POST fails (operational fault) | Throw `DeliveryFailedError` | — |
+
+The capability-gap case (no `wake_url`) is a deliberate fork choice: passive substrates conform by degrading. Callers reading `WakeReceipt.woken` distinguish interrupted-them from delivered-only without needing per-substrate knowledge.
+
+### `agent@session` targeting
+
+`agent_id` is opaque to the connector at the wire level — whatever the skill passes flows through to the configured per-agent `url`. Substrates that track multiple live sessions per identity can address them via the `agent@session` composite (e.g., `"perry@kitchen-terminal"`) OR the structured `WakeOpts.session_id` form. The connector forwards the resolved `agent_id` in the POST body; the receiver decomposes if it cares. Echo the resolved session on `DeliveryReceipt.session_id` / `WakeReceipt.session_id` so dashboards can render "delivered to perry@kitchen-terminal" instead of just "delivered to perry."
+
+See [Connector Contract Reference](../../../docs/connector-contract-reference.md) §"agent@session targeting" + §"Graceful degradation on wake" for the contract-level rules.
 
 ---
 
@@ -254,6 +275,8 @@ If you fork this example into your codebase:
 - `request_response()` throws NotImplementedError (Q1 v0.10 deferred)
 - HMAC signing produces the correct `X-Signature` header value
 - Bearer auth sets the correct `Authorization` header
+- `wake()` degrades to `woken: false` when `wake_url` is unconfigured (graceful degradation)
+- `wake()` returns `woken: true` when the POST succeeds
 
 Run via `vitest run examples/connectors/HttpWebhookAgentConnector/tests/`.
 

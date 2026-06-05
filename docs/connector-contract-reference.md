@@ -1,6 +1,6 @@
 # Connector Contract Reference
 
-The substrate-neutral contracts skillscript-runtime exposes for adopters to wire their own substrate behind. This doc is the **canonical source of truth** for the AgentConnector contract as locked at v1.0 by the v0.9.6 audit (Perry's thread `b722bbf4`).
+The substrate-neutral contracts skillscript-runtime exposes for adopters to wire their own substrate behind. This doc is the **canonical source of truth** for the AgentConnector contract. The interface shape was locked at v1.0 by the v0.9.6 audit (thread `b722bbf4`); the wake/deliver receipt shapes carry post-lock refinements per the v0.18.2 session-targeting + graceful-degradation requirements.
 
 **Audience**: this doc is written for the agent that's implementing an adopter's AgentConnector — typically an LLM-class agent supervised by a human. If you're a human reading it directly, the same content applies; the prose is tightened for agent comprehension (literal field semantics, explicit precedence rules, worked examples).
 
@@ -8,7 +8,7 @@ Other contracts (McpConnector, SkillStore, DataStore, LocalModel) audit + lock i
 
 ---
 
-## AgentConnector — v1.0 contract (locked v0.9.6)
+## AgentConnector — v1.0 contract
 
 ### Purpose
 
@@ -81,13 +81,77 @@ interface DeliveryMeta {
 interface DeliveryReceipt {
   delivered_at: number;
   delivery_id?: string;
+  session_id?: string;
   delivery_skipped?: boolean;
 }
 ```
 
 - **`delivered_at`**: substrate-acknowledgement timestamp. When the substrate confirmed it accepted the delivery.
 - **`delivery_id`**: substrate-specific id for callers to correlate later.
+- **`session_id`**: the session that received the delivery. Set when the substrate routes to a specific session (e.g., per-terminal mailbox, per-tab webhook). Omitted when the substrate is agent-level only (Slack DM, email — no session concept) or when the substrate fans out / accepts without committing to a session. See *agent@session targeting* below.
 - **`delivery_skipped`**: adopter signals "accepted but not pushed to the agent" — offline, rate-limit drop, tmux session exists but agent hasn't read, etc. Distinct from outright failure (which throws). Runtime echoes this on the receipt record for dashboard observability.
+
+### WakeOpts + WakeReceipt
+
+```typescript
+interface WakeOpts {
+  context?: string;
+  when?: "immediate" | number;
+  session_id?: string;
+}
+
+interface WakeReceipt {
+  woken_at: number;
+  woken: boolean;
+  session_id?: string;
+}
+```
+
+- **`WakeOpts.context`**: optional preamble to prepend to the wake message.
+- **`WakeOpts.when`**: `"immediate"` (default) or a unix-ms timestamp for scheduled wake.
+- **`WakeOpts.session_id`**: structured session targeting. Alternative to embedding `agent@session` in the `agent_id` opaque string. Callers with the session already separated (e.g., a dashboard's per-session "wake this terminal" action) pass it here. When both forms are supplied, `opts.session_id` takes precedence over the embedded suffix.
+- **`WakeReceipt.woken_at`**: substrate's acknowledgement timestamp.
+- **`WakeReceipt.woken`** (required): honest signal of whether the substrate actually interrupted the agent. See *Graceful degradation on wake* below — this is the read every caller does to distinguish interrupted-them from delivered-only.
+- **`WakeReceipt.session_id`**: the session that received the wake (or delivery, if degraded). Set when the substrate knows; omit otherwise.
+
+### agent@session targeting
+
+`agent_id` is an opaque string. The substrate may treat it as:
+
+- A bare agent identifier (`alice`, an email address, a Slack `@user`, a Discord user ID).
+- A composite `agent@session` (e.g., `"perry@kitchen-terminal"`) when the substrate tracks multiple live sessions per identity.
+
+The substrate decomposes the composite if it cares; non-session substrates ignore the suffix or treat the whole string as the address. This keeps the contract substrate-neutral while preserving session-granular routing — every messaging substrate either addresses a bare identity OR a specific live session, and the opaque-composite form covers both without locking adopters into a particular session model.
+
+**Two forms, one wire**:
+
+```typescript
+// Form A — composite in agent_id (works for deliver + wake)
+await conn.wake("perry@kitchen-terminal");
+
+// Form B — structured WakeOpts.session_id (wake only)
+await conn.wake("perry", { session_id: "kitchen-terminal" });
+```
+
+Substrates that care about sessions read both — `opts.session_id` wins if both are set. Substrates that don't care ignore both. Callers that already have agent + session as separate variables prefer Form B; callers passing an opaque user-supplied address prefer Form A.
+
+`DeliveryReceipt.session_id` and `WakeReceipt.session_id` echo the resolved session back to the caller. Useful for dashboards rendering "delivered to perry@kitchen-terminal" rather than just "delivered to perry."
+
+### Graceful degradation on wake
+
+Not every substrate can interrupt. A webhook receiver, a file-drop directory, or a store-only adopter has no attention channel — they can persist the payload but can't make the agent look at it now.
+
+**The rule**: `wake()` must not throw because the substrate lacks interrupt capability. Conform by degrading: deliver the payload as if it were a `deliver()` call, set `woken: false` on the receipt. Callers reading the receipt distinguish "the substrate woke the agent" from "the substrate stored the payload for later" without needing per-substrate knowledge.
+
+| Situation | `wake()` behavior | `WakeReceipt.woken` |
+|---|---|---|
+| Substrate has live interrupt channel + agent is reachable | Send interrupt | `true` |
+| Substrate has no interrupt channel (webhook, file-drop) | Deliver content, no interrupt | `false` |
+| Substrate has interrupt channel but agent unreachable / offline | Best-effort deliver, no interrupt | `false` |
+| Caller misconfiguration (unknown `agent_id`, missing required config) | Throw `DeliveryFailedError` | — |
+| Substrate fault (network, auth) | Throw | — |
+
+The distinction `wake-capability` vs `network-fault` matters. The former is structural (this substrate fundamentally can't wake) and degrades silently. The latter is operational (the substrate could wake but something broke) and throws. Adopters writing connectors should keep this distinction explicit — the bundled `HttpWebhookAgentConnector` returns `woken: false` when `wake_url` is unconfigured (capability gap, fixed at config time) but throws on actual HTTP failure (operational fault, surfaces to caller).
 
 ---
 
@@ -129,7 +193,7 @@ Implementation checklist:
 
 2. **Implement `deliver(agent_id, payload)`** — serialize `payload` to your substrate's format. For HTTP: JSON body with `kind`, `content`/`prompt`, and `meta`. For tmux: serialize meta as a header line, write content via `tmux send-keys`. For file-drop: write a file under `<dir>/<dispatch_id>.{json,txt}`.
 
-3. **Implement `wake(agent_id, opts?)`** — substrate-specific "rouse the agent." Webhook: POST to a `/wake` endpoint. Tmux: send a wake-up sequence. Etc.
+3. **Implement `wake(agent_id, opts?)`** — substrate-specific "rouse the agent." Wake-capable substrates: send an attention signal (tmux: wake-up sequence; webhook with a `/wake` endpoint: POST it; push channel: send notification). Set `woken: true` on the receipt. Passive substrates (file-drop, store-only, webhook without `/wake`): degrade gracefully — deliver the content, return `woken: false`. NEVER throw because the substrate lacks interrupt capability. Honor `opts.session_id` if your substrate tracks sessions; otherwise ignore it. Echo the resolved session on `WakeReceipt.session_id` so dashboards can render it.
 
 4. **Implement `health_check()`** — return `true` if substrate is reachable + configured. Webhook: HEAD/OPTIONS your endpoint. Tmux: check the session exists. File-drop: check the directory is writable.
 
@@ -203,4 +267,4 @@ The shape-vs-semantics split is deliberate (see [[ARCHITECTURE INVARIANT 88df79c
 
 ---
 
-*This doc reflects the v0.9.6 AgentConnector lock + v0.13.8 storage-conventions addition; future contract changes update this file alongside the code.*
+*This doc reflects the v0.9.6 AgentConnector interface lock, v0.13.8 storage-conventions addition, and v0.18.2 receipt-shape refinements (woken-honesty + session targeting + graceful degradation). Future contract changes update this file alongside the code.*
