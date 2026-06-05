@@ -1,5 +1,65 @@
 # Changelog
 
+## 0.18.1 — 2026-06-05 — AgentConnector declarative-wiring symmetry
+
+Closes the long-standing asymmetry across the four substrate slots.
+Pre-v0.18.1, SkillStore / DataStore / LocalModel each had `connectors.json`
+substrate-section support, but AgentConnector was programmatic-only —
+the bootstrap.ts comment explicitly read "agent_connector → null
+(adopter wires explicitly)." v0.18.1 brings the slot to parity.
+
+### What landed
+
+- New `agent_connector?: SubstrateChoice | null` field in
+  `SubstrateConfig` (`connectors/config.ts`)
+- New `"noop"` built-in type — explicit declaration of the no-op
+  posture (equivalent to omitting the slot; the Registry's
+  `getAgentConnectorOrDefault` returns NoOpAgentConnector either way,
+  but `"noop"` makes the intent visible in `connectors.json`)
+- `"custom"` type accepted at parse time, errors at bootstrap with a
+  clear message pointing at the programmatic path (mirrors the
+  sync-bootstrap limitation on the other three slots)
+- New `agentConnector?: AgentConnector` field in `BootstrapOpts` +
+  `DefaultRegistryOpts` — programmatic surface for adopters supplying
+  an instance (matches the existing `skillStore?` / `dataStore?` /
+  `localModel?` symmetry)
+- `bootstrap()` precedence: programmatic opt > declarative substrate >
+  default unset (Registry NoOp fallback)
+- `bootstrap()` calls `registry.registerAgentConnector("primary", ...)`
+  with the resolved instance (async; health_check fires at registration
+  per existing contract)
+
+### Scaffold + adopter guidance
+
+`scaffold/connectors.json` adds `"agent_connector": null` with the same
+`_example_*` documentation pattern as the other slots. Examples show
+both the noop short-form and the custom object-form (with a comment
+linking to `examples/connectors/HttpWebhookAgentConnector` as a
+reference impl).
+
+### Tests
+
+11 new tests in `v0.18.1-agent-connector-wiring.test.ts` covering:
+parse of noop / custom / null forms, unknown-type rejection,
+short-form-custom rejection, BootstrapOpts wiring, substrate-config
+wiring, precedence (opts beats config), custom-via-config error
+pointing at programmatic path, fallback to NoOp when neither slot nor
+opt supplied.
+
+1682 tests total. Narrow-core LOC ceiling unchanged at 10500.
+
+### Adopter-side: substrate-mediated AgentConnector impl
+
+For adopters with a memory-store routing layer or shared agent
+inbox/wake substrate: implement the `AgentConnector` contract
+(`deliver` / `wake` / `list_agents` / `health_check` /
+`request_response`) mapping to the substrate's primitives, then wire
+via `bootstrap({ agentConnector: new MyAgentConnector(...) })`. See
+`examples/connectors/HttpWebhookAgentConnector` for the reference
+shape — 320 LOC, end-to-end working, with tests + README.
+
+---
+
 ## 0.18.0 — 2026-06-05 — Dashboard composition contract expansion + SkillMeta surface completion
 
 Reviewer-friendly approval UX. When a human opens a composing skill in

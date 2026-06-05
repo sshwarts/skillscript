@@ -41,6 +41,8 @@ import { McpServer } from "./mcp-server.js";
 import { parse } from "./parser.js";
 import { join } from "node:path";
 import type { SkillStore, DataStore, LocalModel } from "./connectors/types.js";
+import type { AgentConnector } from "./connectors/agent.js";
+import { NoOpAgentConnector } from "./connectors/agent-noop.js";
 
 export interface BootstrapOpts {
   skillsDir: string;
@@ -55,6 +57,17 @@ export interface BootstrapOpts {
   /** Optional LocalModel to register as `"default"`. v0.10 — base config is
    * null; adopters wire explicitly via `connectors.json` or this opt. */
   localModel?: LocalModel;
+  /**
+   * v0.18.1 — optional AgentConnector to register as `"primary"`. Mirrors
+   * the existing `skillStore` / `dataStore` / `localModel` opts shape;
+   * closes the declarative-wiring asymmetry where AgentConnector was
+   * programmatic-only (this opt + new `agent_connector` slot in
+   * `connectors.json` substrate config). Omit → `NoOpAgentConnector` is
+   * the silent default (existing behavior preserved). Adopters with a
+   * substrate-mediated agent surface (HttpWebhookAgentConnector,
+   * memory-store-backed adapter, etc.) supply an instance here.
+   */
+  agentConnector?: AgentConnector;
   /** Scheduler poll interval (default 30s). */
   pollIntervalSeconds?: number;
   /** Forwarded to scheduler/runtime. Default false. */
@@ -184,6 +197,14 @@ export interface DefaultRegistryOpts {
    * substrate config or by passing here.
    */
   localModel?: LocalModel;
+  /**
+   * v0.18.1 — optional AgentConnector to register as `"primary"`. When
+   * omitted, the Registry falls back to NoOpAgentConnector via
+   * `getAgentConnectorOrDefault`. Adopters wanting a substrate-mediated
+   * agent surface (memory-store-backed, webhook, etc.) supply an
+   * instance here.
+   */
+  agentConnector?: AgentConnector;
 }
 
 /**
@@ -216,6 +237,21 @@ export function defaultRegistry(opts: DefaultRegistryOpts): { registry: Registry
   // v0.10 — LocalModel default is null. Only register if explicitly provided.
   if (opts.localModel !== undefined) {
     registry.registerLocalModel("default", opts.localModel);
+  }
+
+  // v0.18.1 — AgentConnector. Default is unregistered → Registry falls
+  // back to NoOpAgentConnector via getAgentConnectorOrDefault on each
+  // call. Adopters supply an instance via opts.agentConnector
+  // (programmatic) or substrate.agent_connector in connectors.json
+  // (declarative — buildSubstrateInstances resolves it into this opt).
+  if (opts.agentConnector !== undefined) {
+    // registerAgentConnector is async (runs health_check). Fire and
+    // forget within defaultRegistry — the Registry's contract surfaces
+    // failures via the returned promise; defaultRegistry itself is sync.
+    // For health-check-throwing semantics at boot, callers using the
+    // declarative path should await `registerAgentConnector` directly
+    // post-bootstrap if they need that ordering.
+    void registry.registerAgentConnector("primary", opts.agentConnector);
   }
 
   // v0.7.2 — auto-wire bridge connectors when their substrate exists.
@@ -297,12 +333,16 @@ export function bootstrap(opts: BootstrapOpts): BootstrapResult {
   const skillStoreToUse = opts.skillStore ?? substrateResult.skillStore;
   const dataStoreToUse = opts.dataStore ?? substrateResult.dataStore;
   const localModelToUse = opts.localModel ?? substrateResult.localModel;
+  // v0.18.1 — agentConnector follows the same precedence: programmatic
+  // opt wins over substrate config wins over Registry default (NoOp).
+  const agentConnectorToUse = opts.agentConnector ?? substrateResult.agentConnector;
 
   const { registry, skillStore } = defaultRegistry({
     ...opts,
     ...(skillStoreToUse !== undefined ? { skillStore: skillStoreToUse } : {}),
     ...(dataStoreToUse !== undefined ? { dataStore: dataStoreToUse } : {}),
     ...(localModelToUse !== undefined ? { localModel: localModelToUse } : {}),
+    ...(agentConnectorToUse !== undefined ? { agentConnector: agentConnectorToUse } : {}),
   });
   const traceStore = new FilesystemTraceStore(opts.traceDir);
   const enableUnsafeShell = opts.enableUnsafeShell ?? false;
@@ -406,9 +446,9 @@ export function bootstrap(opts: BootstrapOpts): BootstrapResult {
 function buildSubstrateInstances(
   substrate: SubstrateConfig | undefined,
   opts: BootstrapOpts,
-): { skillStore?: SkillStore; dataStore?: DataStore; localModel?: LocalModel; errors: string[] } {
+): { skillStore?: SkillStore; dataStore?: DataStore; localModel?: LocalModel; agentConnector?: AgentConnector; errors: string[] } {
   const errors: string[] = [];
-  const result: { skillStore?: SkillStore; dataStore?: DataStore; localModel?: LocalModel; errors: string[] } = { errors };
+  const result: { skillStore?: SkillStore; dataStore?: DataStore; localModel?: LocalModel; agentConnector?: AgentConnector; errors: string[] } = { errors };
   if (substrate === undefined) return result;
 
   // skill_store
@@ -429,7 +469,29 @@ function buildSubstrateInstances(
     if (built.error !== undefined) errors.push(built.error);
     else if (built.instance !== undefined) result.localModel = built.instance;
   }
+  // v0.18.1 — agent_connector (null → explicit "no AgentConnector",
+  // which is also the silent default; NoOpAgentConnector fallback fires
+  // automatically via Registry.getAgentConnectorOrDefault).
+  if (substrate.agent_connector !== undefined && substrate.agent_connector !== null) {
+    const built = buildAgentConnectorFromChoice(substrate.agent_connector);
+    if (built.error !== undefined) errors.push(built.error);
+    else if (built.instance !== undefined) result.agentConnector = built.instance;
+  }
   return result;
+}
+
+function buildAgentConnectorFromChoice(choice: SubstrateChoice): { instance?: AgentConnector; error?: string } {
+  if (choice.type === "noop") {
+    // Explicit "noop" declaration — surface the silent default as an
+    // intentional choice. Equivalent to omitting the slot, but visible
+    // in connectors.json for adopters who want the no-agent posture
+    // documented rather than implicit.
+    return { instance: new NoOpAgentConnector() };
+  }
+  if (choice.type === "custom") {
+    return { error: `connectors.json: substrate.agent_connector — 'custom' type not yet supported via connectors.json (sync bootstrap can't dynamic-import). Wire your custom AgentConnector via a programmatic bootstrap script that passes bootstrap({ agentConnector: new MyAgentConnector(...) }) or calls registry.registerAgentConnector() directly.` };
+  }
+  return { error: `connectors.json: substrate.agent_connector — unknown type '${(choice as { type: string }).type}'.` };
 }
 
 function buildSkillStoreFromChoice(choice: SubstrateChoice, opts: BootstrapOpts): { instance?: SkillStore; error?: string } {

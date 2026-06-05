@@ -55,12 +55,31 @@ export type SubstrateChoice =
   | { type: "filesystem"; config?: Record<string, unknown> }
   | { type: "sqlite"; config?: Record<string, unknown> }
   | { type: "ollama"; config?: Record<string, unknown> }
+  | { type: "noop"; config?: Record<string, unknown> }
   | { type: "custom"; module: string; export?: string; config?: Record<string, unknown> };
 
 export interface SubstrateConfig {
   skill_store?: SubstrateChoice | null;
   data_store?: SubstrateChoice | null;
   local_model?: SubstrateChoice | null;
+  /**
+   * v0.18.1 — AgentConnector slot. Closes the declarative-wiring asymmetry
+   * across the four substrate slots; pre-v0.18.1 AgentConnector was
+   * programmatic-only (`bootstrap({ agentConnector: ... })`).
+   *
+   * Built-in types: `"noop"` (NoOpAgentConnector — also the silent default
+   * if the slot is omitted). `"custom"` for adopter-supplied impls
+   * (requires programmatic bootstrap; sync `bootstrap()` can't
+   * dynamic-import — mirrors the other substrate slots' custom path).
+   *
+   * For substrate-mediated adopter impls (memory-store-backed agent
+   * routing, webhook adapters, multi-tenant mailbox systems): map the
+   * AgentConnector contract methods to the substrate's primitives
+   * (e.g., `deliver` → addressed-write with recipient broker push;
+   * `wake` → host invocation; `request_response` → message-thread
+   * pattern), then wire via programmatic bootstrap.
+   */
+  agent_connector?: SubstrateChoice | null;
 }
 
 /**
@@ -461,7 +480,7 @@ function parseSubstrateSection(entry: unknown): { substrate?: SubstrateConfig; e
     errors.push(`connectors.json: 'substrate' must be an object (got ${Array.isArray(entry) ? "array" : entry === null ? "null" : typeof entry}).`);
     return { errors };
   }
-  const VALID_SLOTS = new Set(["skill_store", "data_store", "local_model"]);
+  const VALID_SLOTS = new Set(["skill_store", "data_store", "local_model", "agent_connector"]);
   const out: SubstrateConfig = {};
   for (const [slot, value] of Object.entries(entry)) {
     if (slot.startsWith("_")) continue; // reserved for inline comments
@@ -483,6 +502,7 @@ const VALID_SUBSTRATE_TYPES: Record<string, ReadonlySet<string>> = {
   skill_store: new Set(["filesystem", "sqlite", "custom"]),
   data_store: new Set(["sqlite", "custom"]),
   local_model: new Set(["ollama", "custom"]),
+  agent_connector: new Set(["noop", "custom"]),
 };
 
 function parseSubstrateChoice(slot: string, value: unknown): { choice?: SubstrateChoice | null; error?: string } {
@@ -496,7 +516,7 @@ function parseSubstrateChoice(slot: string, value: unknown): { choice?: Substrat
     if (value === "custom") {
       return { error: `connectors.json: substrate.${slot} — 'custom' requires object form with 'module' field.` };
     }
-    return { choice: { type: value as "filesystem" | "sqlite" | "ollama" } };
+    return { choice: { type: value as "filesystem" | "sqlite" | "ollama" | "noop" } };
   }
   // Object form
   if (typeof value !== "object" || Array.isArray(value)) {
@@ -534,7 +554,7 @@ function parseSubstrateChoice(slot: string, value: unknown): { choice?: Substrat
   }
   return {
     choice: {
-      type: type as "filesystem" | "sqlite" | "ollama",
+      type: type as "filesystem" | "sqlite" | "ollama" | "noop",
       config: rawConfig as Record<string, unknown>,
     },
   };

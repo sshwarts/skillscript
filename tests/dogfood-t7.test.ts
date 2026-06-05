@@ -24,8 +24,8 @@ const REPO_ROOT = join(__dirname, "..");
 const PACKAGE_JSON = JSON.parse(readFileSync(join(REPO_ROOT, "package.json"), "utf8")) as Record<string, unknown>;
 
 describe("T7 — package.json polish", () => {
-  it("1. version is 0.18.0 (dashboard composition contract expansion + SkillMeta surface completion: vars + returns now populated)", () => {
-    expect(PACKAGE_JSON["version"]).toBe("0.18.0");
+  it("1. version is 0.18.1 (AgentConnector declarative-wiring symmetry: agent_connector slot in connectors.json substrate + BootstrapOpts.agentConnector)", () => {
+    expect(PACKAGE_JSON["version"]).toBe("0.18.1");
   });
 
   it("2. main + types + bin + engines.node ≥ 22.5 declared", () => {

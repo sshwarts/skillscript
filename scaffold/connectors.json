@@ -9,6 +9,18 @@
     "skill_store": "filesystem",
     "data_store": "sqlite",
     "local_model": null,
+    "agent_connector": null,
+
+    "_example_agent_connector_noop": "Explicit no-op AgentConnector — `# Output: agent:<name>` deliveries are swallowed without error. Useful for declaring the no-agent posture intentionally rather than implicitly. (Omitting the slot has the same effect — Registry falls back to NoOp via getAgentConnectorOrDefault.)",
+    "_example_agent_connector_noop_short": "noop",
+
+    "_example_agent_connector_custom": "Adopter-custom AgentConnector. Implement the AgentConnector contract (deliver / wake / list_agents / health_check / request_response) — see examples/connectors/HttpWebhookAgentConnector for a reference impl. NOTE — declarative custom form requires programmatic bootstrap (sync `bootstrap()` can't dynamic-import). Wire via `bootstrap({ agentConnector: new MyAgentConnector(...) })` instead.",
+    "_example_agent_connector_custom_object": {
+      "type": "custom",
+      "module": "./my-agent-connector.js",
+      "export": "MyAgentConnector",
+      "config": { "endpoint": "${AGENT_HUB_URL}" }
+    },
 
     "_example_sqlite_skills": "Uncomment to switch skill storage to SQLite. Adopter-portable; persists between restarts. dbPath defaults to <skillsDir>/skills.db.",
     "_example_sqlite_skills_object": {
