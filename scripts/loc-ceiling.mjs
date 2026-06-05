@@ -220,7 +220,7 @@ const CORE_PATHS = [
 // discipline-only-contract or adds language-level UX), reads clearly,
 // and would lose meaning if compressed. Per the signal-not-budget rule:
 // clear code wins.
-const NARROW_MAX_LOC = 10600;
+const NARROW_MAX_LOC = 10800;
 const NARROW_MAX_FILES = 23;
 const BROAD_INFO_LOC = 9500;
 const BROAD_INFO_FILES = 28;

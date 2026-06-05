@@ -224,6 +224,17 @@ export interface WakeReceipt {
    * choice if it picks one.
    */
   session_id?: string;
+  /**
+   * v0.18.5 — symmetric with `DeliveryReceipt.warnings` (v0.18.4).
+   * Non-fatal substrate notes about the wake. Examples:
+   *   - "session not currently attached; degraded to mailbox-class"
+   *   - "rate-limit hint: backoff before next wake"
+   *   - "interrupt sent, awaiting acknowledgement"
+   * Runtime also uses this field to record routing decisions (`notify()`
+   * routed here because `@session` was present on the address); see the
+   * address-routed-notify rule in the language reference.
+   */
+  warnings?: string[];
 }
 
 export interface AgentDescriptor {

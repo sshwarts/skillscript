@@ -298,7 +298,9 @@ The canonical bundled example is `examples/connectors/HttpWebhookAgentConnector/
 
 Three patterns to copy when forking it for your substrate:
 
-**Pattern 1 — `agent@session` opaque composite.** Every messaging substrate needs either bare-identity OR specific-live-session addressing. The contract keeps `agent_id` opaque; sessions ride as `"perry@kitchen-terminal"` or via `WakeOpts.session_id`. Substrates that care decompose; substrates that don't ignore. Pick one form for your fork and document it in your impl's README:
+**Pattern 1 — `agent@session` opaque composite.** Every messaging substrate needs either bare-identity OR specific-live-session addressing. The contract keeps `agent_id` opaque; sessions ride as `"perry@kitchen-terminal"` or via `WakeOpts.session_id`. Substrates that care decompose; substrates that don't ignore.
+
+As of v0.18.5, the runtime address-routes skill-author surfaces (`notify()` + `# Output: agent:` / `template:`) on `@session` presence: bare → your `deliver()`, composite → your `wake()`. You receive whichever method the runtime decided; your job is to honor what arrives. For `wake()`, expect the FULL composite (`"perry@kitchen-terminal"`) — decompose to route to the right session:
 
 ```typescript
 async wake(agent_id: string, opts?: WakeOpts): Promise<WakeReceipt> {

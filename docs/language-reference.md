@@ -418,17 +418,20 @@ Per-output-kind consumption semantics: presentation surfaces (`# Output: agent: 
 ```
 notify(agent="oncall", message="Threshold breached at ${COUNT}")
 notify(agent="ops", message="ticket TR-1234 is a showstopper", event_type="ticket-911", correlation_id="${INCIDENT_ID}")
+notify(agent="cc@kitchen-terminal", message="look here now")
 ```
 
 Synchronous alert to a named agent via wired AgentConnector(s). **Contrast with `emit`:** `emit` accumulates into end-of-skill bulk delivery via the `# Output: agent: <name>` lifecycle hook; `notify` fires mid-execution to interrupt or page an agent before the skill completes.
 
-- `agent` — target agent id (required)
-- `message` — alert body (optional; defaults to accumulated emissions so far)
-- `event_type` — adopter-defined routing label (optional; flows to `DeliveryMeta.event_type`; overrides `# Event-type:` frontmatter)
-- `correlation_id` — reply-correlation id (optional; required for future `exchange()` / `request_response()` paths)
-- `connectors` — JSON array restricting which wired AgentConnector(s) receive the dispatch (optional)
+- `agent` — target agent id (required). **Address-routing**: a bare identifier (`"perry"`) routes to `AgentConnector.deliver()` (mailbox-class — the agent's inbox); an `agent@session` composite (`"cc@kitchen-terminal"`) routes to `AgentConnector.wake()` (session-targeted interrupt). The `@session` suffix IS the wake signal — there's no `wake=true` kwarg. Substrate sees the opaque composite on `wake()` and decomposes per the v0.18.2 contract.
+- `message` — alert body (optional; defaults to accumulated emissions so far). For wake-routed dispatches, the message rides as `WakeOpts.context` (preamble for the interrupt signal).
+- `event_type` — adopter-defined routing label (optional; flows to `DeliveryMeta.event_type` on deliver-class dispatches; ignored on wake-class since wake has no envelope).
+- `correlation_id` — reply-correlation id (optional; required for future `exchange()` / `request_response()` paths).
+- `connectors` — JSON array restricting which wired AgentConnector(s) receive the dispatch (optional).
 
-Returns ACK `{agent, dispatched: [{connector, ok, error?}]}` — fire-and-forget callers ignore the binding; check-delivery callers inspect ACK.
+Returns ACK `{agent, dispatched: [{connector, ok, route?, error?}]}` — `route` is `"deliver"` or `"wake"` per address-routing. Fire-and-forget callers ignore the binding; check-delivery callers inspect ACK.
+
+The same address rule applies to lifecycle hooks: `# Output: agent: perry` routes to deliver; `# Output: agent: cc@kitchen-terminal` routes to wake. See Output targets below.
 
 ### `shell` — sandboxed or unsafe shell exec
 
@@ -1340,9 +1343,12 @@ The Augmenting-kind delivery. Output prepends to the named agent's next-turn pro
 
 ```
 # Output: agent: <agent-name>
+# Output: agent: cc@kitchen-terminal
 ```
 
 Used to bring an agent into the next turn pre-shaped — context that would normally require a session-start retrieval is pre-positioned. Wired end-to-end via the runtime host's prompt-prepend surface + a synchronous trigger-fire endpoint with timeout-fallback so the next-turn dispatch isn't blocked on slow skill execution.
+
+**Address-routing** — same rule as `notify()`. A bare `<agent-name>` routes to `AgentConnector.deliver()` (mailbox-class). An `<agent>@<session>` composite routes to `AgentConnector.wake()` (session-targeted interrupt); the joined emit stream rides as `WakeOpts.context`. The `@session` suffix IS the wake signal — no separate `wake=true` form.
 
 ### `template: <agent-name>` — playbook delivered to a named agent
 
@@ -1350,9 +1356,12 @@ The Template-kind delivery. Output renders as a playbook the named agent execute
 
 ```
 # Output: template: <agent-name>
+# Output: template: cc@browser-tab-3
 ```
 
 Used for reusable recipes: a skill that, when compiled, produces instructions another agent follows.
+
+**Address-routing**: same as `agent:` above. Bare → deliver(); `@session` → wake().
 
 ### `file: <path>` — write to file
 

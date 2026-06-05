@@ -1,5 +1,93 @@
 # Changelog
 
+## 0.18.5 — 2026-06-05 — Address-routed notify() + lifecycle hooks (skills can wake a session)
+
+Closes the last skill-author-surface gap from the Phase 8 substrate-author
+adoption: skills can now wake a specific live session, not just deliver
+to an agent's mailbox. The `@session` suffix on an agent address IS the
+wake signal — no separate `wake=true` kwarg, no separate `wake()` op.
+Per Perry's design call (thread `c453afa2`): "the address encodes
+delivery class." Same convention as the broader `waiting_on` / mailbox
+/ broker semantics.
+
+### A. Address-routing rule (uniform across surfaces)
+
+| Skill-author syntax | Address shape | Routes to |
+|---|---|---|
+| `notify(agent="perry", …)` | bare | `AgentConnector.deliver()` |
+| `notify(agent="perry@kitchen-terminal", …)` | composite | `AgentConnector.wake()` |
+| `# Output: agent: perry` | bare | `AgentConnector.deliver()` |
+| `# Output: agent: perry@kitchen-terminal` | composite | `AgentConnector.wake()` |
+| `# Output: template: perry@browser-tab-3` | composite | `AgentConnector.wake()` |
+
+For wake-routed dispatches, the skill's content (notify message or
+joined emissions) rides as `WakeOpts.context`. Substrate sees the FULL
+composite on `wake()` and decomposes per the v0.18.2 contract.
+
+Why not a `wake=true` kwarg? Perry's discipline: the address already
+encodes the dispatch class; a kwarg duplicates the signal and breeds
+contradictory combinations (`notify("cc@session", wake=false)` — wake
+a session but don't?). Two ways to say "wake" is the divergence to cut.
+
+### B. AgentWakeReceiptRecord + WakeReceipt.warnings
+
+New parallel record on `ExecuteResult.agentWakeReceipts` (wire field
+`agent_wake_receipts`). Carries `WakeReceipt` from address-routed
+lifecycle-hook dispatches. Mid-skill `notify()` continues to
+self-contain via its `ACK.dispatched[].route` field (matches the
+existing pattern where notify() ACKs don't promote receipts).
+
+`WakeReceipt.warnings?: string[]` (symmetric with v0.18.4
+`DeliveryReceipt.warnings`) — substrate signals non-fatal notes about
+the wake. Runtime also uses this field to prepend a routing-note
+("@session present → routed to wake-class") for discoverability:
+inspectors of recorded wake receipts see WHY the runtime routed here
+without needing to grep skill source. Per Perry's discoverability
+requirement.
+
+### C. Tier-3 informational lint: `address-routed-wake`
+
+Author-time surfacing: `notify(<X@session>)` and `# Output: agent:
+X@session` fire `severity: info` findings making the implicit
+address-routing visible without a redundant `wake=true` kwarg. Pure
+informational — runtime works either way; the lint just teaches the
+shape.
+
+### Tests
+
+13 new tests in `v0.18.5-address-routed-notify.test.ts`:
+- Lint (5): notify-suffix, bare-no-fire, lifecycle-agent, lifecycle-template, multi-surface
+- Runtime (6): bare-deliver, suffix-wake, content-less wake; lifecycle bare-deliver, lifecycle suffix-wake, template suffix-wake
+- Discoverability (1): lifecycle-hook wake receipt carries routing-note warning
+- E2E (1): MCP /rpc execute_skill with notify@session calls connector.wake() not deliver()
+
+1713 tests total; typecheck clean. Narrow-core LOC ceiling 10600 →
+10800.
+
+### Docs
+
+- `docs/language-reference.md` — `notify()` + `# Output: agent:` /
+  `template:` docs updated with address-routing rule; `route` field
+  added to ACK shape
+- `docs/connector-contract-reference.md` — new "Address-routed
+  dispatch" subsection under `agent@session targeting`; use-site
+  cross-reference table updated with bare-vs-composite rows
+- `docs/adopter-playbook.md` — Pattern 1 updated: runtime address-routes;
+  substrate honors what arrives
+
+### Contract diff for adopters writing impls
+
+No interface changes — same `deliver()` / `wake()` signatures from
+v0.18.2. The change is in which method the runtime calls based on
+address shape. Substrates already implementing wake() correctly
+(graceful degradation, session-honest) handle the new traffic
+automatically. Adopters who hadn't implemented wake() yet (NoOp
+fallback) continue to no-op gracefully via the existing degradation
+path; lifecycle-hook wake receipts carry `wake_skipped: true` in that
+case.
+
+---
+
 ## 0.18.4 — 2026-06-05 — Caller-identity threading + DeliveryReceipt.warnings
 
 Closes the architectural gap surfaced by the substrate-author's Phase 8

@@ -724,6 +724,7 @@ export class McpServer {
         // or fallback substitution.
         fallbacks: result.fallbacks,
         agent_delivery_receipts: result.agent_delivery_receipts,
+        agent_wake_receipts: result.agent_wake_receipts,
         mechanical,
       };
     } catch (err) {

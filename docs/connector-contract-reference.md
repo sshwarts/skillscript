@@ -125,6 +125,18 @@ interface WakeReceipt {
 
 The substrate decomposes the composite if it cares; non-session substrates ignore the suffix or treat the whole string as the address. This keeps the contract substrate-neutral while preserving session-granular routing — every messaging substrate either addresses a bare identity OR a specific live session, and the opaque-composite form covers both without locking adopters into a particular session model.
 
+**Address-routed dispatch (v0.18.5)**: the runtime uses the presence of `@` in `agent_id` to decide between `deliver()` and `wake()` for skill-author surfaces (`notify()` op + `# Output: agent:` / `# Output: template:` lifecycle hooks):
+
+| Skill-author syntax | Address shape | Connector method called |
+|---|---|---|
+| `notify(agent="perry", …)` | bare | `deliver()` |
+| `notify(agent="perry@kitchen-terminal", …)` | composite | `wake()` |
+| `# Output: agent: perry` | bare | `deliver()` |
+| `# Output: agent: perry@kitchen-terminal` | composite | `wake()` |
+| `# Output: template: perry@browser-tab-3` | composite | `wake()` |
+
+The runtime threads the FULL composite to `wake()` — substrate decomposes per the rule above. For wake-routed dispatches, the skill's content (notify message or accumulated emissions) rides as `WakeOpts.context`. Per Perry's design call (thread `c453afa2`): "the address encodes delivery class" — same rule as the broader `waiting_on` / mailbox / broker convention. No `wake=true` kwarg exists; the `@` IS the signal.
+
 **Two forms, one wire**:
 
 ```typescript
@@ -159,12 +171,17 @@ The distinction `wake-capability` vs `network-fault` matters. The former is stru
 
 ## Use-site cross-reference table
 
-| Language surface | Runtime method | DeliveryPayload kind | meta sourced from |
-|---|---|---|---|
-| `# Output: agent: X` lifecycle hook | `AgentConnector.deliver()` | `augment` | Frontmatter `# Event-type:` (if set); `event_type` & `correlation_id` always undefined |
-| `# Output: template: X` lifecycle hook | `AgentConnector.deliver()` | `template` | Same as above |
-| `notify(agent=X, message=..., event_type=..., correlation_id=...)` op | `AgentConnector.deliver()` | `augment` | Kwargs override frontmatter for `event_type`; `correlation_id` from kwarg only |
-| `exchange(agent=X, message=..., timeout=...)` op (locked-shape, runtime support pending) | `AgentConnector.request_response()` | `augment` | Same as notify; correlation_id required |
+| Language surface | Address shape | Runtime method | DeliveryPayload kind | meta sourced from |
+|---|---|---|---|---|
+| `# Output: agent: X` lifecycle hook | bare | `AgentConnector.deliver()` | `augment` | Frontmatter `# Event-type:` (if set); `event_type` & `correlation_id` always undefined |
+| `# Output: agent: X@session` lifecycle hook | composite | `AgentConnector.wake()` | n/a (joined emissions as `WakeOpts.context`) | n/a (wake has no envelope) |
+| `# Output: template: X` lifecycle hook | bare | `AgentConnector.deliver()` | `template` | Same as agent-bare |
+| `# Output: template: X@session` lifecycle hook | composite | `AgentConnector.wake()` | n/a | n/a |
+| `notify(agent=X, message=..., event_type=..., correlation_id=...)` op | bare | `AgentConnector.deliver()` | `augment` | Kwargs override frontmatter for `event_type`; `correlation_id` from kwarg only |
+| `notify(agent=X@session, message=..., ...)` op | composite | `AgentConnector.wake()` | n/a (message as `WakeOpts.context`) | n/a |
+| `exchange(agent=X, message=..., timeout=...)` op (locked-shape, runtime support pending) | bare | `AgentConnector.request_response()` | `augment` | Same as notify; correlation_id required |
+
+The address-routing rule (v0.18.5) is uniform across all skill-author surfaces: `@session` present → wake-class; bare → deliver-class. See *agent@session targeting* below for the contract-level convention.
 
 ---
 
@@ -269,4 +286,4 @@ The shape-vs-semantics split is deliberate (see [[ARCHITECTURE INVARIANT 88df79c
 
 ---
 
-*This doc reflects the v0.9.6 AgentConnector interface lock, v0.13.8 storage-conventions addition, v0.18.2 receipt-shape refinements (woken-honesty + session targeting + graceful degradation), and v0.18.4 caller-identity-threading + `DeliveryReceipt.warnings`. Future contract changes update this file alongside the code.*
+*This doc reflects the v0.9.6 AgentConnector interface lock, v0.13.8 storage-conventions addition, v0.18.2 receipt-shape refinements (woken-honesty + session targeting + graceful degradation), v0.18.4 caller-identity-threading + `DeliveryReceipt.warnings`, and v0.18.5 address-routed dispatch (skill-author surfaces route deliver vs. wake on `@session` presence) + `WakeReceipt.warnings`. Future contract changes update this file alongside the code.*

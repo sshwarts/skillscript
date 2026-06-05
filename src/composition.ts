@@ -82,6 +82,12 @@ export interface ExecuteSkillResult {
    * wired). Surfaces over the MCP wire alongside errors / outputs.
    */
   agent_delivery_receipts: ExecuteResult["agentDeliveryReceipts"];
+  /**
+   * v0.18.5 — wake-class dispatch receipts from address-routed `notify()` /
+   * `# Output: agent: X@session`. Parallel to `agent_delivery_receipts`;
+   * empty when no `@session` addresses were dispatched.
+   */
+  agent_wake_receipts: ExecuteResult["agentWakeReceipts"];
 }
 
 /**
@@ -186,6 +192,7 @@ export async function executeSkillByName(
     errors: result.errors,
     target_order: compiled.targetOrder,
     fallbacks: result.fallbacks,
+    agent_wake_receipts: result.agentWakeReceipts,
     agent_delivery_receipts: result.agentDeliveryReceipts,
   };
 }
@@ -278,6 +285,7 @@ export async function executeSkillFromSource(
     target_order: compiled.targetOrder,
     fallbacks: result.fallbacks,
     agent_delivery_receipts: result.agentDeliveryReceipts,
+    agent_wake_receipts: result.agentWakeReceipts,
   };
 }
 

@@ -2827,6 +2827,49 @@ const OBJECT_ITERATION_ADVISORY: LintRule = {
   },
 };
 
+// v0.18.5 — address-routed `notify()` / `# Output: agent:` informational
+// surfacing. Per Perry's design call (thread `c453afa2`): the `@session`
+// suffix on the agent_id encodes wake-class dispatch; the runtime routes
+// to `AgentConnector.wake()` instead of `deliver()`. The lint makes the
+// implicit address-routing visible at author time without a redundant
+// `wake=true` kwarg. Pure informational — runtime works either way.
+const ADDRESS_ROUTED_WAKE_INFO: LintRule = {
+  id: "address-routed-wake",
+  severity: "info",
+  description: "A `notify(agent=\"X@session\")` op or `# Output: agent: X@session` decl uses the address-routed wake-class form — the runtime routes to AgentConnector.wake() rather than deliver().",
+  remediation: "This is informational, not an error. The `@session` suffix on the address is the wake signal (v0.18.5 — Perry thread c453afa2). To target a bare identity (mailbox-class deliver), drop the `@session` suffix; to target a specific live session (wake-class interrupt), keep it. Same rule across notify() + lifecycle hooks.",
+  check: (ctx) => {
+    const findings: LintFinding[] = [];
+    for (const [targetName, target] of ctx.parsed.targets) {
+      walkOps(target.ops, (op) => {
+        if (op.kind !== "notify" || op.notifyParams === undefined) return;
+        const addr = op.notifyParams.agent;
+        if (!addr.includes("@")) return;
+        findings.push({
+          rule: "address-routed-wake",
+          severity: "info",
+          message: `In target '${targetName}': \`notify(agent=\"${addr}\")\` — the \`@session\` suffix routes this to AgentConnector.wake() (wake-class interrupt), not deliver(). Substrate sees the opaque composite agent_id; this is the canonical way to wake a specific live session.`,
+          block: targetName,
+          extras: { agent: addr, surface: "notify" },
+        });
+      });
+    }
+    for (const decl of ctx.parsed.outputs) {
+      if (decl.kind !== "agent" && decl.kind !== "template") continue;
+      const addr = decl.target;
+      if (addr === undefined || !addr.includes("@")) continue;
+      findings.push({
+        rule: "address-routed-wake",
+        severity: "info",
+        message: `\`# Output: ${decl.kind}: ${addr}\` — the \`@session\` suffix routes this lifecycle-hook dispatch to AgentConnector.wake() (wake-class interrupt), not deliver(). Substrate sees the opaque composite agent_id.`,
+        block: "(frontmatter)",
+        extras: { agent: addr, surface: `output-${decl.kind}` },
+      });
+    }
+    return findings;
+  },
+};
+
 const RULES: LintRule[] = [
   // Tier-1 (error)
   PARSE_ERROR,
@@ -2892,6 +2935,7 @@ const RULES: LintRule[] = [
   PLUGIN_COLLISION,
   UNPARSED_JSON_FIELD_ACCESS,
   OBJECT_ITERATION_ADVISORY,
+  ADDRESS_ROUTED_WAKE_INFO,
 ];
 
 /** Read-only view of the rule registry — for tooling that introspects v1 rules. */

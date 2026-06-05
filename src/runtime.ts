@@ -1,5 +1,5 @@
 import type { ParsedSkill, SkillOp, OutputDecl } from "./parser.js";
-import type { DeliveryMeta, DeliveryReceipt } from "./connectors/agent.js";
+import type { DeliveryMeta, DeliveryReceipt, WakeReceipt, WakeOpts } from "./connectors/agent.js";
 import { randomUUID } from "node:crypto";
 import { tokenizeKeywordArgs, processSetValue, interpretDoubleQuotedEscapes } from "./parser.js";
 import { applyFilter, parseFilterChain } from "./filters.js";
@@ -200,6 +200,15 @@ export interface ExecuteResult {
    * substrates during previews.
    */
   agentDeliveryReceipts: AgentDeliveryReceiptRecord[];
+  /**
+   * v0.18.5 — wake receipts from `AgentConnector.wake` calls fired when
+   * `notify(agent="X@session", ...)` or `# Output: agent: X@session`
+   * routed to wake() instead of deliver(). Per Perry's address-routed
+   * notify decision (thread `c453afa2`): the `@session` suffix on the
+   * agent_id encodes wake-class dispatch; the runtime routes accordingly.
+   * Parallel to `agentDeliveryReceipts` for the deliver-class path.
+   */
+  agentWakeReceipts: AgentWakeReceiptRecord[];
 }
 
 export interface AgentDeliveryReceiptRecord {
@@ -219,9 +228,58 @@ export interface AgentDeliveryReceiptRecord {
   reason?: string;
 }
 
+/**
+ * v0.18.5 — wake-class dispatch receipt. Populated when the runtime
+ * routes `notify()` / `# Output: agent:` to `AgentConnector.wake()`
+ * because the `agent_id` contained an `@session` suffix.
+ *
+ * `source_kind` distinguishes the skill-author surface that fired the
+ * wake — "notify" (mid-skill imperative op) vs "agent" / "template"
+ * (skill-completion lifecycle hook). The substrate sees only the wake()
+ * call; this discriminator is for runtime observability + dashboard
+ * rendering.
+ */
+export interface AgentWakeReceiptRecord {
+  agent_id: string;
+  source_kind: "notify" | "agent" | "template";
+  receipt: WakeReceipt;
+  /**
+   * Set when no real AgentConnector was wired and the NoOp fallback
+   * "handled" the wake (with a stderr warning). Mirror of the
+   * delivery-side `delivery_skipped` semantics.
+   */
+  wake_skipped?: boolean;
+  /** Human-readable reason when `wake_skipped: true`. */
+  reason?: string;
+}
+
 interface ExecOpsResult {
   lastBoundVar: string | null;
   lastValue: unknown;
+}
+
+/**
+ * v0.18.5 — address-routing predicate per Perry's design call (thread
+ * `c453afa2`). The presence of `@session` on the agent_id encodes
+ * wake-class dispatch; bare addresses route to deliver(). The `@` is
+ * the routing signal — same convention as `waiting_on` / mailbox /
+ * broker semantics. Returns true if the address contains an `@`
+ * (substrate decomposes the composite further if it cares).
+ */
+function isWakeAddress(agentId: string): boolean {
+  return agentId.includes("@");
+}
+
+/**
+ * v0.18.5 — prepend a runtime-emitted routing-note to a receipt's
+ * `warnings` array (creates the array if absent). Used to surface the
+ * implicit address-routing decision at receipt-inspection time, per
+ * Perry's discoverability requirement. Does not mutate the input
+ * receipt; returns a new object.
+ */
+function addRoutingWarning<R extends { warnings?: string[] }>(receipt: R, note: string): R {
+  const existing = receipt.warnings ?? [];
+  return { ...receipt, warnings: [note, ...existing] };
 }
 
 /**
@@ -421,17 +479,26 @@ export async function execute(
     }
   }
 
-  // Dispatch agent-targeted output decls through AgentConnector.deliver
-  // (T7.1). `agent: <name>` routes as `kind: "augment"` (v0.8.0 rename
+  // Dispatch agent-targeted output decls through AgentConnector.
+  // (T7.1) `agent: <name>` routes as `kind: "augment"` (v0.8.0 rename
   // of legacy `prompt-context:`); `template: <name>` as `kind: "template"`.
-  // Skipped in mechanical mode so previews don't deliver placeholder content
-  // to real substrates. Connector fallback: Registry.getAgentConnectorOrDefault()
-  // returns a transparent NoOpAgentConnector when no adapter is wired, so
-  // the dispatch loop never throws on missing-substrate; we pair with the
-  // explicit `hasAgentConnector()` check to flag `delivery_skipped` (v0.13.0
-  // — was `getAgentConnector()` with silent fallback; that asymmetry hid
-  // wiring gaps until prod).
+  //
+  // v0.18.5 — address-routed dispatch per Perry's design call (thread
+  // `c453afa2`). The `agent_id` itself encodes the dispatch class:
+  //   - bare `<agent>` → `AgentConnector.deliver()` (mailbox-class)
+  //   - `<agent>@<session>` → `AgentConnector.wake()` (session-targeted
+  //     interrupt; suffix preserved on the opaque `agent_id` passed to
+  //     wake — substrate decomposes per v0.18.2 contract)
+  //
+  // Skipped in mechanical mode so previews don't deliver placeholder
+  // content to real substrates. Connector fallback:
+  // Registry.getAgentConnectorOrDefault() returns a transparent
+  // NoOpAgentConnector when no adapter is wired, so the dispatch loop
+  // never throws on missing-substrate; we pair with the explicit
+  // `hasAgentConnector()` check to flag `delivery_skipped` /
+  // `wake_skipped`.
   const agentDeliveryReceipts: AgentDeliveryReceiptRecord[] = [];
+  const agentWakeReceipts: AgentWakeReceiptRecord[] = [];
   if (ctx.mechanical !== true) {
     for (const decl of outputDecls) {
       if (decl.target === undefined) continue;
@@ -442,35 +509,45 @@ export async function execute(
       const body = String(outputs[key] ?? emissions.join("\n"));
       const agent = ctx.registry.getAgentConnectorOrDefault();
       // v0.9.6 audit Q8 — build DeliveryMeta per the locked v1.0 shape.
-      // Runtime auto-fills dispatch_id, sent_at, origin; threads optional
-      // event_type from frontmatter (`# Event-type:` fallback per Q9).
-      // Lifecycle hook deliveries carry no correlation_id (Q8 design
-      // boundary — that's notify()-kwarg territory).
       const meta = buildLifecycleMeta(parsed.name, parsed.eventType, ctx);
-      // v0.9.2 — P1.1 flag the no-op dispatch case. When no real
-      // AgentConnector is wired, the NoOp fallback accepts the deliver
-      // call without doing anything; cold authors get a clear signal.
+      // v0.9.2 — P1.1 flag the no-op dispatch case.
       const hasRealConnector = ctx.registry.hasAgentConnector();
+      const routesToWake = isWakeAddress(decl.target);
       try {
-        const receipt = decl.kind === "agent"
-          ? await agent.deliver(decl.target, { kind: "augment", content: body, meta })
-          : await agent.deliver(decl.target, { kind: "template", prompt: body, meta });
-        const record: AgentDeliveryReceiptRecord = { agent_id: decl.target, output_kind: decl.kind, receipt };
-        if (!hasRealConnector) {
-          record.delivery_skipped = true;
-          record.reason = `No AgentConnector wired for runtime; NoOpAgentConnector accepted but didn't deliver. Wire an AgentConnector via registry.registerAgentConnector('primary', <YourImpl>) to enable real delivery.`;
-        } else if (receipt.delivery_skipped === true) {
-          // v0.9.6 Q7 — connector signaled accept-but-not-pushed (offline,
-          // rate-limit drop, etc.). Honor the contract-level signal.
-          record.delivery_skipped = true;
+        if (routesToWake) {
+          // v0.18.5 — wake-class dispatch. `body` becomes WakeOpts.context
+          // (preamble for the wake message). `agent_id` includes the
+          // `@session` suffix — substrate decomposes.
+          const wakeOpts: WakeOpts = body.length > 0 ? { context: body } : {};
+          const wakeReceipt = await agent.wake(decl.target, wakeOpts);
+          const enriched = addRoutingWarning(wakeReceipt, "lifecycle-hook routed to wake-class because agent_id contains '@session'");
+          const wakeRecord: AgentWakeReceiptRecord = { agent_id: decl.target, source_kind: decl.kind, receipt: enriched };
+          if (!hasRealConnector) {
+            wakeRecord.wake_skipped = true;
+            wakeRecord.reason = `No AgentConnector wired for runtime; NoOpAgentConnector accepted but didn't wake. Wire an AgentConnector via registry.registerAgentConnector('primary', <YourImpl>) to enable real wake.`;
+          }
+          agentWakeReceipts.push(wakeRecord);
+        } else {
+          const receipt = decl.kind === "agent"
+            ? await agent.deliver(decl.target, { kind: "augment", content: body, meta })
+            : await agent.deliver(decl.target, { kind: "template", prompt: body, meta });
+          const record: AgentDeliveryReceiptRecord = { agent_id: decl.target, output_kind: decl.kind, receipt };
+          if (!hasRealConnector) {
+            record.delivery_skipped = true;
+            record.reason = `No AgentConnector wired for runtime; NoOpAgentConnector accepted but didn't deliver. Wire an AgentConnector via registry.registerAgentConnector('primary', <YourImpl>) to enable real delivery.`;
+          } else if (receipt.delivery_skipped === true) {
+            // v0.9.6 Q7 — connector signaled accept-but-not-pushed (offline,
+            // rate-limit drop, etc.). Honor the contract-level signal.
+            record.delivery_skipped = true;
+          }
+          agentDeliveryReceipts.push(record);
         }
-        agentDeliveryReceipts.push(record);
       } catch (err) {
-        // Delivery failure is non-fatal — record alongside other errors so
+        // Dispatch failure is non-fatal — record alongside other errors so
         // the dashboard surfaces it, but don't propagate. Skill execution
         // already succeeded by this point.
         process.stderr.write(
-          `[agent-deliver] ${decl.kind}:${decl.target} failed: ${(err as Error).message}\n`,
+          `[agent-dispatch] ${decl.kind}:${decl.target} (${routesToWake ? "wake" : "deliver"}) failed: ${(err as Error).message}\n`,
         );
       }
     }
@@ -498,6 +575,7 @@ export async function execute(
     fallbacks,
     targetOrder: order,
     agentDeliveryReceipts,
+    agentWakeReceipts,
   };
 }
 
@@ -831,26 +909,31 @@ async function execOpInner(
         return { lastBoundVar: op.outputVar ?? flatKey, lastValue: ack };
       }
 
-      // Walk all registered AgentConnectors; filter to those that claim the
-      // target agent in their list_agents(); optionally further filter by
-      // the explicit connectors=[...] kwarg if specified. Best-effort: per-
-      // connector failures are recorded in the ACK but don't propagate.
+      // v0.18.5 — address-routed dispatch per Perry's design call (thread
+      // `c453afa2`). The `agent_id` itself encodes the dispatch class:
+      //   - bare `<agent>` → AgentConnector.deliver() (mailbox-class; v0.8.0 behavior)
+      //   - `<agent>@<session>` → AgentConnector.wake() (session-targeted interrupt)
+      // The `@` suffix IS the wake signal; no separate `wake=true` kwarg
+      // (would create contradictory combos per Perry's discipline note).
+      // Substrate sees the opaque composite agent_id on the wake() call
+      // and decomposes per v0.18.2 contract.
+      const routesToWake = isWakeAddress(agent);
       const allConnectors = ctx.registry.listAgentConnectors();
-      const dispatched: Array<{ connector: string; ok: boolean; error?: string }> = [];
+      const dispatched: Array<{ connector: string; ok: boolean; error?: string; route?: "deliver" | "wake" }> = [];
       // v0.9.6 audit Q8 — ONE notify() op invocation = ONE dispatch_id across
-      // every wired connector that gets the deliver() call. Same payload + meta
-      // for the whole fanout; receivers dedupe substrate retries by dispatch_id.
-      // event_type / correlation_id come from the notify() kwargs (per-emit
-      // override of any frontmatter fallback).
-      const notifyMeta = buildLifecycleMeta(
-        ctx._currentSkillName ?? null,
-        ctx._currentSkillEventType ?? null,
-        ctx,
-        {
-          event_type: op.notifyParams?.event_type,
-          correlation_id: op.notifyParams?.correlation_id,
-        },
-      );
+      // every wired connector that gets the deliver() call. (Only used for the
+      // deliver-class path; wake() has no DeliveryMeta envelope.)
+      const notifyMeta = routesToWake
+        ? null
+        : buildLifecycleMeta(
+            ctx._currentSkillName ?? null,
+            ctx._currentSkillEventType ?? null,
+            ctx,
+            {
+              event_type: op.notifyParams?.event_type,
+              correlation_id: op.notifyParams?.correlation_id,
+            },
+          );
       for (const entry of allConnectors) {
         if (restrictConnectors !== undefined && !restrictConnectors.includes(entry.name)) continue;
         let agents: Array<{ agent_id: string }>;
@@ -861,18 +944,35 @@ async function execOpInner(
           // claims the target.
           continue;
         }
-        if (!agents.some((a) => a.agent_id === agent)) continue;
+        // For wake-class addresses, also accept the bare-agent form on the
+        // substrate's list_agents() — substrates declare agents at the
+        // identity level, not per-session, so `perry@kitchen-terminal`
+        // matches a connector that lists `perry`.
+        const bareAgent = routesToWake ? agent.split("@")[0] ?? agent : agent;
+        if (!agents.some((a) => a.agent_id === agent || a.agent_id === bareAgent)) continue;
         try {
-          await entry.instance.deliver(agent, {
-            kind: "augment",
-            content: message,
-            meta: notifyMeta,
-          });
-          dispatched.push({ connector: entry.name, ok: true });
+          if (routesToWake) {
+            const wakeOpts: WakeOpts = message.length > 0 ? { context: message } : {};
+            // Substrate's wake() receipt is consumed for ACK shape; the
+            // dispatched.route="wake" entry is the per-op signal.
+            // Lifecycle-hook routed wakes ARE recorded in agentWakeReceipts
+            // (with the routing-warning prepended); notify() follows the
+            // existing pattern where mid-skill ops self-contain via ACK.
+            await entry.instance.wake(agent, wakeOpts);
+            dispatched.push({ connector: entry.name, ok: true, route: "wake" });
+          } else {
+            await entry.instance.deliver(agent, {
+              kind: "augment",
+              content: message,
+              meta: notifyMeta!,
+            });
+            dispatched.push({ connector: entry.name, ok: true, route: "deliver" });
+          }
         } catch (err) {
           dispatched.push({
             connector: entry.name,
             ok: false,
+            route: routesToWake ? "wake" : "deliver",
             error: messageOf(err),
           });
         }
