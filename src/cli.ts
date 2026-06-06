@@ -728,6 +728,26 @@ async function cmdRuntimeHost(args: string[], opts: { mode: "serve" | "dashboard
   const forceAlwaysDraft = envForceAlwaysDraft !== undefined
     ? envForceAlwaysDraft === "true"
     : fileConfig.forceAlwaysDraft;
+  // v0.18.7 — env cascade for three previously-hidden operator knobs.
+  // Each follows the same cascade shape: env > config > default. Parsing
+  // errors (non-numeric / non-positive) are silently ignored — the
+  // config-layer schema parser is the authoritative validator for these
+  // fields, and env values failing here fall through to config/default.
+  const envPollSecondsRaw = process.env["SKILLSCRIPT_POLL_INTERVAL_SECONDS"];
+  const envPollSeconds = envPollSecondsRaw !== undefined ? Number(envPollSecondsRaw) : undefined;
+  const pollIntervalSeconds = envPollSeconds !== undefined && Number.isFinite(envPollSeconds) && envPollSeconds > 0
+    ? envPollSeconds
+    : fileConfig.pollIntervalSeconds;
+  const envAbsoluteTimeoutRaw = process.env["SKILLSCRIPT_ABSOLUTE_TIMEOUT_MS"];
+  const envAbsoluteTimeout = envAbsoluteTimeoutRaw !== undefined ? Number(envAbsoluteTimeoutRaw) : undefined;
+  const absoluteTimeoutMs = envAbsoluteTimeout !== undefined && Number.isInteger(envAbsoluteTimeout) && envAbsoluteTimeout > 0
+    ? envAbsoluteTimeout
+    : fileConfig.absoluteTimeoutMs;
+  const envMaxRecursionRaw = process.env["SKILLSCRIPT_MAX_RECURSION_DEPTH"];
+  const envMaxRecursion = envMaxRecursionRaw !== undefined ? Number(envMaxRecursionRaw) : undefined;
+  const maxRecursionDepth = envMaxRecursion !== undefined && Number.isInteger(envMaxRecursion) && envMaxRecursion >= 1
+    ? envMaxRecursion
+    : fileConfig.maxRecursionDepth;
   const wired = bootstrap({
     skillsDir: fileConfig.skillsDir ?? SKILLS_DIR,
     traceDir: fileConfig.traceDir ?? TRACE_DIR,
@@ -735,7 +755,9 @@ async function cmdRuntimeHost(args: string[], opts: { mode: "serve" | "dashboard
     triggersFilePath,
     connectorsConfigPath,
     mode: opts.mode,
-    ...(fileConfig.pollIntervalSeconds !== undefined ? { pollIntervalSeconds: fileConfig.pollIntervalSeconds } : {}),
+    ...(pollIntervalSeconds !== undefined ? { pollIntervalSeconds } : {}),
+    ...(absoluteTimeoutMs !== undefined ? { absoluteTimeoutMs } : {}),
+    ...(maxRecursionDepth !== undefined ? { maxRecursionDepth } : {}),
     ...(enableUnsafeShell !== undefined ? { enableUnsafeShell } : {}),
     ...(forceAlwaysDraft === true ? { forceAlwaysDraft: true } : {}),
     // Scheduler-fired skills record traces by default; `fires` / `health` /

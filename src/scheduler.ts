@@ -58,6 +58,11 @@ export interface SchedulerConfig {
   /** Forwarded to runtime.execute(). */
   enableUnsafeShell?: boolean;
   absoluteTimeoutMs?: number;
+  /**
+   * v0.18.7 — composition recursion-depth ceiling (default 10). Threaded
+   * into the per-dispatch ctx so trigger-fired skills inherit it.
+   */
+  maxRecursionDepth?: number;
   /** Dispatch trace recording config. Forwarded to execute() ctx. */
   trace?: TraceConfig;
   /** Trace store backend. Forwarded to execute() ctx. */
@@ -89,6 +94,7 @@ export class Scheduler {
   private readonly pollIntervalMs: number;
   private readonly enableUnsafeShell: boolean;
   private readonly absoluteTimeoutMs: number | undefined;
+  private readonly maxRecursionDepth: number | undefined;
   private readonly trace: TraceConfig | undefined;
   private readonly traceStore: TraceStore | undefined;
   private readonly now: () => number;
@@ -106,6 +112,7 @@ export class Scheduler {
     this.pollIntervalMs = (config.pollIntervalSeconds ?? 30) * 1000;
     this.enableUnsafeShell = config.enableUnsafeShell ?? false;
     this.absoluteTimeoutMs = config.absoluteTimeoutMs;
+    this.maxRecursionDepth = config.maxRecursionDepth;
     this.trace = config.trace;
     this.traceStore = config.traceStore;
     this.now = config.now ?? (() => Date.now());
@@ -318,6 +325,7 @@ export class Scheduler {
       registry: this.registry,
       enableUnsafeShell: this.enableUnsafeShell,
       ...(this.absoluteTimeoutMs !== undefined ? { absoluteTimeoutMs: this.absoluteTimeoutMs } : {}),
+      ...(this.maxRecursionDepth !== undefined ? { maxRecursionDepth: this.maxRecursionDepth } : {}),
       ...(this.trace !== undefined ? { trace: this.trace } : {}),
       ...(this.traceStore !== undefined ? { traceStore: this.traceStore } : {}),
       // v0.9.6 — "manual" enum value dropped per audit Q12. Default fallback

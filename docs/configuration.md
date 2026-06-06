@@ -53,6 +53,9 @@ The CLI auto-loads `$SKILLSCRIPT_HOME/.env` at startup and populates `process.en
 | `SKILLSCRIPT_PORT=8080` | Dashboard / serve HTTP port | `--port` flag > env > config > default `7878` |
 | `SKILLSCRIPT_HOST=0.0.0.0` | Bind address | `--host` flag > env > config > default `127.0.0.1` |
 | `SKILLSCRIPT_MCP_CALLER_IDENTITY_HEADER=X-Agent-Id` | Inbound caller-identity header name (multi-agent MCP hosts only — see [adopter playbook](adopter-playbook.md)) | env > config > default unset |
+| `SKILLSCRIPT_POLL_INTERVAL_SECONDS=30` | Scheduler tick / poll interval (seconds) | env > config > default `30` |
+| `SKILLSCRIPT_ABSOLUTE_TIMEOUT_MS=300000` | Runtime fallback timeout (ms) when no per-op / skill / connector default applies | env > config > default `300000` (5 min) |
+| `SKILLSCRIPT_MAX_RECURSION_DEPTH=10` | Composition recursion depth ceiling for `$ execute_skill` chains | env > config > default `10` |
 | `OLLAMA_BASE_URL=http://...` | Ollama endpoint for LocalModel (default `http://localhost:11434`) | env > built-in default |
 
 `SKILLSCRIPT_HOME` is the chicken-and-egg case — the path to `.env` requires it, so `.env` can't set it. Use shell, Docker `-e`, or systemd `Environment=` instead.

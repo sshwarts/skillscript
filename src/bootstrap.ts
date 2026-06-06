@@ -70,6 +70,23 @@ export interface BootstrapOpts {
   agentConnector?: AgentConnector;
   /** Scheduler poll interval (default 30s). */
   pollIntervalSeconds?: number;
+  /**
+   * v0.18.7 — runtime absolute timeout in ms (the built-in fallback
+   * when no per-op, skill, or connector default applies). Default
+   * 300_000ms (5 min). Threaded into the Scheduler so every
+   * trigger-fired dispatch inherits it. Adopter cascade (most-specific
+   * wins): bootstrap opt > `SKILLSCRIPT_ABSOLUTE_TIMEOUT_MS` env >
+   * `skillscript.config.json#absoluteTimeoutMs` > default.
+   */
+  absoluteTimeoutMs?: number;
+  /**
+   * v0.18.7 — composition recursion depth ceiling. Default 10
+   * (`DEFAULT_MAX_RECURSION_DEPTH`). Threaded into the Scheduler's
+   * ctx so every trigger-fired dispatch inherits it. Adopter cascade
+   * (most-specific wins): bootstrap opt > `SKILLSCRIPT_MAX_RECURSION_DEPTH`
+   * env > `skillscript.config.json#maxRecursionDepth` > default.
+   */
+  maxRecursionDepth?: number;
   /** Forwarded to scheduler/runtime. Default false. */
   enableUnsafeShell?: boolean;
   /**
@@ -393,6 +410,8 @@ export function bootstrap(opts: BootstrapOpts): BootstrapResult {
     skillStore,
     traceStore,
     ...(opts.pollIntervalSeconds !== undefined ? { pollIntervalSeconds: opts.pollIntervalSeconds } : {}),
+    ...(opts.absoluteTimeoutMs !== undefined ? { absoluteTimeoutMs: opts.absoluteTimeoutMs } : {}),
+    ...(opts.maxRecursionDepth !== undefined ? { maxRecursionDepth: opts.maxRecursionDepth } : {}),
     ...(opts.trace !== undefined ? { trace: opts.trace, traceStore } : {}),
     ...(onTriggersChanged !== undefined ? { onTriggersChanged } : {}),
     enableUnsafeShell,

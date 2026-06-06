@@ -34,6 +34,22 @@ export interface SkillscriptConfig {
   dataDbPath?: string;
   /** Scheduler poll interval. Default 30s. */
   pollIntervalSeconds?: number;
+  /**
+   * v0.18.7 — runtime absolute timeout in milliseconds. The built-in
+   * fallback when no per-op, skill, or connector default applies.
+   * Default 300_000ms (5 minutes) per ERD §6 decision 7. Adopters
+   * tightening prod timeouts or test environments wanting shorter
+   * cancellation windows set this. Env-var override:
+   * `SKILLSCRIPT_ABSOLUTE_TIMEOUT_MS=N` takes precedence over this field.
+   */
+  absoluteTimeoutMs?: number;
+  /**
+   * v0.18.7 — composition recursion depth ceiling. Default 10
+   * (DEFAULT_MAX_RECURSION_DEPTH). Adopters with deeply composing skill
+   * suites bump this. Env-var override:
+   * `SKILLSCRIPT_MAX_RECURSION_DEPTH=N` takes precedence over this field.
+   */
+  maxRecursionDepth?: number;
   /** When true, `shell(unsafe=true)` ops are permitted. Default false. */
   enableUnsafeShell?: boolean;
   /**
@@ -139,6 +155,22 @@ export function loadSkillscriptConfig(opts: LoadSkillscriptConfigOpts): LoadSkil
       errors.push(`skillscript.config.json: field 'pollIntervalSeconds' must be a positive number.`);
     } else {
       config.pollIntervalSeconds = obj["pollIntervalSeconds"];
+    }
+  }
+
+  if (obj["absoluteTimeoutMs"] !== undefined) {
+    if (typeof obj["absoluteTimeoutMs"] !== "number" || !Number.isInteger(obj["absoluteTimeoutMs"]) || obj["absoluteTimeoutMs"] <= 0) {
+      errors.push(`skillscript.config.json: field 'absoluteTimeoutMs' must be a positive integer (milliseconds).`);
+    } else {
+      config.absoluteTimeoutMs = obj["absoluteTimeoutMs"];
+    }
+  }
+
+  if (obj["maxRecursionDepth"] !== undefined) {
+    if (typeof obj["maxRecursionDepth"] !== "number" || !Number.isInteger(obj["maxRecursionDepth"]) || obj["maxRecursionDepth"] < 1) {
+      errors.push(`skillscript.config.json: field 'maxRecursionDepth' must be a positive integer.`);
+    } else {
+      config.maxRecursionDepth = obj["maxRecursionDepth"];
     }
   }
 

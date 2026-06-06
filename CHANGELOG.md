@@ -1,5 +1,54 @@
 # Changelog
 
+## 0.18.7 — 2026-06-06 — three previously-hidden operator knobs surfaced via env cascade
+
+Closes a discoverability gap noticed during a `.env` audit: three
+operator-controllable behaviors were programmatic-only or config-only
+without a `.env`-natural path, so operators tuning prod or test
+environments had to write code (or a JSON config) to change them.
+v0.18.7 surfaces all three through the standard cascade (CLI flag >
+env > config > default).
+
+### Three knobs surfaced
+
+| Knob | Env var | Was | Now |
+|---|---|---|---|
+| Scheduler poll interval | `SKILLSCRIPT_POLL_INTERVAL_SECONDS` | config + bootstrap | + env path |
+| Runtime absolute timeout | `SKILLSCRIPT_ABSOLUTE_TIMEOUT_MS` | programmatic-only (`ctx.absoluteTimeoutMs`) | + config + env + bootstrap opt |
+| Composition recursion depth ceiling | `SKILLSCRIPT_MAX_RECURSION_DEPTH` | programmatic-only (`ctx.maxRecursionDepth`); hardcoded 10 | + config + env + bootstrap opt |
+
+`absoluteTimeoutMs` defaults to 300_000ms (5 minutes); `maxRecursionDepth`
+defaults to 10 (`DEFAULT_MAX_RECURSION_DEPTH`); poll interval defaults
+to 30 seconds. All values flow through `BootstrapOpts` → `Scheduler`
+config → per-dispatch `ExecuteContext`.
+
+### Tests
+
+10 new tests in `v0.18.7-operator-knobs.test.ts`:
+- Config schema accepts each new field with positive-integer validation
+- Rejects 0 / negative / non-integer / non-numeric values for both
+- All three knobs co-set in one config + omission preserves defaults
+- Scheduler accepts the two new fields and constructs cleanly
+
+1729 tests total; typecheck clean; LOC budget holds.
+
+### Docs
+
+- `scaffold/.env.example` — new "Runtime tuning" section documenting all
+  three vars with use-case framing + defaults
+- `docs/configuration.md` — env-var precedence table extended; field
+  docstrings on `SkillscriptConfig` interface explain cascade
+
+### Adopter migration
+
+None — all changes are additive and backward-compatible. Adopters
+relying on the old programmatic-only paths (passing `ctx.absoluteTimeoutMs`
+directly to `execute()`) continue to work; the new layers just add
+operator surfaces below them. Default behavior preserved when env vars
+are unset.
+
+---
+
 ## 0.18.6 — 2026-06-05 — author surfaced on skill discovery (skill_list filter + entry field)
 
 Closes Perry's spec request (thread `1f278e5e`): an optional, generic,
