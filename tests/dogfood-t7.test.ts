@@ -24,8 +24,8 @@ const REPO_ROOT = join(__dirname, "..");
 const PACKAGE_JSON = JSON.parse(readFileSync(join(REPO_ROOT, "package.json"), "utf8")) as Record<string, unknown>;
 
 describe("T7 — package.json polish", () => {
-  it("1. version is 0.18.7 (operator-knob surfacing: SKILLSCRIPT_POLL_INTERVAL_SECONDS + SKILLSCRIPT_ABSOLUTE_TIMEOUT_MS + SKILLSCRIPT_MAX_RECURSION_DEPTH env-cascade; config-file schema + bootstrap opt + scheduler ctx threading)", () => {
-    expect(PACKAGE_JSON["version"]).toBe("0.18.7");
+  it("1. version is 0.18.8 (BREAKING — default-deny shell binary allowlist: SKILLSCRIPT_SHELL_ALLOWLIST env + config + lint shell-binary-not-allowed + runtime ShellBinaryNotAllowedError + skillfile shell-audit pre-upgrade migration helper + trace blocked_reason)", () => {
+    expect(PACKAGE_JSON["version"]).toBe("0.18.8");
   });
 
   it("2. main + types + bin + engines.node ≥ 22.5 declared", () => {
@@ -75,12 +75,12 @@ describe("T7 — distributed code surface", () => {
     expect(out.trim(), `found AMP identifiers: ${out}`).toBe("");
   });
 
-  it("7. narrow-core LOC ceiling holds (< 10800 / 23 files; ..., v0.7.0 → 7150, v0.7.1 → 7250, v0.7.2 → 7550, v0.8.0 → 8200, v0.9.4 → 8300, v0.9.6 → 8550, v0.9.8 → 8650, v0.10 → 9300, v0.13 → 9550, v0.14.1 → 9700, v0.15.0 → 9900, v0.16.x → 10400, v0.17.4 → 10500, v0.18.2 → 10600, v0.18.5 → 10800)", () => {
+  it("7. narrow-core LOC ceiling holds (< 11100 / 23 files; ..., v0.7.0 → 7150, v0.7.1 → 7250, v0.7.2 → 7550, v0.8.0 → 8200, v0.9.4 → 8300, v0.9.6 → 8550, v0.9.8 → 8650, v0.10 → 9300, v0.13 → 9550, v0.14.1 → 9700, v0.15.0 → 9900, v0.16.x → 10400, v0.17.4 → 10500, v0.18.2 → 10600, v0.18.5 → 10800, v0.18.8 → 11100)", () => {
     const out = execSync("node scripts/loc-ceiling.mjs", { cwd: REPO_ROOT, encoding: "utf8" });
     const match = /CORE\s+(\d+) LOC across (\d+) files/.exec(out);
     expect(match).not.toBeNull();
     const [, locStr, filesStr] = match!;
-    expect(Number(locStr)).toBeLessThan(10800);
+    expect(Number(locStr)).toBeLessThan(11100);
     expect(Number(filesStr)).toBeLessThan(23);
   });
 

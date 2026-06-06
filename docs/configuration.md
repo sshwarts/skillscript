@@ -49,7 +49,8 @@ The CLI auto-loads `$SKILLSCRIPT_HOME/.env` at startup and populates `process.en
 |---|---|---|
 | `SKILLSCRIPT_HOME` | Config root (default `~/.skillscript`) | shell-set only — read before `.env` loads |
 | `SKILLSCRIPT_FORCE_ALWAYS_DRAFT=true` | Force outside-MCP `skill_write` to Draft; closes the agent-self-approval path | env > config > default `false` |
-| `SKILLSCRIPT_ENABLE_UNSAFE_SHELL=true` | Permit `shell(unsafe=true)` ops | env > config > default `false` |
+| `SKILLSCRIPT_ENABLE_UNSAFE_SHELL=true` | Permit `shell(unsafe=true)` ops (syntax-scope axis) | env > config > default `false` |
+| `SKILLSCRIPT_SHELL_ALLOWLIST=curl,git,jq` | Comma-separated list of binaries reachable via `shell(...)` ops (binary-scope axis). **Default-deny** when unset — BREAKING from v0.18.7. Run `skillfile shell-audit` pre-upgrade to discover your corpus's set. | env > config > default-deny |
 | `SKILLSCRIPT_PORT=8080` | Dashboard / serve HTTP port | `--port` flag > env > config > default `7878` |
 | `SKILLSCRIPT_HOST=0.0.0.0` | Bind address | `--host` flag > env > config > default `127.0.0.1` |
 | `SKILLSCRIPT_MCP_CALLER_IDENTITY_HEADER=X-Agent-Id` | Inbound caller-identity header name (multi-agent MCP hosts only — see [adopter playbook](adopter-playbook.md)) | env > config > default unset |

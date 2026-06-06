@@ -71,6 +71,15 @@ export interface TraceOpRecord {
    * involvement). Used by `healthMetrics()` for per-connector aggregation.
    */
   connector?: string;
+  /**
+   * v0.18.8 — structured reason when the runtime refused the op without
+   * dispatching. Today's enum:
+   *   - "binary-not-allowed" — shell op binary not in operator allowlist
+   * Dashboards filter `/fires` by this field for the operator's
+   * observe→promote loop ("which off-list binaries did skills try to
+   * invoke; do I want to add any to the allowlist?").
+   */
+  blocked_reason?: "binary-not-allowed";
 }
 
 export interface TraceQueryFilter {

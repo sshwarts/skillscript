@@ -230,6 +230,97 @@ SKILLSCRIPT_HOME=/path/to/adopter skillfile dashboard --config /path/to/adopter/
 
 Each instance reads its own config; ports/paths/db files don't collide.
 
+## Shell binary allowlist (v0.18.8 — BREAKING)
+
+**v0.18.8 introduces a default-deny operator allowlist for binaries reachable via `shell(...)` ops.** Per the Scott + Perry decision (memory `7aab6f3f`): skill authors are agents, agents are a weak trust anchor (hallucination, prompt-injection, no human-in-loop at scale), and operator-side scoping converts "a human reviews every skill" from discipline into an enforced constraint at the language level.
+
+### The behavior
+
+Two **independent** operator axes — do not conflate:
+
+| Axis | Operator switch | Controls |
+|---|---|---|
+| **Binary scope** | `SKILLSCRIPT_SHELL_ALLOWLIST` (v0.18.8 new) | Which binaries `shell(...)` can invoke |
+| **Syntax scope** | `SKILLSCRIPT_ENABLE_UNSAFE_SHELL` (existing) | Whether bash interpretation (pipes / `$VAR` / `$(...)`) is permitted |
+
+Behavior matrix:
+
+| Skill op | Binary on allowlist | Binary off allowlist |
+|---|---|---|
+| `shell(command="X ...")` (safe) | runs | refused with `ShellBinaryNotAllowedError` |
+| `shell(command="X ...", unsafe=true)` with `enableUnsafeShell=true` | runs (if `bash` on allowlist) | refused (off-list `bash` blocks ALL unsafe shell) |
+| `shell(command="X ...", unsafe=true)` with `enableUnsafeShell=false` | refused with `UnsafeShellDisabledError` (syntax axis fires first) | — |
+
+**Off-allowlist is final.** The skill author has no in-skill mechanism to escape it — not the `unsafe` keyword, not `# Autonomous: true`, not `approved="reason"`. Binary scope is an operator boundary the author cannot talk past.
+
+### Pre-upgrade migration — run this BEFORE you upgrade
+
+The default-deny posture means existing skills using `shell()` will refuse to run on first dispatch after upgrade. **Sequence the migration as a discovery step, not a recovery step:**
+
+```bash
+# 1. Run while still on v0.18.7 (or any prior version) — pre-upgrade discovery
+skillfile shell-audit
+
+# Sample output:
+#   Scanned 12 skill(s) under /Users/you/.skillscript/skills.
+#
+#   Binaries used:
+#     curl   (in: weather-fetch, status-probe)
+#     git    (in: status-board)
+#     jq     (in: weather-fetch, support-response, status-probe)
+#     bash   (in: support-response)
+#
+#   Ready-to-paste .env entry:
+#
+#   SKILLSCRIPT_SHELL_ALLOWLIST=bash,curl,git,jq
+#
+#   Note: 'bash' is on the list because at least one skill uses
+#   shell(..., unsafe=true). To permit unsafe shell, ALSO set
+#   SKILLSCRIPT_ENABLE_UNSAFE_SHELL=true.
+
+# 2. Paste into your $SKILLSCRIPT_HOME/.env, review/narrow as desired
+
+# 3. NOW upgrade to v0.18.8 — skills find the allowlist already
+#    populated, no surprise refusals
+pnpm install skillscript-runtime@^0.18.8
+```
+
+Running the audit *after* the break is fine but adopter-unfriendly — operators discover problems through runtime errors instead of explicit decisions. The CLI tool exists precisely to make pre-upgrade the canonical path.
+
+### Trust model — lint vs. runtime
+
+**Lint is local advisory; runtime is authoritative.** The `shell-binary-not-allowed` lint rule checks against the *author's* environment allowlist (their local `.env` or the linter's loaded config), which may differ from production. Passing lint does NOT guarantee the call will run.
+
+- **Authors** lint with their own allowlist for immediate feedback ("you can't use `ssh` in your dev env, fix this skill").
+- **CI pipelines** lint with the deployment's `.env` to catch production-specific gaps before merge.
+- **Runtime** is the authoritative gate — refuses off-list binaries at first dispatch regardless of lint state.
+
+This split is intentional: lint as discipline-only would let adopters disable it; runtime as the boundary means the constraint always holds.
+
+### The scope caveat — don't oversell
+
+The allowlist scopes **which** binaries are reachable, not **what they do**. Kills `ssh` / `kubectl` / `rm` / `nc` wholesale — that's real value. Does NOT stop misuse of a permitted binary: `curl` on the list still means curl-to-anywhere (exfil possible to attacker-controlled URLs).
+
+Argument-level policy (host allowlists, URL pattern matching) and OS-level egress controls are **separate, heavier layers** — explicitly out of scope here. Don't let this create false confidence that shell is "solved." For the unsafe path, the proper binary-scope layer is OS-level:
+
+- Restricted `PATH` (only allowed binaries reachable to the runtime process)
+- `execve`/`seccomp` filters (kernel-level allowed-binary set)
+- Container with curated `/usr/bin` (immutable distroless image)
+
+Per Perry's reframe (memory `7aab6f3f`): parse-based binary enumeration of `bash -c <body>` would be unsound — `e=curl; $e ...`, `$(printf cur)l ...`, `eval`, `xargs`, var-built command names all defeat it. Against agent-author threat models, false confidence is worse than no enforcement.
+
+### Future direction (NOT shipped in v0.18.8)
+
+Per-skill capability declaration: skills declare what shell binaries they need in their frontmatter:
+
+```
+# Skill: status-board
+# Shell: git, jq
+# Status: Approved
+```
+
+The operator policy validates `declared ∩ allowlist` — each skill's shell footprint becomes self-documenting and auditable. Slated for a future ring once the chokepoint + observability surfaces ship.
+
 ## Wiring the AgentConnector
 
 `AgentConnector` is the substrate-neutral delivery surface for `# Output: agent: X` / `# Output: template: X` lifecycle hooks and `notify()` / `exchange()` ops. The runtime calls into the contract; your impl decides where the payload lands (webhook, tmux session, file drop, IPC pipe, Slack thread, your own agent harness, etc.).

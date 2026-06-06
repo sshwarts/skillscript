@@ -28,12 +28,21 @@ function wireSlowLlmRegistry(delayMs: number): Registry {
   return registry;
 }
 
+// v0.18.8 — permissive shell allowlist for tests that exercise non-
+// shell-allowlist concerns. The set covers every binary touched by
+// shell() ops across this file's fixtures. New test files exercising
+// the allowlist gate itself supply their own (narrower) allowlists.
+const TEST_SHELL_ALLOWLIST = ["echo", "false", "sleep", "bash"];
+
 async function run(source: string, inputs: Record<string, string> = {}, registry = new Registry()) {
   // Tests in this file exercise runtime behavior directly; bypass the
   // tier-1 lint preflight so test sources that intentionally violate
   // (out-of-scope vars, etc.) reach the runtime layer being tested.
   const compiled = await compile(source, { skipLintPreflight: true });
-  return execute(compiled.parsed, { ...compiled.resolvedVariables, ...inputs }, compiled.targetOrder, { registry });
+  return execute(compiled.parsed, { ...compiled.resolvedVariables, ...inputs }, compiled.targetOrder, {
+    registry,
+    shellAllowlist: TEST_SHELL_ALLOWLIST,
+  });
 }
 
 describe("runtime", () => {
@@ -164,6 +173,7 @@ default: t
     const result = await execute(compiled.parsed, compiled.resolvedVariables, compiled.targetOrder, {
       registry: new Registry(),
       enableUnsafeShell: true,
+      shellAllowlist: TEST_SHELL_ALLOWLIST,
     });
     expect(result.errors).toEqual([]);
     expect(result.finalVars["t.output"]).toBe("shell features: hi");
@@ -180,6 +190,7 @@ default: t
     const compiled = await compile(src, { skipLintPreflight: true });
     const result = await execute(compiled.parsed, compiled.resolvedVariables, compiled.targetOrder, {
       registry: new Registry(),
+      shellAllowlist: TEST_SHELL_ALLOWLIST,
     });
     expect(result.errors.length).toBe(1);
     expect(result.errors[0]!.opKind).toBe("shell");

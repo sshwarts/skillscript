@@ -15,7 +15,12 @@ async function runSkill(src: string): Promise<{ emissions: string[]; errors: unk
   const home = mkdtempSync(join(tmpdir(), "v070fn-"));
   const wired = bootstrap({ skillsDir: join(home, "skills"), traceDir: join(home, "traces") });
   const compiled = await compile(src);
-  const result = await execute(compiled.parsed, compiled.resolvedVariables, compiled.targetOrder, { registry: wired.registry });
+  // v0.18.8 — permissive shell allowlist for tests in this file (covers
+  // the binaries the fixtures exercise: echo, true, etc.).
+  const result = await execute(compiled.parsed, compiled.resolvedVariables, compiled.targetOrder, {
+    registry: wired.registry,
+    shellAllowlist: ["echo", "true", "false", "bash", "sh"],
+  });
   return { emissions: result.emissions, errors: result.errors, vars: result.vars };
 }
 

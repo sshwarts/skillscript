@@ -90,6 +90,13 @@ export interface BootstrapOpts {
   /** Forwarded to scheduler/runtime. Default false. */
   enableUnsafeShell?: boolean;
   /**
+   * v0.18.8 — operator-controlled allowlist of binaries reachable via
+   * `shell(...)` ops. Default-deny when unset (BREAKING from v0.18.7).
+   * See `SkillscriptConfig.shellAllowlist` for the full semantic +
+   * Perry's safe-vs-unsafe reframe (thread `7aab6f3f`).
+   */
+  shellAllowlist?: string[];
+  /**
    * v0.17.4 — approval-posture override. When true, the outside-MCP
    * `skill_write` handler forces every write to land in `Draft` status
    * regardless of what the body declares. Adopters wanting strict
@@ -412,6 +419,7 @@ export function bootstrap(opts: BootstrapOpts): BootstrapResult {
     ...(opts.pollIntervalSeconds !== undefined ? { pollIntervalSeconds: opts.pollIntervalSeconds } : {}),
     ...(opts.absoluteTimeoutMs !== undefined ? { absoluteTimeoutMs: opts.absoluteTimeoutMs } : {}),
     ...(opts.maxRecursionDepth !== undefined ? { maxRecursionDepth: opts.maxRecursionDepth } : {}),
+    ...(opts.shellAllowlist !== undefined ? { shellAllowlist: opts.shellAllowlist } : {}),
     ...(opts.trace !== undefined ? { trace: opts.trace, traceStore } : {}),
     ...(onTriggersChanged !== undefined ? { onTriggersChanged } : {}),
     enableUnsafeShell,
@@ -428,6 +436,7 @@ export function bootstrap(opts: BootstrapOpts): BootstrapResult {
     registry,
     enableUnsafeShell,
     runtimeMode: mode,
+    ...(opts.shellAllowlist !== undefined ? { shellAllowlist: opts.shellAllowlist } : {}),
     ...(opts.triggersFilePath !== undefined ? { triggersFilePath: opts.triggersFilePath } : {}),
     ...(opts.forceAlwaysDraft === true ? { forceAlwaysDraft: true } : {}),
   });

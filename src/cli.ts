@@ -111,6 +111,16 @@ const COMMAND_HELP: Readonly<Record<string, CommandHelp>> = {
       "skillfile audit support-response.provenance.json --json",
     ],
   },
+  "shell-audit": {
+    description: "Pre-upgrade discovery for v0.18.8 shell allowlist; scans corpus + emits SKILLSCRIPT_SHELL_ALLOWLIST value",
+    usage: "skillfile shell-audit [--json]",
+    args: [],
+    options: [{ flag: "--json", description: "Emit structured JSON with per-binary skill citations" }],
+    examples: [
+      "skillfile shell-audit",
+      "skillfile shell-audit --json | jq",
+    ],
+  },
   lint: {
     description: "Run static validation, print findings",
     usage: "skillfile lint <path|name> [--json|--human]",
@@ -316,6 +326,7 @@ async function main(): Promise<number> {
     case "execute": return await cmdRun(rest);
     case "compile": return await cmdCompile(rest);
     case "audit":   return await cmdAudit(rest);
+    case "shell-audit": return await cmdShellAudit(rest);
     case "lint":    return await cmdLint(rest);
     case "list":    return await cmdList(rest);
     case "fires":   return await cmdFires(rest);
@@ -497,6 +508,98 @@ async function cmdAudit(args: string[]): Promise<number> {
     process.stderr.write(`skillfile audit: ${(err as Error).message}\n`);
     return 1;
   }
+}
+
+/**
+ * v0.18.8 — pre-upgrade migration helper for the shell binary allowlist.
+ * Scans every `.skill.md` under `$SKILLSCRIPT_HOME/skills/`, parses each,
+ * walks shell ops, and emits the union of first-token binaries as a
+ * comma-separated value ready to paste into `SKILLSCRIPT_SHELL_ALLOWLIST`.
+ *
+ * Sequence (per Perry's pre-upgrade migration framing): operator runs
+ * this BEFORE upgrading to v0.18.8 — they get the current corpus's
+ * shell footprint, paste into `.env`, then upgrade. Skills don't break
+ * silently; the operator made an explicit decision.
+ *
+ * Unsafe-mode ops surface as `bash` (the actual binary the runtime
+ * invokes via `bash -c`). The body's pipeline contents are NOT
+ * enumerated — per Perry's reframe (thread `7aab6f3f`), parse-based
+ * enumeration on the unsafe path is unsound.
+ *
+ * --json flag emits structured output with per-binary skill citations
+ * for adopter review tooling.
+ */
+async function cmdShellAudit(args: string[]): Promise<number> {
+  const jsonOutput = args.includes("--json");
+  const store = new FilesystemSkillStore(SKILLS_DIR);
+  let metas: Array<{ name: string }>;
+  try {
+    metas = await store.query({});
+  } catch (err) {
+    process.stderr.write(`skillfile shell-audit: ${(err as Error).message}\n`);
+    return 1;
+  }
+  // binary → set of skill names where it's used
+  const usage = new Map<string, Set<string>>();
+  for (const meta of metas) {
+    let source: string;
+    try {
+      const loaded = await store.load(meta.name);
+      source = loaded.source;
+    } catch {
+      continue;
+    }
+    const parsed = parse(source);
+    for (const [, target] of parsed.targets) {
+      const walk = (ops: typeof target.ops): void => {
+        for (const op of ops) {
+          if (op.kind === "shell") {
+            const trimmed = op.body.trim();
+            const binary = op.policy === "unsafe"
+              ? "bash"
+              : trimmed.length === 0 || trimmed.startsWith("${") || trimmed.startsWith("$(")
+                ? null
+                : /^([^\s]+)/.exec(trimmed)?.[1] ?? null;
+            if (binary !== null) {
+              if (!usage.has(binary)) usage.set(binary, new Set());
+              usage.get(binary)!.add(meta.name);
+            }
+          }
+          if (op.foreachBody !== undefined) walk(op.foreachBody);
+          if (op.ifBranches !== undefined) for (const b of op.ifBranches) walk(b.body);
+        }
+      };
+      walk(target.ops);
+    }
+  }
+  const binaries = [...usage.keys()].sort();
+  if (jsonOutput) {
+    const report = {
+      skills_scanned: metas.length,
+      binaries: binaries.map((b) => ({
+        binary: b,
+        used_by: [...usage.get(b)!].sort(),
+      })),
+      allowlist_value: binaries.join(","),
+    };
+    process.stdout.write(`${JSON.stringify(report, null, 2)}\n`);
+  } else {
+    process.stdout.write(`Scanned ${metas.length} skill(s) under ${SKILLS_DIR}.\n`);
+    if (binaries.length === 0) {
+      process.stdout.write("\nNo `shell(...)` ops detected. SKILLSCRIPT_SHELL_ALLOWLIST may be left empty (or unset for full default-deny).\n");
+    } else {
+      process.stdout.write(`\nBinaries used:\n`);
+      for (const binary of binaries) {
+        const callers = [...usage.get(binary)!].sort();
+        process.stdout.write(`  ${binary}  (in: ${callers.join(", ")})\n`);
+      }
+      process.stdout.write(`\nReady-to-paste .env entry:\n\nSKILLSCRIPT_SHELL_ALLOWLIST=${binaries.join(",")}\n`);
+      if (binaries.includes("bash")) {
+        process.stdout.write(`\nNote: 'bash' is on the list because at least one skill uses \`shell(..., unsafe=true)\`. To permit unsafe shell, ALSO set SKILLSCRIPT_ENABLE_UNSAFE_SHELL=true; otherwise the unsafe ops will still refuse (independent axis).\n`);
+      }
+    }
+  }
+  return 0;
 }
 
 async function cmdLint(args: string[]): Promise<number> {
@@ -748,6 +851,15 @@ async function cmdRuntimeHost(args: string[], opts: { mode: "serve" | "dashboard
   const maxRecursionDepth = envMaxRecursion !== undefined && Number.isInteger(envMaxRecursion) && envMaxRecursion >= 1
     ? envMaxRecursion
     : fileConfig.maxRecursionDepth;
+  // v0.18.8 — shell binary allowlist. Comma-separated env value, trimmed.
+  // Default-deny: when neither env nor config is set, leave undefined →
+  // runtime refuses ALL shell() ops. Empty env string is an explicit
+  // empty list (also refuses all) — distinct from undefined for
+  // observability (operator can declare "no shell at all" intentionally).
+  const envShellAllowlistRaw = process.env["SKILLSCRIPT_SHELL_ALLOWLIST"];
+  const shellAllowlist = envShellAllowlistRaw !== undefined
+    ? envShellAllowlistRaw.split(",").map((b) => b.trim()).filter((b) => b.length > 0)
+    : fileConfig.shellAllowlist;
   const wired = bootstrap({
     skillsDir: fileConfig.skillsDir ?? SKILLS_DIR,
     traceDir: fileConfig.traceDir ?? TRACE_DIR,
@@ -758,6 +870,7 @@ async function cmdRuntimeHost(args: string[], opts: { mode: "serve" | "dashboard
     ...(pollIntervalSeconds !== undefined ? { pollIntervalSeconds } : {}),
     ...(absoluteTimeoutMs !== undefined ? { absoluteTimeoutMs } : {}),
     ...(maxRecursionDepth !== undefined ? { maxRecursionDepth } : {}),
+    ...(shellAllowlist !== undefined ? { shellAllowlist } : {}),
     ...(enableUnsafeShell !== undefined ? { enableUnsafeShell } : {}),
     ...(forceAlwaysDraft === true ? { forceAlwaysDraft: true } : {}),
     // Scheduler-fired skills record traces by default; `fires` / `health` /

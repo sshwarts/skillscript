@@ -141,6 +141,25 @@ export interface LintOptions {
    * whose tools genuinely return bare arrays.
    */
   bareArrayReturnTools?: string[];
+  /**
+   * v0.18.8 — operator's shell binary allowlist. When set, the
+   * `shell-binary-not-allowed` rule fires tier-1 errors on any
+   * `shell(command="X ...")` whose first token isn't in the list.
+   *
+   * **Lint = local advisory; runtime = authoritative.** The allowlist
+   * lint checks against here is the AUTHOR's environment, which may
+   * differ from production. Passing lint does NOT guarantee the call
+   * will run — the production runtime gate is the authoritative
+   * boundary. Per Perry's framing (thread `7aab6f3f`): immediate
+   * author feedback at compile-time, defense-in-depth with runtime.
+   *
+   * Undefined → lint skips this rule (no allowlist context); the
+   * runtime still default-denies at execution. This split lets adopter
+   * tooling lint with the production allowlist when known (CI pipelines
+   * loading the deployment's .env) while authoring tools can lint
+   * permissively without false-positive noise.
+   */
+  shellAllowlist?: string[];
 }
 
 interface LintContext {
@@ -160,6 +179,12 @@ interface LintContext {
   localModelAliases: string[] | undefined;
   localModelsAvailable: string[] | undefined;
   bareArrayReturnTools: string[];
+  /**
+   * v0.18.8 — operator shell binary allowlist (see `LintOptions.shellAllowlist`).
+   * Undefined when not supplied — the `shell-binary-not-allowed` rule
+   * skips its check in that case (runtime still default-denies).
+   */
+  shellAllowlist: string[] | undefined;
   /**
    * v0.9.1 — per-connector declared tool surface from `McpConnectorClass.staticTools()`.
    * Map entry: connector name → tool array (declared surface) OR null (class doesn't
@@ -200,6 +225,7 @@ export async function lint(source: string, options?: LintOptions): Promise<LintR
     localModelAliases: localModelInfo?.aliases,
     localModelsAvailable: localModelInfo?.modelsAvailable,
     bareArrayReturnTools: options?.bareArrayReturnTools ?? [],
+    shellAllowlist: options?.shellAllowlist,
     mcpConnectorStaticTools: collectMcpConnectorStaticToolsFromRegistry(options?.registry),
   };
   const findings: LintFinding[] = [];
@@ -245,6 +271,7 @@ export function lintSync(source: string, options?: LintOptions): LintResult {
     localModelAliases: options?.localModelAliases ?? collectLocalModelAliasesFromRegistry(options?.registry),
     localModelsAvailable: options?.localModelsAvailable,
     bareArrayReturnTools: options?.bareArrayReturnTools ?? [],
+    shellAllowlist: options?.shellAllowlist,
     mcpConnectorStaticTools: collectMcpConnectorStaticToolsFromRegistry(options?.registry),
   };
   const findings: LintFinding[] = [];
@@ -1625,6 +1652,80 @@ const UNSAFE_SHELL_DISABLED: LintRule = {
 };
 
 /**
+ * v0.18.8 — author-time advisory for the operator's shell binary
+ * allowlist. Per Perry's two-axes-decoupled rule (thread `7aab6f3f`):
+ * binary-scope is a SEPARATE concern from syntax-scope, so this rule
+ * is deliberately NOT part of the `unsafe-shell-*` family.
+ *
+ * Tier-1 error severity matches the runtime: an off-list binary will
+ * refuse at execution time. Surfacing at compile-time gives the
+ * author immediate "binary X not permitted" feedback rather than
+ * runtime-failure-on-first-fire.
+ *
+ * **Lint is local advisory; runtime is authoritative.** This rule
+ * checks against `LintOptions.shellAllowlist` which is the AUTHOR's
+ * environment (their local `.env` or the linter's loaded config). The
+ * production runtime may have a different allowlist — passing lint
+ * does NOT guarantee the call will run. Authors lint with their own
+ * env; CI pipelines linting against the deployment's .env catch the
+ * production-environment-specific gaps.
+ *
+ * If `ctx.shellAllowlist` is undefined (LintOptions didn't supply one),
+ * the rule skips silently — the runtime's default-deny still fires at
+ * execution. This split prevents false-positive noise when authoring
+ * tools lack the production-allowlist context.
+ *
+ * Unsafe path: `shell(..., unsafe=true)` resolves to `bash -c <body>`
+ * at runtime; the first-token check is against the literal "bash". This
+ * rule mirrors that: if the op is unsafe, the binary checked is "bash"
+ * (regardless of what the body contains). Per Perry's reframe: no
+ * parse-based binary enumeration on the unsafe path.
+ */
+const SHELL_BINARY_NOT_ALLOWED: LintRule = {
+  id: "shell-binary-not-allowed",
+  severity: "error",
+  description: "A `shell(command=\"X ...\")` op's binary `X` is not in the operator's shell allowlist. The runtime refuses the op at execution time.",
+  remediation: "Either add the binary to `SKILLSCRIPT_SHELL_ALLOWLIST` in your `.env` (or `shellAllowlist` in `skillscript.config.json`), or refactor the skill to use a permitted binary. Run `skillfile shell-audit` to discover what binaries your existing corpus uses. Reminder: lint is a local advisory against your author-env allowlist; runtime enforcement is authoritative.",
+  check: (ctx) => {
+    if (ctx.shellAllowlist === undefined) return [];
+    const findings: LintFinding[] = [];
+    for (const [targetName, target] of ctx.parsed.targets) {
+      walkOps(target.ops, (op) => {
+        if (op.kind !== "shell") return;
+        const binary = op.policy === "unsafe" ? "bash" : firstShellToken(op.body);
+        if (binary === null) return;
+        if (ctx.shellAllowlist!.includes(binary)) return;
+        const displayed = op.policy === "unsafe" ? "bash" : binary;
+        findings.push({
+          rule: "shell-binary-not-allowed",
+          severity: "error",
+          message: `\`shell\` op in target '${targetName}': binary '${displayed}' is not in the configured allowlist (${ctx.shellAllowlist!.length === 0 ? "empty list" : ctx.shellAllowlist!.join(", ")}). ${op.policy === "unsafe" ? "Unsafe-mode shell runs as `bash -c`; 'bash' must be on the allowlist to permit ANY unsafe shell." : ""}`,
+          block: targetName,
+          extras: { binary: displayed, policy: op.policy ?? "safe" },
+        });
+      });
+    }
+    return findings;
+  },
+};
+
+/**
+ * v0.18.8 — extract the first whitespace-separated token from a shell
+ * body for allowlist comparison. Best-effort: bodies with `${VAR}`
+ * substitutions whose value would resolve to the binary at runtime
+ * can't be statically analyzed (runtime check is the authoritative
+ * gate). Returns null for empty / substitution-prefix bodies to skip
+ * the lint check for those cases.
+ */
+function firstShellToken(body: string): string | null {
+  const trimmed = body.trim();
+  if (trimmed.length === 0) return null;
+  if (trimmed.startsWith("${") || trimmed.startsWith("$(")) return null;
+  const match = /^([^\s]+)/.exec(trimmed);
+  return match === null ? null : match[1]!;
+}
+
+/**
  * Mutation-class op fired without author authorization. v0.14.1 refactored
  * to share the classifier + authorization predicate with the runtime gate
  * in `src/mutation-gate.ts` — single source of truth. Today lint surfaces
@@ -2909,6 +3010,7 @@ const RULES: LintRule[] = [
   UNSAFE_SHELL_UNESCAPED_SUBST,
   UNSAFE_SHELL_OP,
   UNSAFE_SHELL_DISABLED,
+  SHELL_BINARY_NOT_ALLOWED,
   UNCONFIRMED_MUTATION,
   UNQUOTED_SUBSTITUTION_IN_KWARG_VALUE,
   DRAFT_WITH_TRIGGER,

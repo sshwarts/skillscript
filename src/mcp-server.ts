@@ -118,6 +118,12 @@ export interface McpServerDeps {
   /** Surfaced via `runtime_capabilities` so cold agents know whether `@ unsafe` is permitted. */
   enableUnsafeShell?: boolean;
   /**
+   * v0.18.8 — operator's shell binary allowlist. Threaded into every
+   * `execute_skill` dispatch ctx so the runtime enforces binary-scope.
+   * See `ExecuteContext.shellAllowlist` for full semantic.
+   */
+  shellAllowlist?: string[];
+  /**
    * v0.16.8 — approval-posture override. When true, the outside-MCP
    * `skill_write` handler forces every write to land in `Draft` status
    * regardless of what the body declares. The body's `# Status: Approved`
@@ -698,6 +704,7 @@ export class McpServer {
       mechanical,
       recursionDepth: 0,
       ...(this.deps.enableUnsafeShell !== undefined ? { enableUnsafeShell: this.deps.enableUnsafeShell } : {}),
+      ...(this.deps.shellAllowlist !== undefined ? { shellAllowlist: this.deps.shellAllowlist } : {}),
       ...(agentId !== undefined ? { agentId } : {}),
       ...(callerCtx?.callerIdentity !== undefined ? { callerAgentId: callerCtx.callerIdentity } : {}),
     } satisfies import("./runtime.js").ExecuteContext;
@@ -800,6 +807,7 @@ export class McpServer {
       skillStore: this.deps.skillStore,
       callSite: "api",
       ...(this.deps.enableUnsafeShell !== undefined ? { enableUnsafeShell: this.deps.enableUnsafeShell } : {}),
+      ...(this.deps.shellAllowlist !== undefined ? { shellAllowlist: this.deps.shellAllowlist } : {}),
       ...(this.deps.registry !== undefined ? { registry: this.deps.registry } : {}),
     });
     return {
@@ -829,6 +837,7 @@ export class McpServer {
         skillStore: this.deps.skillStore,
         ...(inputs !== undefined ? { inputs } : {}),
         ...(this.deps.enableUnsafeShell !== undefined ? { enableUnsafeShell: this.deps.enableUnsafeShell } : {}),
+      ...(this.deps.shellAllowlist !== undefined ? { shellAllowlist: this.deps.shellAllowlist } : {}),
         ...(this.deps.registry !== undefined ? { registry: this.deps.registry } : {}),
       });
       return {

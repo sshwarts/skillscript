@@ -49,6 +49,8 @@ default: emit
         registry: new Registry(),
         skillStore: store,
         now: () => mockNow,
+        // v0.18.8 — heartbeat skill uses `echo` + `date` for its tick.
+        shellAllowlist: ["echo", "date", "true", "false", "sleep", "bash"],
       });
       sched.registerTrigger({
         skillName: "heartbeat",
@@ -77,6 +79,7 @@ default: emit
         skillStore: store,
         now: () => mockNow,
         log: (m) => logs.push(m),
+        shellAllowlist: ["echo", "date", "true", "false", "sleep", "bash"],
       });
       const result2 = await schedAfterDisable.dispatchSkill("heartbeat");
       expect(result2).toBeNull();
@@ -111,7 +114,11 @@ slow-target:
 default: slow-target
 `;
       await store.store("slow", slowSrc);
-      const sched = new Scheduler({ registry: new Registry(), skillStore: store });
+      const sched = new Scheduler({
+        registry: new Registry(),
+        skillStore: store,
+        shellAllowlist: ["sleep", "echo", "date", "true", "false", "bash"],
+      });
       const result = await sched.dispatchSkill("slow");
       expect(result).not.toBeNull();
       expect(result!.errors.length).toBe(1);

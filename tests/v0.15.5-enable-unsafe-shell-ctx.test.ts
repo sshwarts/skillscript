@@ -36,6 +36,8 @@ describe("v0.15.5 — enableUnsafeShell is threaded into execute_skill ctx", () 
       skillStore: wired.skillStore,
       registry: wired.registry,
       enableUnsafeShell,
+      // v0.18.8 — fixtures use `bash` (unsafe) + `echo`/`tr`/`cat` (safe).
+      shellAllowlist: ["bash", "echo", "tr", "cat"],
     });
   }
 

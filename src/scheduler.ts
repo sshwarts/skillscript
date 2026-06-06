@@ -57,6 +57,12 @@ export interface SchedulerConfig {
   pollIntervalSeconds?: number;
   /** Forwarded to runtime.execute(). */
   enableUnsafeShell?: boolean;
+  /**
+   * v0.18.8 — operator allowlist of permitted shell binaries. Threaded
+   * into per-dispatch ctx; runtime refuses off-list binaries on both
+   * the safe + unsafe paths. Default-deny when unset (BREAKING).
+   */
+  shellAllowlist?: string[];
   absoluteTimeoutMs?: number;
   /**
    * v0.18.7 — composition recursion-depth ceiling (default 10). Threaded
@@ -93,6 +99,7 @@ export class Scheduler {
   private readonly skillStore: SkillStore;
   private readonly pollIntervalMs: number;
   private readonly enableUnsafeShell: boolean;
+  private readonly shellAllowlist: string[] | undefined;
   private readonly absoluteTimeoutMs: number | undefined;
   private readonly maxRecursionDepth: number | undefined;
   private readonly trace: TraceConfig | undefined;
@@ -111,6 +118,7 @@ export class Scheduler {
     this.skillStore = config.skillStore;
     this.pollIntervalMs = (config.pollIntervalSeconds ?? 30) * 1000;
     this.enableUnsafeShell = config.enableUnsafeShell ?? false;
+    this.shellAllowlist = config.shellAllowlist;
     this.absoluteTimeoutMs = config.absoluteTimeoutMs;
     this.maxRecursionDepth = config.maxRecursionDepth;
     this.trace = config.trace;
@@ -324,6 +332,7 @@ export class Scheduler {
     const ctx: ExecuteContext = {
       registry: this.registry,
       enableUnsafeShell: this.enableUnsafeShell,
+      ...(this.shellAllowlist !== undefined ? { shellAllowlist: this.shellAllowlist } : {}),
       ...(this.absoluteTimeoutMs !== undefined ? { absoluteTimeoutMs: this.absoluteTimeoutMs } : {}),
       ...(this.maxRecursionDepth !== undefined ? { maxRecursionDepth: this.maxRecursionDepth } : {}),
       ...(this.trace !== undefined ? { trace: this.trace } : {}),

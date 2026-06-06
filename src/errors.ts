@@ -285,6 +285,37 @@ export class UnsafeShellDisabledError extends OpError {
 }
 
 /**
+ * v0.18.8 — a `shell(...)` op fired against a binary not in the operator's
+ * `SKILLSCRIPT_SHELL_ALLOWLIST`. Default-deny: an unset allowlist refuses
+ * every shell call (BREAKING from v0.18.7).
+ *
+ * Per Perry's "the error message IS the remediation doc" requirement: the
+ * message names the offending binary + the env var + the audit helper.
+ * Operators reading this error in logs know exactly what to do.
+ */
+export class ShellBinaryNotAllowedError extends OpError {
+  constructor(
+    public readonly binary: string,
+    public readonly allowlist: string[] | undefined,
+    target?: string,
+  ) {
+    const allowlistDisplay = allowlist === undefined
+      ? "(unset — default-deny)"
+      : allowlist.length === 0
+        ? "(empty list — operator declared no shell binaries permitted)"
+        : allowlist.join(", ");
+    const message = `\`shell\` op refused: binary '${binary}' is not in the operator's shell allowlist. Current allowlist: ${allowlistDisplay}.`;
+    const remediation =
+      `Add '${binary}' to \`SKILLSCRIPT_SHELL_ALLOWLIST\` in your \`.env\` file (or \`shellAllowlist\` in \`skillscript.config.json\`) and restart the runtime. ` +
+      `To discover what binaries your existing skill corpus uses, run \`skillfile shell-audit\` — it scans every skill and prints the union of binaries ready to paste into the allowlist. ` +
+      `Binary-scope is an operator boundary the skill author cannot escape via the \`unsafe\` keyword or any other in-skill mechanism. ` +
+      `See \`docs/adopter-playbook.md\` § "Shell binary allowlist" for the migration walkthrough.`;
+    super(message, "shell", remediation, target);
+    this.name = "ShellBinaryNotAllowedError";
+  }
+}
+
+/**
  * A composition reference (`&` data-skill inline, `$ execute_skill`, or
  * `# Templates:` delivery) couldn't be resolved at execute time because
  * the SkillStore has no skill by that name. v0.3.1: forward-reference

@@ -53,6 +53,31 @@ export interface SkillscriptConfig {
   /** When true, `shell(unsafe=true)` ops are permitted. Default false. */
   enableUnsafeShell?: boolean;
   /**
+   * v0.18.8 — operator-controlled allowlist of binaries reachable via
+   * `shell(...)` ops. Default-deny: undefined → no `shell()` ops dispatch
+   * (every adopter must declare what's allowed in their deployment).
+   *
+   * - safe path: first token tokenized as the binary; must appear in
+   *   this list. The token IS the binary (grammar guarantees no
+   *   metacharacters / variable expansion / etc.).
+   * - unsafe path (`shell(..., unsafe=true)`): first token is literally
+   *   `bash` (the runtime invokes `bash -c <body>`). To allow ANY unsafe
+   *   shell at all, the list must include `bash` (in addition to
+   *   `enableUnsafeShell: true`). Per Perry's two-axes-decoupled rule:
+   *   binary-scope and syntax-scope are independent.
+   *
+   * Per Perry's thread `7aab6f3f`: parse-based binary enumeration of
+   * unsafe-shell bodies is UNSOUND against agent-author threat model
+   * (`e=curl; $e ...`, `$(printf cur)l`, `eval`, `xargs`, var-built
+   * commands all defeat it). Sound binary-scoping on the unsafe path is
+   * OS-level (restricted PATH, execve/seccomp, container) — out of
+   * scope for this layer. The adopter playbook documents that path.
+   *
+   * Env-var override: `SKILLSCRIPT_SHELL_ALLOWLIST=curl,git,jq` (comma-
+   * separated, trimmed). Empty string → empty list (allow none).
+   */
+  shellAllowlist?: string[];
+  /**
    * v0.17.4 — when true, outside-MCP `skill_write` forces every write
    * to land Draft regardless of body declaration. Closes the
    * agent-self-approval path for adopters wanting an explicit human
@@ -179,6 +204,14 @@ export function loadSkillscriptConfig(opts: LoadSkillscriptConfigOpts): LoadSkil
       errors.push(`skillscript.config.json: field 'enableUnsafeShell' must be a boolean.`);
     } else {
       config.enableUnsafeShell = obj["enableUnsafeShell"];
+    }
+  }
+
+  if (obj["shellAllowlist"] !== undefined) {
+    if (!Array.isArray(obj["shellAllowlist"]) || !obj["shellAllowlist"].every((b) => typeof b === "string")) {
+      errors.push(`skillscript.config.json: field 'shellAllowlist' must be an array of binary-name strings (e.g., ["curl", "git", "jq"]).`);
+    } else {
+      config.shellAllowlist = obj["shellAllowlist"] as string[];
     }
   }
 

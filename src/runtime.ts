@@ -14,6 +14,7 @@ import {
   ConnectorNotFoundError,
   OpTimeoutError,
   UnsafeShellDisabledError,
+  ShellBinaryNotAllowedError,
   UnresolvedVariableError,
   TypeMismatchError,
   MissingSkillReferenceError,
@@ -99,6 +100,23 @@ export interface ExecuteContext {
    * flags every `@ unsafe` op regardless.
    */
   enableUnsafeShell?: boolean;
+  /**
+   * v0.18.8 — operator-controlled allowlist of binaries reachable via
+   * `shell(...)` ops. **Default-deny when undefined** (BREAKING from
+   * v0.18.7 — adopters must declare what shell binaries their deployment
+   * permits). Per Perry's two-axes-decoupled rule (thread `7aab6f3f`):
+   * binary-scope (this) and syntax-scope (`enableUnsafeShell`) are
+   * independent.
+   *
+   * Safe path: `shell(command="curl ...")` parses `curl` as the binary;
+   * must be in the list.
+   * Unsafe path: `shell(command="...", unsafe=true)` invokes `bash -c`;
+   * "bash" must be in the list to permit ANY unsafe shell. All-or-nothing
+   * on the unsafe path — parse-based binary enumeration would be unsound
+   * against agent-author threat model (see playbook for OS-level
+   * binary-scope on unsafe path).
+   */
+  shellAllowlist?: string[];
   /**
    * Dispatch trace recording config per ERD §8. Combined with `traceStore`
    * to persist records. Mode "off" / undefined skips tracing entirely;
@@ -268,6 +286,22 @@ interface ExecOpsResult {
  */
 function isWakeAddress(agentId: string): boolean {
   return agentId.includes("@");
+}
+
+/**
+ * v0.18.8 — shell binary-scope predicate per Perry's two-axes-decoupled
+ * rule (thread `7aab6f3f`). Default-deny: undefined allowlist refuses
+ * every binary. Empty array: explicit "no binaries permitted" — also
+ * refuses (distinct from undefined for observability — operator
+ * declared the empty list on purpose).
+ *
+ * Comparison is exact-match on the literal first token. No path
+ * resolution, no canonicalization — the token IS the binary as written
+ * in the skill source. Operators reason about what's in skill source.
+ */
+function isBinaryAllowed(binary: string, allowlist: string[] | undefined): boolean {
+  if (allowlist === undefined) return false;
+  return allowlist.includes(binary);
 }
 
 /**
@@ -632,10 +666,17 @@ async function execOp(
 ): Promise<ExecOpsResult> {
   const startMs = traceBuilder !== null ? Date.now() : 0;
   let errored = false;
+  let blockedReason: "binary-not-allowed" | undefined;
   try {
     return await execOpInner(op, vars, emissions, fallbacks, ctx, targetName, skillTimeoutSec, absoluteTimeoutMs, traceBuilder, authState);
   } catch (err) {
     errored = true;
+    // v0.18.8 — capture structured block reasons so dashboards can
+    // filter `/fires` by "what binaries did skills try to invoke off
+    // the allowlist." Per Perry's observe→promote loop.
+    if (err instanceof ShellBinaryNotAllowedError) {
+      blockedReason = "binary-not-allowed";
+    }
     // Default-tag any escaping error with `op.kind`. Explicit makeOpError()
     // tags take precedence. Fixes the case where `~` failures classified as `?`.
     const e = err as Error & { opKind?: string };
@@ -652,6 +693,7 @@ async function execOp(
         duration_ms: Date.now() - startMs,
         errored,
         ...(connector !== undefined ? { connector } : {}),
+        ...(blockedReason !== undefined ? { blocked_reason: blockedReason } : {}),
       });
     }
   }
@@ -769,6 +811,16 @@ async function execOpInner(
         if (ctx.enableUnsafeShell !== true) {
           throw new UnsafeShellDisabledError(body, targetName);
         }
+        // v0.18.8 — binary-scope gate (independent axis from
+        // ENABLE_UNSAFE_SHELL). Unsafe path invokes `bash -c <body>`;
+        // the literal first token IS `bash`. All-or-nothing: bash on
+        // allowlist → unsafe runs anything; bash off → unsafe refused.
+        // Per Perry's reframe (thread `7aab6f3f`): NO parse-based
+        // enumeration of body binaries — it's unsound against agent-
+        // author threat model. Sound binary-scope on unsafe is OS-level.
+        if (!isBinaryAllowed("bash", ctx.shellAllowlist)) {
+          throw new ShellBinaryNotAllowedError("bash", ctx.shellAllowlist, targetName);
+        }
         stdout = await execShellCommand("bash", ["-c", body], shellTimeoutMs);
       } else {
         const tokens = tokenizeShellArgs(body);
@@ -781,6 +833,12 @@ async function execOpInner(
           );
         }
         const [bin, ...args] = tokens;
+        // v0.18.8 — binary-scope gate. Safe-path grammar guarantees
+        // one binary + no metacharacters, so the first token IS the
+        // binary. Default-deny when allowlist unset (BREAKING).
+        if (!isBinaryAllowed(bin!, ctx.shellAllowlist)) {
+          throw new ShellBinaryNotAllowedError(bin!, ctx.shellAllowlist, targetName);
+        }
         stdout = await execShellCommand(bin!, args, shellTimeoutMs);
       }
       const flatKey = `${targetName}.output`;

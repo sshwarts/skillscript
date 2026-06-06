@@ -1,5 +1,112 @@
 # Changelog
 
+## 0.18.8 — 2026-06-06 — **BREAKING** — default-deny shell binary allowlist
+
+**This is a breaking change.** Default behavior changes from "any
+binary on `PATH` reachable via `shell(...)`" to "only operator-
+allowlisted binaries reachable; default-deny when unset." Existing
+deployments using `shell()` must set `SKILLSCRIPT_SHELL_ALLOWLIST` in
+their `.env` before upgrade, or `shell()` ops will refuse at first
+dispatch with `ShellBinaryNotAllowedError`.
+
+### Migration — run BEFORE upgrade
+
+```bash
+skillfile shell-audit
+```
+
+Scans `$SKILLSCRIPT_HOME/skills/` for `shell()` ops, emits the union
+of binaries used, and prints a ready-to-paste `SKILLSCRIPT_SHELL_ALLOWLIST=...`
+line. Paste into `.env`, review/narrow, THEN upgrade. Per Perry's
+pre-upgrade-not-post-break framing.
+
+### Why default-deny
+
+Per Scott + Perry decision (memory `7aab6f3f`, 2026-06-06): skill
+authors are agents → weak trust anchor (hallucination, prompt-
+injection, no human-in-loop at scale). Default-open shell relies on
+author trust, which doesn't hold for agent-authored skills. Default-
+deny converts a discipline-only control ("a human reviews every skill")
+into an enforced constraint at the language level. *The constraint
+IS the safety story.*
+
+Pre-v0.18.8 deployments had no operator-side binary scope: any
+`shell(command="rm -rf /")` in a `# Autonomous: true` skill ran
+unchallenged. This ring closes that gap.
+
+### Two independent axes
+
+| Operator switch | Controls |
+|---|---|
+| `SKILLSCRIPT_SHELL_ALLOWLIST` (new) | Which binaries are reachable (binary scope) |
+| `SKILLSCRIPT_ENABLE_UNSAFE_SHELL` (existing) | Whether bash interpretation is permitted (syntax scope) |
+
+Per Perry's two-axes-decoupled rule: do NOT overload `unsafe`. An
+off-list binary refuses regardless of `unsafe`. An on-list binary +
+unsafe syntax requires BOTH gates to pass.
+
+### Unsafe path is all-or-nothing
+
+For `shell(..., unsafe=true)`, the runtime invokes `bash -c <body>`;
+the literal first token is `bash`. So permitting any unsafe shell at
+all requires `bash` on the allowlist (in addition to
+`ENABLE_UNSAFE_SHELL=true`). Per-binary scope within unsafe-mode bodies
+is **not implemented and will not be** — parse-based enumeration is
+unsound against agent-author threat model (`e=curl; $e ...`,
+`$(printf cur)l`, `eval`, `xargs` all defeat it). The proper layer for
+binary-scope on unsafe shell is OS-level (restricted PATH,
+execve/seccomp, container) — documented in `docs/adopter-playbook.md`
+§ "Shell binary allowlist."
+
+### Enforcement layers
+
+- **Runtime** (authoritative) — refuses off-list binaries at dispatch.
+  Throws `ShellBinaryNotAllowedError` with actionable remediation:
+  names the binary, names the env var, points at `skillfile shell-audit`.
+- **Lint** (local advisory) — new tier-1 rule `shell-binary-not-allowed`
+  fires when `LintOptions.shellAllowlist` is supplied. Author env may
+  differ from production; lint is for immediate authoring feedback,
+  not the boundary. Skips silently when allowlist not supplied.
+- **Trace observability** — refused ops emit `blocked_reason:
+  "binary-not-allowed"` on the trace record for dashboard filtering
+  (operator's observe→promote loop: "what binaries did skills try to
+  invoke off the allowlist; do I want to add any?").
+
+### What landed
+
+- `SKILLSCRIPT_SHELL_ALLOWLIST` env var + `shellAllowlist?: string[]`
+  config field + `BootstrapOpts.shellAllowlist` + Scheduler threading
+  + `ExecuteContext.shellAllowlist` (CLI cascade: env > config > default-deny)
+- Runtime gate in `runtime.ts` case "shell" — applies to both safe
+  and unsafe paths
+- New `ShellBinaryNotAllowedError` (OpError subclass)
+- New tier-1 lint rule `shell-binary-not-allowed`
+- New `TraceOpRecord.blocked_reason` field
+- New CLI command `skillfile shell-audit` (pre-upgrade migration helper)
+- `.env.example` documentation
+- `docs/adopter-playbook.md` new "Shell binary allowlist" section with
+  full migration walkthrough + trust model + scope caveat (don't oversell)
+- `docs/configuration.md` env-var table extended
+
+### Tests
+
+16 new in `v0.18.8-shell-allowlist.test.ts` (runtime safe/unsafe gates
++ lint rule + trace observability). 1745 tests total; typecheck clean.
+Narrow-core LOC ceiling 10800 → 11100.
+
+Pre-existing tests using `shell()` were updated to declare
+`shellAllowlist` in their test ctx — the canary for adopter-side
+migration discipline.
+
+### Future direction (NOT in this ring)
+
+Per-skill capability declaration: `# Shell: curl, jq` frontmatter
+where operator policy validates `declared ∩ allowlist`. Makes each
+skill's shell footprint self-documenting + auditable. Slated for a
+future ring once chokepoint + observability surfaces ship.
+
+---
+
 ## 0.18.7 — 2026-06-06 — three previously-hidden operator knobs surfaced via env cascade
 
 Closes a discoverability gap noticed during a `.env` audit: three
