@@ -24,8 +24,8 @@ const REPO_ROOT = join(__dirname, "..");
 const PACKAGE_JSON = JSON.parse(readFileSync(join(REPO_ROOT, "package.json"), "utf8")) as Record<string, unknown>;
 
 describe("T7 — package.json polish", () => {
-  it("1. version is 0.19.2 (HOTFIX — TS-syntax-in-plain-JS regression: v0.18.9 SPA app.js had `arr[idx]!` non-null assertions; browser SyntaxError prevented dashboard from rendering content; menu visible, body blank. Fixed + node --check regression guard.)", () => {
-    expect(PACKAGE_JSON["version"]).toBe("0.19.2");
+  it("1. version is 0.19.3 (real SPA render coverage: happy-dom-loaded app.js + mocked /rpc + per-view render assertions. Catches the class of bugs v0.19.2 hotfix could only patch reactively — runtime errors, DOM mismatches, response-shape misreads. 10 new tests cover all top-nav views + graceful degradation + skill detail security-signal rendering.)", () => {
+    expect(PACKAGE_JSON["version"]).toBe("0.19.3");
   });
 
   it("2. main + types + bin + engines.node ≥ 22.5 declared", () => {

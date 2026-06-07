@@ -1,6 +1,6 @@
 {
   "name": "skillscript-runtime",
-  "version": "0.19.2",
+  "version": "0.19.3",
   "description": "Runtime, compiler, lint, CLI, and dashboard for Skillscript — a small declarative language for authoring agent workflows.",
   "license": "MIT",
   "author": "Scott Shwarts <scotts@pobox.com>",
@@ -103,6 +103,7 @@
   },
   "devDependencies": {
     "@types/node": "^22.10.0",
+    "happy-dom": "^20.10.2",
     "tsx": "^4.19.0",
     "typescript": "^5.7.0",
     "vitest": "^2.1.0"

@@ -1,5 +1,97 @@
 # Changelog
 
+## 0.19.3 — 2026-06-07 — Real SPA render coverage (closes the test gap that let v0.18.9–v0.19.1 ship broken)
+
+The v0.19.2 hotfix patched the specific syntax bug; v0.19.3 closes
+the **class of bug** with a real end-to-end test surface. Per Scott:
+"tests should test web dashboard moving forward."
+
+### Why a new test surface
+
+v0.18.9 shipped a broken SPA through THREE releases (v0.18.9 / v0.19.0
+/ v0.19.1) because the test discipline had a hole:
+
+- TypeScript compiler accepted the TS-style syntax (TS-valid)
+- Unit tests didn't load `app.js` in a JS runtime
+- Build script copies `src/dashboard/spa/*` verbatim to `dist/` (no transpile)
+- Live dev probes during recent rings were CLI-side (curl POST /event);
+  SPA was never opened in a browser as part of any ring's verification
+
+The v0.19.2 hotfix added a `node --check` syntax guard — necessary but
+not sufficient. Many other render-time failure modes aren't syntax errors:
+
+- Runtime exceptions inside render functions
+- DOM expectations that drift (`getElementById` returns null, etc.)
+- Response-shape misreads (canned data has wrong field name —
+  exactly the case v0.19.3's first run caught itself)
+- Missing event handlers / stale state references
+- Silent fall-through where polls fail and content stays blank
+
+### What v0.19.3 ships
+
+**`tests/v0.19.3-spa-render-coverage.test.ts`** — happy-dom-based
+test suite that:
+
+1. Loads `index.html` into a real DOM
+2. Loads `app.js` in a JS runtime (happy-dom env, ~lightweight)
+3. Mocks `fetch` to route `/rpc` calls to canned MCP responses
+4. Drives `refresh()` + view changes via the hash router
+5. Asserts rendered HTML per view contains expected content
+
+10 tests covering:
+- Smoke: SPA loads + executes without throwing; first render produces
+  non-empty content (the exact symptom v0.18.9 missed)
+- Each top-nav route: `#overview` / `#skills` / `#triggers` /
+  `#connectors` / `#security` renders with canned state
+- Unknown hash falls through to empty-state
+- Graceful degradation: `#security` shows "unavailable" when the
+  `blocked_shell_attempts` tool isn't exposed (pre-v0.18.9 runtime)
+- Skill detail view: security-signals panel + source highlighting
+  actually execute against a real risky-skill body (the exact code
+  path that broke in v0.18.9)
+
+### Self-validation note
+
+First test run caught a real bug in v0.19.3 ITSELF — canned data had
+`className` where the SPA expected `implementation`. Fixed before
+commit. The test surface is doing its job: it catches response-shape
+drift between canned mocks + actual SPA expectations the moment a
+test is added.
+
+### What this catches that the v0.19.2 guard didn't
+
+| Bug class | v0.19.2 guard | v0.19.3 tests |
+|---|---|---|
+| TS syntax in JS file | ✓ (`node --check`) | ✓ (load fails) |
+| Runtime errors in render funcs | ✗ | ✓ |
+| DOM expectation drift | ✗ | ✓ |
+| Response-shape misreads | ✗ | ✓ |
+| Missing event handlers | ✗ | ✓ |
+| View-specific blank renders | ✗ | ✓ per-view |
+
+Future SPA changes extend the test file with new per-view assertions.
+The `loadSpa()` + `mockFetch` infrastructure is persistent test
+surface.
+
+### Tests + deps
+
+1826 tests total (10 new in v0.19.3). New devDependency: `happy-dom`
+(~8MB, devDep only, NOT shipped to adopters per the package `files`
+list). Typecheck clean.
+
+No code changes outside tests + devDep + package.json version bump +
+CHANGELOG.
+
+### Banking note
+
+Three-release broken-SPA window is the dogfood-discipline lesson —
+"build + probe end-to-end before claiming done" needs to include the
+SPA when SPA code changed. The v0.19.3 test surface enforces this at
+test time so the discipline doesn't depend on remembering to open a
+browser.
+
+---
+
 ## 0.19.2 — 2026-06-07 — HOTFIX — Dashboard SPA SyntaxError prevented content from rendering
 
 **Adopter-impacting regression** since v0.18.9. The dashboard SPA's
