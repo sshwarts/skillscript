@@ -104,14 +104,14 @@ describe("v0.2.1 — wireDeclarativeTriggers()", () => {
     expect(triggers[0]!.declarative).toBe(true);
   });
 
-  it("registers every # Triggers: entry when a skill declares multiple", async () => {
+  it("registers every # Triggers: entry when a skill declares multiple (v0.19.0 — sources collapsed to cron + event)", async () => {
     const wired = bootstrap({ skillsDir: join(home, "skills"), traceDir: join(home, "traces") });
     await wired.skillStore.store("multi",
-      "# Skill: multi\n# Status: Approved\n# Triggers: cron: 0 9 * * *, session: start\nt:\n    emit(text=\"hi\")\ndefault: t\n");
+      "# Skill: multi\n# Status: Approved\n# Triggers: cron: 0 9 * * *, event: heartbeat\nt:\n    emit(text=\"hi\")\ndefault: t\n");
     const { registered } = await wireDeclarativeTriggers(wired, () => {});
     expect(registered).toBe(2);
     const sources = wired.scheduler.listTriggers().map((t) => t.source).sort();
-    expect(sources).toEqual(["cron", "session"]);
+    expect(sources).toEqual(["cron", "event"]);
   });
 
   it("returns { registered: 0 } on empty SkillStore without crashing", async () => {

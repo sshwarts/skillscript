@@ -42,13 +42,13 @@ describe("v0.2.2 — Bug A: # Triggers comma-split with cron expressions", () =>
     ]);
   });
 
-  it("mixed-source on one line still splits by source-keyword", () => {
-    const src = "# Skill: x\n# Status: Approved\n# Triggers: cron: 30,45 9 * * 1-5, session: start\nt:\n    emit(text=\"hi\")\ndefault: t\n";
+  it("mixed-source on one line still splits by source-keyword (v0.19.0 — sources are cron + event)", () => {
+    const src = "# Skill: x\n# Status: Approved\n# Triggers: cron: 30,45 9 * * 1-5, event: heartbeat\nt:\n    emit(text=\"hi\")\ndefault: t\n";
     const parsed = parse(src);
     expect(parsed.parseErrors).toEqual([]);
     expect(parsed.triggers).toEqual([
       { source: "cron", name: "30,45 9 * * 1-5" },
-      { source: "session", name: "start" },
+      { source: "event", name: "heartbeat" },
     ]);
   });
 
@@ -58,13 +58,34 @@ describe("v0.2.2 — Bug A: # Triggers comma-split with cron expressions", () =>
     expect(parsed.triggers).toEqual([{ source: "cron", name: "0 9 * * *" }]);
   });
 
-  it("agent-event source (hyphenated) is recognized as boundary token", () => {
-    const src = "# Skill: x\n# Status: Approved\n# Triggers: cron: 0 9 * * *, agent-event: heartbeat\nt:\n    emit(text=\"hi\")\ndefault: t\n";
+  it("removed source (agent-event) is rejected with parse error (v0.19.0 — trigger model collapse)", () => {
+    // Pre-v0.19.0: session/agent-event/file-watch/sensor parsed as stubs.
+    // v0.19.0: only cron + event are accepted; everything else is a parse
+    // error. External adapters wanting "agent-event"-style behavior POST
+    // to the /event HTTP ingress.
+    //
+    // Note: removed sources can no longer appear as comma-list boundaries
+    // (the splitter only recognizes cron + event), so we test the source-
+    // rejection path directly with agent-event as the FIRST entry — the
+    // colon split surfaces the unrecognized source.
+    const src = "# Skill: x\n# Status: Approved\n# Triggers: agent-event: heartbeat\nt:\n    emit(text=\"hi\")\ndefault: t\n";
     const parsed = parse(src);
-    expect(parsed.triggers).toEqual([
-      { source: "cron", name: "0 9 * * *" },
-      { source: "agent-event", name: "heartbeat" },
-    ]);
+    expect(parsed.parseErrors.length).toBeGreaterThan(0);
+    expect(parsed.parseErrors[0]).toMatch(/Unsupported trigger source 'agent-event'/);
+  });
+
+  it("removed source (session) is rejected with parse error (v0.19.0 — trigger model collapse)", () => {
+    const src = "# Skill: x\n# Status: Approved\n# Triggers: session: start\nt:\n    emit(text=\"hi\")\ndefault: t\n";
+    const parsed = parse(src);
+    expect(parsed.parseErrors.length).toBeGreaterThan(0);
+    expect(parsed.parseErrors[0]).toMatch(/Unsupported trigger source 'session'/);
+  });
+
+  it("removed source (file-watch) is rejected with parse error", () => {
+    const src = "# Skill: x\n# Status: Approved\n# Triggers: file-watch: /tmp/foo\nt:\n    emit(text=\"hi\")\ndefault: t\n";
+    const parsed = parse(src);
+    expect(parsed.parseErrors.length).toBeGreaterThan(0);
+    expect(parsed.parseErrors[0]).toMatch(/Unsupported trigger source 'file-watch'/);
   });
 });
 

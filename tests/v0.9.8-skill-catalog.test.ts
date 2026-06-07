@@ -153,12 +153,12 @@ describe("v0.9.8 — triggers discriminated union", () => {
     expect(catalog.receives![0]!.triggers).toEqual([{ kind: "cron", expression: "0 9 * * MON-FRI" }]);
   });
 
-  it("session → { kind: 'session', phase }", async () => {
-    await store.store("session-skill",
-      "# Skill: session-skill\n# Status: Approved\n# Triggers: session: start\n# Output: agent: x\nt:\n    emit(text=\"hi\")\ndefault: t\n",
+  it("event → { kind: 'event', event_name } (v0.19.0 — session removed; event is the only non-cron source)", async () => {
+    await store.store("event-skill",
+      "# Skill: event-skill\n# Status: Approved\n# Triggers: event: heartbeat\n# Output: agent: x\nt:\n    emit(text=\"hi\")\ndefault: t\n",
     );
     const catalog = await buildSkillCatalog(store);
-    expect(catalog.receives![0]!.triggers).toEqual([{ kind: "session", phase: "start" }]);
+    expect(catalog.receives![0]!.triggers).toEqual([{ kind: "event", event_name: "heartbeat" }]);
   });
 
   it("no triggers → empty array", async () => {

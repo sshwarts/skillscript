@@ -196,9 +196,8 @@ interface PersistedTriggerFileV2 {
 
 type PersistedTriggerFile = PersistedTriggerFileV1 | PersistedTriggerFileV2;
 
-const VALID_TRIGGER_SOURCES: ReadonlyArray<ResolvableTriggerSource> = [
-  "cron", "session", "event", "agent-event", "file-watch", "sensor",
-];
+// v0.19.0 — trigger source enum collapsed to cron + event (memory `ceaf4579`).
+const VALID_TRIGGER_SOURCES: ReadonlyArray<ResolvableTriggerSource> = ["cron", "event"];
 
 export interface DefaultRegistryOpts {
   skillsDir: string;
@@ -714,10 +713,16 @@ export async function wireDeclarativeTriggers(
   const approved = await safeQueryApproved(result.skillStore, log);
   for (const meta of approved) {
     let triggers: ReadonlyArray<{ source: string; name: string }>;
+    let parsedVars: string[] = [];
     try {
       const loaded = await result.skillStore.load(meta.name);
       const parsed = parse(loaded.source);
       triggers = parsed.triggers;
+      // v0.19.0 — event triggers auto-derive their declared params from
+      // the skill's `# Vars:` header. Adopter declares vars once at the
+      // skill level; the runtime threads them into trigger registration
+      // so POST /event validation matches the skill's expectations.
+      parsedVars = parsed.vars.map((v) => v.name);
     } catch (err) {
       log(`skill '${meta.name}': skipped (parse failed: ${(err as Error).message})`);
       skipped++;
@@ -734,6 +739,9 @@ export async function wireDeclarativeTriggers(
         source: t.source as ResolvableTriggerSource,
         name: t.name,
         declarative: true,
+        // v0.19.0 — event triggers inherit declared params from skill `# Vars:`.
+        // Cron triggers don't take params (their "input" is firedAt).
+        ...(t.source === "event" ? { params: parsedVars } : {}),
       });
       registered++;
     }

@@ -264,9 +264,17 @@ export class TraceBuilder {
     private readonly skill_version: string,
     private readonly trigger: { source: string; name: string; fired_at_ms: number },
     private readonly identity: { agent_id?: string },
+    /**
+     * v0.19.0 — optional pre-minted trace_id. Used by the `/event` HTTP
+     * ingress so the synchronous 200-response `run_id` matches the
+     * trace_id the runtime will later write — adopters paste `run_id`
+     * into the dashboard / `fires` query and find the trace cleanly.
+     * When omitted, mints a fresh UUID (existing v1 behavior).
+     */
+    preMintedTraceId?: string,
   ) {
     this.firedAtMs = trigger.fired_at_ms;
-    this.trace_id = randomUUID();
+    this.trace_id = preMintedTraceId ?? randomUUID();
   }
 
   recordOp(record: TraceOpRecord): void {

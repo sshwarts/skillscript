@@ -486,3 +486,39 @@ export interface OpErrorMetadata {
   skill?: string;
   trace_id?: string;
 }
+
+/**
+ * v0.19.0 — POST `/event` hit with an event_name not registered with the
+ * scheduler. The route maps this to HTTP 404. Standalone (not an
+ * OpError) because it fires from the HTTP boundary, not inside skill
+ * execution.
+ */
+export class EventNotFoundError extends Error {
+  constructor(public readonly eventName: string) {
+    super(`event_name '${eventName}' is not registered with this runtime`);
+    this.name = "EventNotFoundError";
+  }
+}
+
+/**
+ * v0.19.0 — POST `/event` hit a registered event_name but the params
+ * don't match the declared set. The route maps this to HTTP 400.
+ * Per Perry's spec (memory `ceaf4579`): strict v1 — all declared params
+ * must be present; no unknown params allowed. Defaults + type validation
+ * deferred to v2.
+ */
+export class EventParamMismatchError extends Error {
+  constructor(
+    public readonly eventName: string,
+    public readonly declared: string[],
+    public readonly supplied: string[],
+    public readonly missing: string[],
+    public readonly extra: string[],
+  ) {
+    const parts: string[] = [];
+    if (missing.length > 0) parts.push(`missing required params: ${missing.map((p) => `'${p}'`).join(", ")}`);
+    if (extra.length > 0) parts.push(`unknown params: ${extra.map((p) => `'${p}'`).join(", ")}`);
+    super(`POST /event '${eventName}' — ${parts.join("; ")}. Declared params: [${declared.map((p) => `'${p}'`).join(", ") || "(none)"}].`);
+    this.name = "EventParamMismatchError";
+  }
+}

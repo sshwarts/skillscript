@@ -72,13 +72,17 @@ export interface DeliveryMeta {
      * Triggering pathway that fired the originating skill. From the
      * RECEIVER's lens — not the kind of OUTPUT (which is captured by
      * `kind: "augment" | "template"`).
+     *
+     * v0.19.0 — `"session"` removed from the enum (trigger-source collapse
+     * to cron + event; the value was never functionally emitted, pre-v1.0
+     * makes this a cheap contract cleanup per Scott's full-scrub call).
      */
-    trigger_kind: "cron" | "session" | "webhook" | "agent" | "cli" | "dashboard" | "inline";
+    trigger_kind: "cron" | "event" | "webhook" | "agent" | "cli" | "dashboard" | "inline";
     /**
      * Root-trigger agent IF identifiable, else undefined. Composition
      * doesn't reset the calling-agent context — if X triggered the chain,
      * X is the caller regardless of how deep the call stack is when the
-     * emit happens. Cron / session / cli / dashboard / inline triggers
+     * emit happens. Cron / event / cli / dashboard / inline triggers
      * have no calling agent.
      */
     caller_agent_id?: string;

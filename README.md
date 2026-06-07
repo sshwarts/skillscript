@@ -364,7 +364,7 @@ Run `skillfile <command> --help` for per-command flags. Use `serve` for producti
 
 ## MCP server surface
 
-The runtime exposes 17 tools over MCP (HTTP at `/rpc`) for cold-client authoring + observability:
+The runtime exposes 17 tools over MCP (HTTP at `/rpc`) for cold-client authoring + observability. v0.19.0 also serves `POST /event` for external HTTP-triggered skills when `SKILLSCRIPT_EVENT_INGRESS_ENABLED=true`:
 
 | Category | Tools |
 |---|---|

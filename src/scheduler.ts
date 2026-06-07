@@ -5,6 +5,8 @@ import type { SkillStore } from "./connectors/types.js";
 import type { TriggerSource } from "./parser.js";
 import type { TraceConfig, TraceStore } from "./trace.js";
 import { evaluateApprovalGate } from "./approval.js";
+import { EventNotFoundError, EventParamMismatchError } from "./errors.js";
+import { randomUUID } from "node:crypto";
 
 /**
  * Trigger scheduler — the autonomous-dispatch surface per ERD §6.
@@ -31,10 +33,24 @@ export interface TriggerRegistration {
   skillName: string;
   source: ResolvableTriggerSource;
   /**
-   * Source-specific value: cron expression (`"0 9 * * *"`), session phase
-   * (`"start"` | `"end"`), event name, file path, etc.
+   * Source-specific value:
+   *   - `cron`: cron expression (`"0 9 * * *"`)
+   *   - `event` (v0.19.0): the `event_name` — the PUBLIC contract addressed
+   *     by HTTP POSTers. Case-insensitive (normalized to lowercase at
+   *     register + lookup); unique per deployment (1:1 mapping to one
+   *     skill). Cross-skill rebind is allowed but logged. Posters address
+   *     `event_name`, never `skill_name` directly — lets the skill behind
+   *     an event swap without breaking callers, and avoids POST-to-arbitrary-
+   *     skill exposure.
    */
   name: string;
+  /**
+   * v0.19.0 — declared parameter name list for `event` triggers. POST body
+   * params must match this set exactly (all required present, no unknowns).
+   * Empty / undefined on cron triggers. Per Perry's spec: strict v1
+   * validation, no defaults, type validation deferred to v2.
+   */
+  params?: string[];
   registeredAt: number;
   expiresAt?: number;
   /** True if from `# Triggers:` header at skill-write time; false if imperative. */
@@ -110,7 +126,6 @@ export class Scheduler {
   private readonly triggers = new Map<string, TriggerRegistration>();
   private readonly cronState = new Map<string, CronFireState>();
   private pollTimer: ReturnType<typeof setInterval> | null = null;
-  private sigtermHandler: (() => void) | null = null;
   private nextId = 1;
 
   constructor(config: SchedulerConfig) {
@@ -143,6 +158,30 @@ export class Scheduler {
     reg: Omit<TriggerRegistration, "id" | "registeredAt" | "enabled"> & { id?: string; registeredAt?: number; enabled?: boolean },
     opts?: { seedFromPersistence?: boolean },
   ): TriggerRegistration {
+    // v0.19.0 — event_name is the public contract (1:1 → exactly one skill,
+    // case-insensitive). Normalize to lowercase for register+lookup
+    // uniformity. Cross-skill rebind allowed (last-write-wins) but logged
+    // for visibility per Perry+Scott (memory `f4249796`). Same-skill
+    // re-register (declarative re-save path) is silent upsert.
+    const normalizedName = reg.source === "event" ? reg.name.toLowerCase() : reg.name;
+    if (reg.source === "event") {
+      // Find any existing registration for this event_name (case-insensitive)
+      const existing = [...this.triggers.values()].find(
+        (t) => t.source === "event" && t.name.toLowerCase() === normalizedName,
+      );
+      if (existing !== undefined && existing.skillName !== reg.skillName) {
+        // Cross-skill rebind: allowed, but visible — prevents silent hijack.
+        this.log(`event_name '${normalizedName}' rebound: skill '${existing.skillName}' → skill '${reg.skillName}'`);
+        // Drop the old binding; new registration takes ownership below.
+        this.triggers.delete(existing.id);
+        this.cronState.delete(existing.id);
+      } else if (existing !== undefined) {
+        // Same-skill upsert (declarative re-save): drop the prior id silently
+        // so the new registration replaces it cleanly. No log line.
+        this.triggers.delete(existing.id);
+        this.cronState.delete(existing.id);
+      }
+    }
     const id = reg.id ?? `trig-${this.nextId++}`;
     // Keep nextId monotonic across hydrated ids so future imperative
     // registrations don't collide with seeded ones.
@@ -153,11 +192,12 @@ export class Scheduler {
     const full: TriggerRegistration = {
       skillName: reg.skillName,
       source: reg.source,
-      name: reg.name,
+      name: normalizedName,
       registeredAt: reg.registeredAt ?? Math.floor(this.now() / 1000),
       declarative: reg.declarative,
       enabled: reg.enabled ?? true,
       ...(reg.expiresAt !== undefined ? { expiresAt: reg.expiresAt } : {}),
+      ...(reg.params !== undefined ? { params: reg.params } : {}),
       id,
     };
     this.triggers.set(id, full);
@@ -216,45 +256,29 @@ export class Scheduler {
   }
 
   /**
-   * Begin polling + fire session-start hooks. Idempotent — calling start()
-   * twice has no extra effect.
+   * Begin polling. Idempotent — calling start() twice has no extra effect.
+   *
+   * v0.19.0 — session-start / session-end dispatch removed (memory
+   * `ceaf4579`). The previous behavior fired session triggers on
+   * start/stop; session as a trigger source is gone (no crisp definition,
+   * substrate-coupled). Adopters wanting boot-time orchestration POST to
+   * the `/event` ingress from their own startup script.
    */
   start(): void {
     if (this.pollTimer !== null) return;
-    this.fireSessionPhase("start").catch((err: unknown) => {
-      this.log(`session:start dispatch failed: ${(err as Error).message}`);
-    });
     this.pollTimer = setInterval(() => {
       this.tick().catch((err: unknown) => {
         this.log(`scheduler tick failed: ${(err as Error).message}`);
       });
     }, this.pollIntervalMs);
-    // SIGTERM handler — graceful stop fires session-end. Don't install on
-    // Windows or when process.on isn't available (e.g., browser-like env).
-    if (typeof process !== "undefined" && typeof process.on === "function") {
-      this.sigtermHandler = (): void => {
-        this.stop().catch((err: unknown) => {
-          this.log(`session:end dispatch failed during SIGTERM: ${(err as Error).message}`);
-        });
-      };
-      process.on("SIGTERM", this.sigtermHandler);
-    }
   }
 
-  /**
-   * Stop polling + fire session-end hooks. Returns a promise that resolves
-   * when session-end fires complete.
-   */
+  /** Stop polling. v0.19.0 — session-end dispatch removed (see start()). */
   async stop(): Promise<void> {
     if (this.pollTimer !== null) {
       clearInterval(this.pollTimer);
       this.pollTimer = null;
     }
-    if (this.sigtermHandler !== null && typeof process !== "undefined" && typeof process.off === "function") {
-      process.off("SIGTERM", this.sigtermHandler);
-      this.sigtermHandler = null;
-    }
-    await this.fireSessionPhase("end");
   }
 
   /**
@@ -306,6 +330,13 @@ export class Scheduler {
     skillName: string,
     eventPayload?: Record<string, unknown>,
     triggerCtx?: { source: string; name: string; fired_at_ms: number; trigger_id?: string },
+    /**
+     * v0.19.0 — when set, the runtime's TraceBuilder adopts this UUID
+     * as its trace_id. Used by the `/event` HTTP ingress so the
+     * synchronous `run_id` 200-response matches the trace later
+     * written. Undefined → trace_id minted fresh (existing behavior).
+     */
+    preMintedTraceId?: string,
   ): Promise<ExecuteResult | null> {
     let meta;
     try {
@@ -327,7 +358,21 @@ export class Scheduler {
       this.log(`dispatch '${skillName}': approval gate refused (${gate.reason}); skipping`);
       return null;
     }
-    const compiled = await compile(loaded.source);
+    // v0.19.0 — thread eventPayload values into compile-time inputs so
+    // required `# Vars:` declared by the skill are resolved before the
+    // required-var check fires. Pre-v0.19.0 dispatchSkill callers only
+    // populated cron-clock vars (EVENT.fired_at_*) — no required-var
+    // case. Event triggers carry actual params that need to resolve
+    // at compile time.
+    const compileInputs: Record<string, string> = {};
+    if (eventPayload !== undefined) {
+      for (const [k, v] of Object.entries(eventPayload)) {
+        if (typeof v === "string") compileInputs[k] = v;
+        else if (typeof v === "number" || typeof v === "boolean") compileInputs[k] = String(v);
+        else if (v !== null && v !== undefined) compileInputs[k] = JSON.stringify(v);
+      }
+    }
+    const compiled = await compile(loaded.source, { inputs: compileInputs });
     const nowMs = this.now();
     const ctx: ExecuteContext = {
       registry: this.registry,
@@ -356,6 +401,7 @@ export class Scheduler {
       // is `undefined`, which is the contract's "no calling agent" form
       // per Q8 (cron / session / cli / dashboard / inline triggers).
       ...(loaded.metadata.author !== undefined ? { agentId: loaded.metadata.author } : {}),
+      ...(preMintedTraceId !== undefined ? { preMintedTraceId } : {}),
     };
     const defaults = this.buildEventDefaults();
     return execute(
@@ -364,6 +410,55 @@ export class Scheduler {
       compiled.targetOrder,
       ctx,
     );
+  }
+
+  /**
+   * v0.19.0 — fire an event-triggered skill from external POST. Returns
+   * synchronously with `{ run_id }` after validation; the actual skill
+   * dispatch runs async (caller does NOT await skill completion). The
+   * run_id is the pre-minted trace_id — adopters paste it into the
+   * dashboard `/fires` query or the `fires({ trace_id })` MCP tool to
+   * look up completion status.
+   *
+   * Throws structured errors that the `/event` route maps to HTTP:
+   *   - `EventNotFoundError`     → 404
+   *   - `EventParamMismatchError` → 400 (missing/extra params)
+   *
+   * Per Perry's spec (memory `ceaf4579`): all declared params present,
+   * no unknowns. Strict v1; defaults + types deferred to v2.
+   *
+   * Durability is in-memory v1 — accepting the event into THIS process's
+   * queue means best-effort / at-most-once / not durable across restart.
+   * The response self-describes via `durability: "in-process"`.
+   */
+  fireEvent(eventName: string, params: Record<string, unknown>): { run_id: string } {
+    const normalized = eventName.toLowerCase();
+    const trig = [...this.triggers.values()].find(
+      (t) => t.source === "event" && t.name === normalized && t.enabled !== false,
+    );
+    if (trig === undefined) {
+      throw new EventNotFoundError(eventName);
+    }
+    const declared = trig.params ?? [];
+    const supplied = Object.keys(params);
+    const missing = declared.filter((p) => !supplied.includes(p));
+    const extra = supplied.filter((p) => !declared.includes(p));
+    if (missing.length > 0 || extra.length > 0) {
+      throw new EventParamMismatchError(eventName, declared, supplied, missing, extra);
+    }
+    const runId = randomUUID();
+    // Fire-and-forget async dispatch. Errors are recorded in the trace;
+    // the caller already received its 200 + run_id.
+    const nowMs = this.now();
+    void this.dispatchSkill(
+      trig.skillName,
+      params,
+      { source: "event", name: trig.name, fired_at_ms: nowMs, trigger_id: trig.id },
+      runId,
+    ).catch((err: unknown) => {
+      this.log(`event '${eventName}' dispatch failed: ${(err as Error).message}`);
+    });
+    return { run_id: runId };
   }
 
   /** Default EVENT.* ambient refs at the current clock; caller may override. */
@@ -410,13 +505,6 @@ export class Scheduler {
     }
   }
 
-  private async fireSessionPhase(phase: "start" | "end"): Promise<void> {
-    const matching = Array.from(this.triggers.values()).filter(
-      (t) => t.source === "session" && t.name === phase && t.enabled !== false,
-    );
-    const nowMs = this.now();
-    await Promise.all(matching.map((t) => this.dispatchTrigger(t, nowMs)));
-  }
 }
 
 // ─── Cron evaluator ─────────────────────────────────────────────────────────

@@ -5,6 +5,8 @@ import { existsSync } from "node:fs";
 import { extname, join, resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { McpServer, JsonRpcRequest } from "../mcp-server.js";
+import type { Scheduler } from "../scheduler.js";
+import { EventNotFoundError, EventParamMismatchError } from "../errors.js";
 
 /**
  * Dashboard HTTP server (T6b Phase 2). Bundles the SPA assets + a
@@ -56,6 +58,34 @@ export interface DashboardServerConfig {
    * stored author. Per warm-adopter `6ce97894` prototype + Perry `2a9c234a`.
    */
   mcpCallerIdentityHeader?: string;
+  /**
+   * v0.19.0 — when set, the server mounts the `POST /event` route per
+   * Perry's spec (memory `ceaf4579`). Default false: route returns 404.
+   * Off-by-default + localhost-bind enforce the DMZ assumption by the
+   * bind, not by hope. Adopters wanting external HTTP-triggered skills
+   * opt in.
+   *
+   * Required when set: `scheduler` reference (so the route can call
+   * `Scheduler.fireEvent()`).
+   */
+  eventIngressEnabled?: boolean;
+  /**
+   * v0.19.0 — optional bearer-token auth for `POST /event`. When set,
+   * every event POST must carry `Authorization: Bearer <token>` matching
+   * this value; 401 otherwise. When unset, the route is open-internally
+   * (still gated by the bind address). Per Perry's "cheap to wire early"
+   * rule: plumbed now even if default-unset, so adding auth later isn't
+   * a refactor.
+   */
+  eventIngressAuthToken?: string;
+  /**
+   * v0.19.0 — Scheduler reference required when `eventIngressEnabled`.
+   * The /event route calls `scheduler.fireEvent(event_name, params)` to
+   * dispatch async. Independent from `mcpServer` so a headless serve
+   * mode can mount event ingress without the full MCP surface (though
+   * the typical adopter wires both).
+   */
+  scheduler?: Scheduler;
 }
 
 const MIME: Record<string, string> = {
@@ -72,6 +102,9 @@ export class DashboardServer {
   private readonly assetsDir: string;
   private readonly mountSpa: boolean;
   private readonly callerIdentityHeader: string | undefined;
+  private readonly eventIngressEnabled: boolean;
+  private readonly eventIngressAuthToken: string | undefined;
+  private readonly scheduler: Scheduler | undefined;
   private httpServer: Server | null = null;
 
   constructor(config: DashboardServerConfig) {
@@ -84,6 +117,13 @@ export class DashboardServer {
     // configured name once at constructor time so per-request lookup is
     // a single Map access (req.headers[<lowercased-name>]).
     this.callerIdentityHeader = config.mcpCallerIdentityHeader?.toLowerCase();
+    // v0.19.0 — event ingress configuration (memory `ceaf4579`).
+    this.eventIngressEnabled = config.eventIngressEnabled ?? false;
+    this.eventIngressAuthToken = config.eventIngressAuthToken;
+    this.scheduler = config.scheduler;
+    if (this.eventIngressEnabled && this.scheduler === undefined) {
+      throw new Error("DashboardServer: eventIngressEnabled requires a scheduler reference");
+    }
   }
 
   async start(): Promise<void> {
@@ -118,6 +158,23 @@ export class DashboardServer {
         await this.handleRpc(req, res);
         return;
       }
+      // v0.19.0 — POST /event for external HTTP-triggered skills.
+      // Off-by-default per memory `ceaf4579`; returns 404 when not
+      // enabled (operator hasn't opted in).
+      if (url.pathname === "/event") {
+        if (!this.eventIngressEnabled) {
+          res.statusCode = 404;
+          res.end("Not Found (event ingress disabled)");
+          return;
+        }
+        if (req.method !== "POST") {
+          res.statusCode = 405;
+          res.end("Method Not Allowed");
+          return;
+        }
+        await this.handleEvent(req, res);
+        return;
+      }
       if (req.method === "GET") {
         if (!this.mountSpa) {
           res.statusCode = 404;
@@ -132,6 +189,84 @@ export class DashboardServer {
     } catch (err) {
       res.statusCode = 500;
       res.end(`Internal server error: ${(err as Error).message}`);
+    }
+  }
+
+  /**
+   * v0.19.0 — POST /event handler (memory `ceaf4579`).
+   *
+   * Wire contract:
+   *   - Request body: `{ event_name: string, params: Record<string, unknown> }`
+   *   - Optional bearer-token auth via `Authorization: Bearer <token>` when
+   *     `eventIngressAuthToken` configured (401 if missing/wrong)
+   *   - 200 + `{run_id, durability: "in-process"}` on accept (NOT skill-completed)
+   *   - 404 if event_name not registered
+   *   - 400 if params don't match declared (missing or extra)
+   *
+   * Async semantics: 200 = ACCEPTED into THIS process's in-memory queue.
+   * Best-effort / at-most-once / NOT durable across restart. The
+   * `durability` field on the response self-describes this — adopters
+   * needing at-least-once delivery wrap with their own queue.
+   */
+  private async handleEvent(req: IncomingMessage, res: ServerResponse): Promise<void> {
+    // Auth check first — short-circuit BEFORE body parsing so unauthorized
+    // callers don't get to chew through arbitrary bodies.
+    if (this.eventIngressAuthToken !== undefined) {
+      const auth = req.headers["authorization"];
+      const expected = `Bearer ${this.eventIngressAuthToken}`;
+      if (typeof auth !== "string" || auth !== expected) {
+        res.statusCode = 401;
+        res.setHeader("content-type", MIME[".json"]!);
+        res.end(JSON.stringify({ error: "Unauthorized", reason: "missing or invalid bearer token" }));
+        return;
+      }
+    }
+    const chunks: Buffer[] = [];
+    for await (const chunk of req) chunks.push(chunk as Buffer);
+    const body = Buffer.concat(chunks).toString("utf8");
+    let parsed: { event_name?: unknown; params?: unknown };
+    try {
+      parsed = JSON.parse(body) as { event_name?: unknown; params?: unknown };
+    } catch {
+      res.statusCode = 400;
+      res.setHeader("content-type", MIME[".json"]!);
+      res.end(JSON.stringify({ error: "Bad Request", reason: "body is not valid JSON" }));
+      return;
+    }
+    if (typeof parsed.event_name !== "string" || parsed.event_name === "") {
+      res.statusCode = 400;
+      res.setHeader("content-type", MIME[".json"]!);
+      res.end(JSON.stringify({ error: "Bad Request", reason: "body must include non-empty 'event_name' string" }));
+      return;
+    }
+    const params = (typeof parsed.params === "object" && parsed.params !== null && !Array.isArray(parsed.params))
+      ? parsed.params as Record<string, unknown>
+      : {};
+    try {
+      const result = this.scheduler!.fireEvent(parsed.event_name, params);
+      res.statusCode = 200;
+      res.setHeader("content-type", MIME[".json"]!);
+      res.end(JSON.stringify({ ...result, durability: "in-process" }));
+    } catch (err) {
+      if (err instanceof EventNotFoundError) {
+        res.statusCode = 404;
+        res.setHeader("content-type", MIME[".json"]!);
+        res.end(JSON.stringify({ error: "Not Found", reason: err.message }));
+        return;
+      }
+      if (err instanceof EventParamMismatchError) {
+        res.statusCode = 400;
+        res.setHeader("content-type", MIME[".json"]!);
+        res.end(JSON.stringify({
+          error: "Bad Request",
+          reason: err.message,
+          declared: err.declared,
+          missing: err.missing,
+          extra: err.extra,
+        }));
+        return;
+      }
+      throw err;
     }
   }
 

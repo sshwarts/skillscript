@@ -370,10 +370,12 @@ export interface SkillEntry {
    * via TS discriminated union semantics.
    */
   triggers: Array<
+    // v0.19.0 — trigger model collapsed to cron + event (memory `ceaf4579`).
+    // The removed kinds (`session`, `webhook`, etc.) were either parse-only
+    // stubs or substrate-coupled concepts now expressed as adapters that
+    // POST to `/event`. The receiver-side enum tightens in lockstep.
     | { kind: "cron"; expression: string }
-    | { kind: "session"; phase: "start" | "end" }
-    | { kind: "webhook"; path?: string }
-    | { kind: "event"; event_type: string }
+    | { kind: "event"; event_name: string }
   >;
 }
 
@@ -383,7 +385,7 @@ export interface SkillListFilter {
   /** Default "Approved" — cold authors don't see Drafts unless asked. */
   status?: SkillStatus;
   /** Narrow to skills with at least one trigger of this kind. Absent = any. */
-  trigger_kind?: "cron" | "session" | "webhook" | "event";
+  trigger_kind?: "cron" | "event";
   /** AND-match — skill must have all listed tags in its metadata. */
   domain_tags?: string[];
   /** Adopter-side scoping (e.g., per-project filtering by name convention). */

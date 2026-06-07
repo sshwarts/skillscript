@@ -860,6 +860,15 @@ async function cmdRuntimeHost(args: string[], opts: { mode: "serve" | "dashboard
   const shellAllowlist = envShellAllowlistRaw !== undefined
     ? envShellAllowlistRaw.split(",").map((b) => b.trim()).filter((b) => b.length > 0)
     : fileConfig.shellAllowlist;
+  // v0.19.0 — event ingress (memory `ceaf4579`). Two env knobs:
+  //   - SKILLSCRIPT_EVENT_INGRESS_ENABLED=true  (opt-in; default off)
+  //   - SKILLSCRIPT_EVENT_INGRESS_AUTH_TOKEN=… (optional bearer-token;
+  //     when set, every POST /event requires Authorization: Bearer <token>)
+  const envEventIngressEnabled = process.env["SKILLSCRIPT_EVENT_INGRESS_ENABLED"];
+  const eventIngressEnabled = envEventIngressEnabled !== undefined
+    ? envEventIngressEnabled === "true"
+    : false;
+  const eventIngressAuthToken = process.env["SKILLSCRIPT_EVENT_INGRESS_AUTH_TOKEN"];
   const wired = bootstrap({
     skillsDir: fileConfig.skillsDir ?? SKILLS_DIR,
     traceDir: fileConfig.traceDir ?? TRACE_DIR,
@@ -888,6 +897,10 @@ async function cmdRuntimeHost(args: string[], opts: { mode: "serve" | "dashboard
     bindAddress: host,
     mountSpa: opts.mode === "dashboard",
     ...(mcpCallerIdentityHeader !== undefined ? { mcpCallerIdentityHeader } : {}),
+    // v0.19.0 — event ingress, off-by-default, scheduler reference required
+    eventIngressEnabled,
+    ...(eventIngressAuthToken !== undefined ? { eventIngressAuthToken } : {}),
+    ...(eventIngressEnabled ? { scheduler: wired.scheduler } : {}),
   });
   await server.start();
   const label = opts.mode === "dashboard" ? "dashboard" : "serve (headless)";

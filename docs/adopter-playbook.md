@@ -370,6 +370,104 @@ Per-skill capability declaration: skills declare what shell binaries they need i
 
 The operator policy validates `declared ∩ allowlist` — each skill's shell footprint becomes self-documenting and auditable. Slated for a future ring once the chokepoint + observability surfaces ship.
 
+## Trigger model (v0.19.0 — BREAKING)
+
+**v0.19.0 collapses the trigger surface to two primitives.** Per the Scott + Perry decision (memory `ceaf4579`):
+
+| Primitive | Purpose |
+|---|---|
+| `cron` | Time-based fires (unchanged) |
+| `event` | Generic external-signal fires via HTTP POST to `/event` |
+
+The previous sources (`session`, `agent-event`, `file-watch`, `sensor`) are **removed**. They were either parse-only stubs that never fired or substrate-coupled concepts that belong outside the runtime. Anything external becomes an adapter that POSTs to `/event` — including what would have been a session/agent-event/file-watch/sensor trigger. The `DeliveryMeta.origin.trigger_kind` receiver enum also drops `"session"` in lockstep (pre-v1.0 cleanup; the value was never functionally emitted).
+
+### The `event` primitive
+
+Skills declare an event trigger in their frontmatter:
+
+```
+# Skill: prox-handler
+# Status: Approved
+# Triggers: event: prox
+# Vars: ROOM, USER
+
+t:
+    emit(text="${USER} entered ${ROOM}")
+default: t
+```
+
+External services drive the skill by POSTing:
+
+```
+POST /event HTTP/1.1
+Host: localhost:7878
+Content-Type: application/json
+Authorization: Bearer <token>   # if SKILLSCRIPT_EVENT_INGRESS_AUTH_TOKEN set
+
+{
+  "event_name": "prox",
+  "params": { "ROOM": "kitchen", "USER": "scott" }
+}
+```
+
+Response on accept:
+
+```json
+{ "run_id": "f4a8b21c-...", "durability": "in-process" }
+```
+
+The `run_id` is the runtime's `trace_id` — adopters paste it into the dashboard `/fires` view or query via the `fires({trace_id})` MCP tool to look up completion status.
+
+### Wire contract
+
+| HTTP status | Meaning |
+|---|---|
+| **200** | Accepted into THIS process's in-memory queue. `{run_id, durability: "in-process"}`. Skill fires async; the 200 does NOT mean skill-completed |
+| **400** | Body not JSON; or `event_name` missing/empty; or params don't match declared (missing required or unknown extras) |
+| **401** | Auth token configured + missing/wrong `Authorization: Bearer <token>` |
+| **404** | `/event` route not enabled OR `event_name` not registered |
+| **405** | Wrong method (POST-only) |
+
+**Param validation is strict v1**: every declared param must be present; no unknown params accepted. No defaults; no type coercion. JSON already carries types, and a type mismatch fails inside the consuming op with a real error. Defaults + types may land in v2 if real adopter need surfaces.
+
+### `event_name` semantics
+
+- **Public contract** addressed by POSTers. Skill behind the event can swap without breaking callers — the `skill_name` is private impl.
+- **Case-insensitive** at register + lookup (normalized to lowercase internally).
+- **1:1**: one `event_name` → exactly one skill in the deployment. Fan-out is NOT supported — a skill can call other skills via `$ execute_skill` if needed.
+- **Cross-skill rebind allowed but audited**: registering an `event_name` that's already bound to a different skill replaces the binding (last-write-wins) AND logs a visible line (`event_name 'X' rebound: skill A → skill B`). Prevents silent cross-skill hijack without blocking the declarative re-save path. Same skill re-registering its own event is a silent upsert.
+
+### Enabling the `/event` HTTP ingress
+
+Off by default. Two operator knobs:
+
+```bash
+# Required to open the /event route
+SKILLSCRIPT_EVENT_INGRESS_ENABLED=true
+
+# Optional bearer-token auth (when set, required on every POST /event)
+SKILLSCRIPT_EVENT_INGRESS_AUTH_TOKEN=<token>
+```
+
+When `eventIngressEnabled=true`, the route mounts on the same HTTP server as the dashboard/RPC (no second port). Default bind is `127.0.0.1` (localhost-only) — adopters wanting `0.0.0.0` external reach pass `--host 0.0.0.0` explicitly. Per Perry's framing: "enforce the DMZ assumption by the bind, not by hope."
+
+### Durability honesty
+
+**`200 = ACCEPTED, not durable**.** The skill is queued in this process's memory; if the process crashes or restarts before the queue drains, the fire is lost. The `durability: "in-process"` field on every successful response self-describes this — adopters reading the response know the contract without consulting docs. Cron triggers have the same property today (no catch-up replay if the process was down).
+
+Durable / at-least-once delivery is a v2 if real adopter need surfaces. Don't oversell the 200 contract; build durable queueing on top yourself if you need it now.
+
+### Migration from removed sources
+
+If you have pre-v0.19.0 skills with `# Triggers: session: start` / `agent-event: X` / `file-watch: /path` / `sensor: X` declarations:
+
+- **session start/end** → boot/shutdown lifecycle moved to the substrate (NanoClaw / your harness). If you need a runtime skill to fire at session-start, your harness POSTs to `/event` after boot.
+- **agent-event** → external bridge (your agent fires `POST /event` when relevant).
+- **file-watch** → external watcher script (inotify / chokidar / fswatch) POSTs to `/event`. The "how to call /event" pattern lives in the language reference call-example; the file-watching itself is standard OS plumbing — you own that script.
+- **sensor** → same pattern as file-watch; sensor adapter POSTs to `/event`.
+
+Skills declaring removed sources fail to parse on v0.19.0 (tier-1 parse error). Run `skillfile lint` against your corpus pre-upgrade to find them.
+
 ## Wiring the AgentConnector
 
 `AgentConnector` is the substrate-neutral delivery surface for `# Output: agent: X` / `# Output: template: X` lifecycle hooks and `notify()` / `exchange()` ops. The runtime calls into the contract; your impl decides where the payload lands (webhook, tmux session, file drop, IPC pipe, Slack thread, your own agent harness, etc.).

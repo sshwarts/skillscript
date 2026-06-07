@@ -57,6 +57,8 @@ The CLI auto-loads `$SKILLSCRIPT_HOME/.env` at startup and populates `process.en
 | `SKILLSCRIPT_POLL_INTERVAL_SECONDS=30` | Scheduler tick / poll interval (seconds) | env > config > default `30` |
 | `SKILLSCRIPT_ABSOLUTE_TIMEOUT_MS=300000` | Runtime fallback timeout (ms) when no per-op / skill / connector default applies | env > config > default `300000` (5 min) |
 | `SKILLSCRIPT_MAX_RECURSION_DEPTH=10` | Composition recursion depth ceiling for `$ execute_skill` chains | env > config > default `10` |
+| `SKILLSCRIPT_EVENT_INGRESS_ENABLED=true` | Mount `POST /event` for v0.19.0 event-triggered skills. Default `false` — route returns 404 when not enabled. Shares `SKILLSCRIPT_PORT` with dashboard/RPC (one HTTP server). | env > default `false` |
+| `SKILLSCRIPT_EVENT_INGRESS_AUTH_TOKEN=<token>` | Bearer-token auth for `POST /event`. When set, every event POST requires `Authorization: Bearer <token>`; 401 otherwise. Default unset = open-internally (still gated by bind address). | env > default unset |
 | `OLLAMA_BASE_URL=http://...` | Ollama endpoint for LocalModel (default `http://localhost:11434`) | env > built-in default |
 
 `SKILLSCRIPT_HOME` is the chicken-and-egg case — the path to `.env` requires it, so `.env` can't set it. Use shell, Docker `-e`, or systemd `Environment=` instead.

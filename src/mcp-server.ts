@@ -288,7 +288,7 @@ export class McpServer {
             properties: {
               audience: { type: "string", enum: ["agent", "all", "headless"] },
               status: { type: "string", enum: ["Draft", "Approved", "Disabled"] },
-              trigger_kind: { type: "string", enum: ["cron", "session", "webhook", "event"] },
+              trigger_kind: { type: "string", enum: ["cron", "event"] },
               domain_tags: { type: "array", items: { type: "string" } },
               name_prefix: { type: "string" },
               author: { type: "string", description: "Narrow to skills authored by this identity. AND-composes with other filters. Graceful degradation: substrates that don't track authorship return all rows and the runtime filters in-memory (per skill_meta.author)." },
@@ -486,7 +486,7 @@ export class McpServer {
         type: "object",
         properties: {
           skill: { type: "string" },
-          source: { type: "string", enum: ["session", "cron", "event", "agent-event", "file-watch", "sensor"] },
+          source: { type: "string", enum: ["cron", "event"] },
         },
       },
       handler: async (args) => {
@@ -504,7 +504,7 @@ export class McpServer {
         type: "object",
         properties: {
           skill_name: { type: "string" },
-          source: { type: "string", enum: ["session", "cron", "event", "agent-event", "file-watch", "sensor"] },
+          source: { type: "string", enum: ["cron", "event"] },
           name: { type: "string" },
           expires_at: { type: "number" },
         },

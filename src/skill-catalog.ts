@@ -168,21 +168,17 @@ function renderOutputs(parsedOutputs: OutputDecl[]): SkillEntry["output"] {
 }
 
 /**
- * Parser's `TriggerSource` → v0.9.8 discriminated union. Phase-2 stub kinds
- * (`agent-event`, `file-watch`, `sensor`) map to `{ kind: "event", event_type }`
- * as the closest current shape; when their firing paths land, the union grows
- * additively (non-breaking via TS discriminated union semantics).
+ * Parser's `TriggerSource` → v0.9.8 discriminated union.
+ *
+ * v0.19.0 — collapsed to cron + event per memory `ceaf4579`. Pre-v0.19.0
+ * the parser accepted session/agent-event/file-watch/sensor as stubs; all
+ * gone. Each remaining source maps 1:1 to a discriminated-union arm.
  */
 function renderTriggers(parsedTriggers: TriggerDecl[]): SkillEntry["triggers"] {
   return parsedTriggers.map((t): SkillEntry["triggers"][number] => {
     if (t.source === "cron") return { kind: "cron", expression: t.name };
-    if (t.source === "session") {
-      const phase: "start" | "end" = t.name === "end" ? "end" : "start";
-      return { kind: "session", phase };
-    }
-    // event / agent-event / file-watch / sensor — all event-family; map to
-    // { kind: "event", event_type: name } until Phase 2 lands per-kind shapes.
-    return { kind: "event", event_type: t.name };
+    // t.source === "event" — the only other case post-v0.19.0
+    return { kind: "event", event_name: t.name };
   });
 }
 

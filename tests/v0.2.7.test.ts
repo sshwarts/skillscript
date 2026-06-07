@@ -104,13 +104,13 @@ describe("v0.2.7 Item 5 — persistent trigger registry", () => {
     expect(existsSync(triggersPath)).toBe(false);
   });
 
-  it("hydrates imperative triggers from disk at bootstrap with original ids", () => {
+  it("hydrates imperative triggers from disk at bootstrap with original ids (v0.19.0 — sources collapsed to cron + event)", () => {
     const triggersPath = join(home, "triggers.json");
     writeFileSync(triggersPath, JSON.stringify({
       schema_version: 1,
       triggers: [
         { id: "trig-42", skill_name: "alpha", source: "cron", name: "0 9 * * *", declarative: false, registered_at: 1779000000, expires_at: null },
-        { id: "trig-43", skill_name: "beta", source: "session", name: "start", declarative: false, registered_at: 1779000001, expires_at: null },
+        { id: "trig-43", skill_name: "beta", source: "event", name: "heartbeat", declarative: false, registered_at: 1779000001, expires_at: null },
       ],
     }));
     const wired = bootstrap({
@@ -121,7 +121,7 @@ describe("v0.2.7 Item 5 — persistent trigger registry", () => {
     const triggers = wired.scheduler.listTriggers().filter((t) => !t.declarative);
     expect(triggers.map((t) => t.id).sort()).toEqual(["trig-42", "trig-43"]);
     expect(triggers.find((t) => t.id === "trig-42")!.skillName).toBe("alpha");
-    expect(triggers.find((t) => t.id === "trig-43")!.source).toBe("session");
+    expect(triggers.find((t) => t.id === "trig-43")!.source).toBe("event");
   });
 
   it("expired imperative triggers prune at boot + file rewrites without them", () => {

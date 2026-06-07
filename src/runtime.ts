@@ -166,6 +166,16 @@ export interface ExecuteContext {
    * for tests + deployments with deeper composition chains.
    */
   maxRecursionDepth?: number;
+  /**
+   * v0.19.0 — optional pre-minted trace_id. The `/event` HTTP ingress
+   * generates a UUID at accept time, returns it synchronously as
+   * `run_id` in the 200 response, then dispatches async. The TraceBuilder
+   * adopts this ID so the trace later written matches the `run_id` the
+   * caller already received. Without this, run_id ≠ trace_id and the
+   * synchronous-accept token wouldn't round-trip to the dashboard.
+   * Undefined → TraceBuilder mints fresh (existing v1 behavior).
+   */
+  preMintedTraceId?: string;
 }
 
 /**
@@ -428,7 +438,7 @@ export async function execute(
   // through every call hop. Internal convention; do not set from outside.
   ctx = { ...ctx, _currentSkillName: skillName, _currentSkillEventType: parsed.eventType };
   const traceBuilder = shouldTraceFire(ctx.trace, triggerId, skillName)
-    ? new TraceBuilder(skillName, ctx.skillVersion ?? "unknown", triggerCtx, { agent_id: ctx.agentId })
+    ? new TraceBuilder(skillName, ctx.skillVersion ?? "unknown", triggerCtx, { agent_id: ctx.agentId }, ctx.preMintedTraceId)
     : null;
 
   for (const targetName of order) {

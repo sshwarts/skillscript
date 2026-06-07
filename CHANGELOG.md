@@ -1,5 +1,151 @@
 # Changelog
 
+## 0.19.0 — 2026-06-07 — **BREAKING** — Simplified trigger model: cron + event only; new `POST /event` HTTP ingress
+
+Closes the locked Scott + Perry decision (memory `ceaf4579`): collapse
+triggers to two primitives. Time-based (`cron`) + external-signal
+(`event` via HTTP POST). Everything else is an external adapter that
+POSTs to `/event`.
+
+### BREAKING
+
+**Trigger source axis trimmed.** Pre-v0.19.0 the runtime accepted 6
+sources (`cron` / `session` / `event` / `agent-event` / `file-watch` /
+`sensor`); 4 of those were parse-only stubs that never functionally
+fired. v0.19.0 keeps only `cron` and `event`. Skills declaring removed
+sources fail to parse with a tier-1 parse error.
+
+Migration: run `skillfile lint` against your corpus pre-upgrade to
+find skills with removed sources. Each removed source has a
+documented replacement pattern (external adapter POSTs to `/event`) —
+see `docs/adopter-playbook.md` § "Trigger model".
+
+**DeliveryMeta `trigger_kind: "session"` removed from the enum.** The
+v0.9.6-locked receiver contract drops `"session"` from
+`origin.trigger_kind`. Per Scott's call: the value was a non-feature
+(session triggers never functionally emitted), and pre-v1.0 makes the
+cleanup cheap. Adopter substrates handling DeliveryMeta payloads with
+literal "session" trigger_kind will get a TypeScript narrowing error
+on rebuild — drop the dead case.
+
+**`scheduler.fireSessionPhase` removed.** Boot/shutdown session
+dispatch is gone. Adopters wanting boot-time orchestration POST to
+`/event` from their startup script.
+
+### New surfaces
+
+**`event_name` trigger primitive.** Skills declare event triggers via
+`# Triggers: event: <event_name>` (case-insensitive). External
+posters address the `event_name` (the public contract); the
+`skill_name` is private impl. 1:1 — exactly one skill per
+`event_name`; cross-skill rebind allowed but audit-logged
+(`event_name 'X' rebound: skill A → skill B`). Same-skill re-register
+is silent upsert (declarative re-save path).
+
+**`POST /event` HTTP ingress** on `DashboardServer`. Off by default
+(`SKILLSCRIPT_EVENT_INGRESS_ENABLED=true` to opt in). Shares the
+dashboard port — no separate port. Localhost-only by default; explicit
+opt-in for `0.0.0.0`. Optional bearer-token auth via
+`SKILLSCRIPT_EVENT_INGRESS_AUTH_TOKEN`. Wire contract:
+
+```
+POST /event HTTP/1.1
+Authorization: Bearer <token>   # if configured
+Content-Type: application/json
+
+{ "event_name": "ping", "params": { "NAME": "world" } }
+
+→ 200 { "run_id": "<uuid>", "durability": "in-process" }
+  404 unknown event_name | route disabled
+  400 missing/extra params | malformed body
+  401 missing/wrong auth
+  405 wrong HTTP method
+```
+
+**Strict param validation (v1)**: every declared param must be
+present; no unknown params accepted. Per Perry's spec: no defaults,
+no type coercion in v1 (JSON carries types; type mismatches fail
+inside consuming ops with real errors). Defaults + types deferred to
+v2 if real adopter need surfaces. Params are auto-derived from the
+skill's `# Vars:` declaration for event triggers.
+
+**`run_id = trace_id`** (preMintedTraceId plumbed through). The
+synchronous `run_id` in the 200 response matches the `trace_id` the
+runtime writes to the trace store — paste `run_id` into the dashboard
+or query via the trace store to look up completion status.
+
+**Self-describing durability**: every successful response includes
+`durability: "in-process"`. Honest contract: 200 = accepted into
+THIS process's in-memory queue; best-effort / at-most-once / NOT
+durable across restart. Durable queueing is a v2 follow-up.
+
+### Operator surfaces
+
+Two new env vars (config-cascade-aware per existing pattern):
+
+| Env var | Effect | Default |
+|---|---|---|
+| `SKILLSCRIPT_EVENT_INGRESS_ENABLED=true` | Mount `POST /event` route | `false` |
+| `SKILLSCRIPT_EVENT_INGRESS_AUTH_TOKEN=<token>` | Bearer-token auth (when set, required on every POST) | unset (open-internally) |
+
+### Tests
+
+21 new tests in `v0.19.0-trigger-event-ring.test.ts`:
+- `Scheduler.fireEvent` (6): happy + 404 + case-insensitive + missing + extra + no-params
+- Registration (2): same-skill silent upsert + cross-skill audit log
+- `POST /event` HTTP (11): disabled-404, GET-405, 200-with-run_id-durability, unknown-404, missing-400, extra-400, malformed-400, empty-event_name-400, 401-no-auth, 401-wrong-token, 200-correct-token
+- Config validation (1): throws if enabled without scheduler
+- MCP register_trigger (1): cron + event accepted
+
+Plus 4 existing test files updated to v0.19.0 enum (cron+event only) +
+new parse-error tests for removed sources. 1791 tests total; typecheck
+clean.
+
+### Live HTTP probe verified end-to-end
+
+Built dist, ran `skillfile serve` with event ingress enabled, POSTed
+real curl requests:
+- Valid POST → 200 + run_id matching the trace file written to disk
+- 404 / 400 / 401 responses all match the spec
+- run_id `f3495f73-...` written to `traces/event-probe/f3495f73-....json`
+
+Probe caught two gaps the unit tests didn't surface:
+- Event triggers needed `params` auto-derived from skill `# Vars:`
+  (declarative wiring path)
+- `dispatchSkill` needed to thread event params into compile-time
+  inputs (required-var check fired pre-execute)
+
+Both fixed in the same ring; banking-worthy reminder of "build + probe
+end-to-end before claiming done" discipline.
+
+### Docs
+
+- `docs/adopter-playbook.md` — new "Trigger model (v0.19.0 — BREAKING)"
+  section: removed-source migration patterns + `event` primitive shape
+  + wire contract + `event_name` semantics + enabling + durability
+  honesty
+- `docs/configuration.md` — env-var table extended with
+  SKILLSCRIPT_EVENT_INGRESS_*
+- `scaffold/.env.example` — new "Event-trigger HTTP ingress" section;
+  clarifies SKILLSCRIPT_PORT is shared with the dashboard
+- `README.md` — MCP tool surface mentions `POST /event` opt-in
+
+Language-reference rewrite is Perry's atom (forward-banner in place
+since `05f24be0`); landed when the v0.19.0 ring shipped clean.
+
+### What's NOT in v0.19.0 (future / deferred)
+
+- File-watch / sensor reference adapter stubs — scope-cut per Scott's
+  call (memory `b9fd8e17`). Replaced by canonical "calling /event"
+  example in Perry's upcoming language-reference rewrite.
+- Param defaults + type validation — deferred to v2 per Perry's spec.
+- Durable / at-least-once event queue — v2 if real adopter need
+  surfaces; in-memory v1 self-describes via `durability` field.
+- `c7ddfc50` body-text-as-output template ring — design-locked, queued
+  for v0.19.1+ after trigger ring stabilizes.
+
+---
+
 ## 0.18.9 — 2026-06-07 — Human-reviewer observability (dashboard) + adopter CR (bootstrap env fallback)
 
 v0.18.8 shipped the shell-allowlist data plumbing but only half the

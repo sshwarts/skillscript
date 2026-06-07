@@ -111,7 +111,14 @@ export interface SkillRequire {
   raw: string;
 }
 
-export type TriggerSource = "session" | "cron" | "event" | "agent-event" | "file-watch" | "sensor";
+// v0.19.0 — trigger model collapse (Scott + Perry, memory `ceaf4579`).
+// Two primitives only: `cron` (time-based) + `event` (external-signal HTTP
+// ingress). The removed sources (`session`, `agent-event`, `file-watch`,
+// `sensor`) were either parse-only stubs that never fired or substrate-
+// coupled concepts that belong outside the runtime. Anything external
+// becomes an adapter that POSTs to `/event` — including what would have
+// been a session/agent-event/file-watch/sensor trigger.
+export type TriggerSource = "cron" | "event";
 
 export interface TriggerDecl {
   source: TriggerSource;
@@ -645,9 +652,8 @@ function hasUnclosedTriple(text: string): boolean {
  *   `cron: 30,45 9 * * 1-5, cron: 0 16 * * 1-5` → two entries
  */
 function splitTriggersLine(value: string): string[] {
-  const sourcePattern = ["session", "cron", "event", "agent-event", "file-watch", "sensor"]
-    .map((s) => s.replace(/-/g, "\\-"))
-    .join("|");
+  // v0.19.0 — trigger sources collapsed to cron + event (was 6 before).
+  const sourcePattern = ["cron", "event"].join("|");
   const splitRegex = new RegExp(`,\\s*(?=(?:${sourcePattern})\\s*:)`, "g");
   return value.split(splitRegex);
 }
@@ -1204,7 +1210,8 @@ export function parse(source: string): ParsedSkill {
           }
           const rawSource = decl.slice(0, colon).trim();
           const name = decl.slice(colon + 1).trim();
-          const allowed = ["session", "cron", "event", "agent-event", "file-watch", "sensor"] as const;
+          // v0.19.0 — only cron + event remain (memory `ceaf4579`).
+          const allowed = ["cron", "event"] as const;
           const source = normalizeEnumValue(rawSource, allowed);
           if (source === null) {
             result.parseErrors.push(`Unsupported trigger source '${rawSource}' — allowed: ${allowed.join(", ")}`);
