@@ -1,5 +1,65 @@
 # Changelog
 
+## 0.19.2 — 2026-06-07 — HOTFIX — Dashboard SPA SyntaxError prevented content from rendering
+
+**Adopter-impacting regression** since v0.18.9. The dashboard SPA's
+`app.js` contained TS-style non-null assertions (`shellMatch[1]!.trim()`)
+copy-pasted from TS source. Plain JavaScript runtimes (the browser)
+hit `SyntaxError: Unexpected token '!'` while parsing the script →
+the entire module never loaded → no event listeners attached → only
+the static HTML nav rendered, main content stayed empty.
+
+Symptom from the adopter: "menu renders but contents are blank."
+
+### Why it wasn't caught earlier
+
+- TypeScript compiler accepts the syntax (it's TS-valid in TS files)
+- Unit tests don't load `app.js` in a JS runtime; they invoke the MCP
+  handlers directly
+- The build script copies the file verbatim from `src/dashboard/spa/`
+  to `dist/dashboard/spa/` — no transpile step that would have caught it
+- Live dashboard probes during v0.18.9 / v0.19.0 / v0.19.1 development
+  were CLI-side (curl POST /event) — the SPA was never opened in a
+  browser as part of the ring
+
+### Fix
+
+Removed the two `!` non-null assertions in `collectSecuritySignals()`
+(the function added in v0.18.9 to power the skill-detail "Security
+signals" panel). The values are already null-guarded by the
+surrounding `if` checks; the TS-style assertions were redundant noise
+that compiled fine in TS but broke at runtime in plain JS.
+
+### Regression guard
+
+`tests/v0.19.2-spa-syntax-guard.test.ts`:
+- `node --check src/dashboard/spa/app.js` — parses the SPA under V8's
+  normal-JS rules (same as the browser). Catches the syntax mismatch
+  at test time so the SPA never ships unparseable again.
+- Explicit grep for `]!.` / `]!(` / `)!.` patterns as a belt-and-
+  suspenders check.
+
+Future SPA files extend the same test. Bug class closed: any TS-only
+syntax in a `*.js` file under `src/dashboard/spa/` now fails CI.
+
+### Affected versions
+
+v0.18.9, v0.19.0, v0.19.1 — all shipped with the broken SPA. Adopters
+on any of these versions running `skillfile dashboard` saw the blank-
+content symptom. Upgrade to v0.19.2 immediately; no other action
+needed.
+
+### Banking lesson
+
+`src/dashboard/spa/*.js` is plain JavaScript loaded by the browser
+verbatim. Treat it as a non-TS surface — don't copy-paste expressions
+from TS source. The new node --check test ensures this constraint is
+enforced structurally going forward.
+
+1816 tests total (2 new in v0.19.2 guard). Typecheck clean.
+
+---
+
 ## 0.19.1 — 2026-06-07 — Env-resolver unification + dynamic trigger registration + imperative param derivation
 
 Post-v0.19.0 friction patches. Three convergent fixes from live-test

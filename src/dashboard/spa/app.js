@@ -435,14 +435,14 @@ function collectSecuritySignals(source) {
     const shellMatch = /shell\s*\(\s*command\s*=\s*"([^"]+)"/.exec(line);
     if (shellMatch !== null) {
       shellOps++;
-      const cmd = shellMatch[1]!.trim();
+      const cmd = shellMatch[1].trim();
       const isUnsafe = /unsafe\s*=\s*true/.test(line);
       if (isUnsafe) {
         unsafeShell++;
         shellBinaries.add("bash");
       } else if (cmd.length > 0 && !cmd.startsWith("${") && !cmd.startsWith("$(")) {
         const binary = /^([^\s]+)/.exec(cmd);
-        if (binary !== null) shellBinaries.add(binary[1]!);
+        if (binary !== null) shellBinaries.add(binary[1]);
       }
     }
     if (/approved\s*=\s*"/.test(line)) approvedOps++;
