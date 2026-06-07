@@ -7,6 +7,7 @@ import { fileURLToPath } from "node:url";
 import type { McpServer, JsonRpcRequest } from "../mcp-server.js";
 import type { Scheduler } from "../scheduler.js";
 import { EventNotFoundError, EventParamMismatchError } from "../errors.js";
+import { resolveRuntimeConfigFromEnv, pickEnvOptionalOption } from "../runtime-env-resolver.js";
 
 /**
  * Dashboard HTTP server (T6b Phase 2). Bundles the SPA assets + a
@@ -109,17 +110,34 @@ export class DashboardServer {
 
   constructor(config: DashboardServerConfig) {
     this.mcpServer = config.mcpServer;
-    this.port = config.port ?? 7878;
-    this.bindAddress = config.bindAddress ?? "127.0.0.1";
+    // v0.19.1 — env-fallback per adopter CR `aeccddac`. Pre-v0.19.1
+    // each env→option lived only in the CLI cascade, so programmatic
+    // adopters constructing DashboardServer directly hit silent
+    // default-off on event ingress (and silent defaults on other
+    // server-level knobs). The shared resolver covers ALL
+    // SKILLSCRIPT_* knobs in one place; new knobs added in future
+    // versions inherit env support automatically.
+    //
+    // Per Perry's explicit-wins guard: any defined config field —
+    // including `false`, `""`, `0` — is authoritative; only
+    // `undefined` falls back to env.
+    const envCfg = resolveRuntimeConfigFromEnv();
+    this.port = pickEnvOptionalOption(config.port, envCfg.port) ?? 7878;
+    this.bindAddress = pickEnvOptionalOption(config.bindAddress, envCfg.host) ?? "127.0.0.1";
     this.assetsDir = config.assetsDir ?? locateAssetsDir();
     this.mountSpa = config.mountSpa ?? true;
     // v0.17.0 — Node lowercases inbound header names; normalize the
     // configured name once at constructor time so per-request lookup is
     // a single Map access (req.headers[<lowercased-name>]).
-    this.callerIdentityHeader = config.mcpCallerIdentityHeader?.toLowerCase();
-    // v0.19.0 — event ingress configuration (memory `ceaf4579`).
-    this.eventIngressEnabled = config.eventIngressEnabled ?? false;
-    this.eventIngressAuthToken = config.eventIngressAuthToken;
+    const headerRaw = pickEnvOptionalOption(config.mcpCallerIdentityHeader, envCfg.mcpCallerIdentityHeader);
+    this.callerIdentityHeader = headerRaw?.toLowerCase();
+    // v0.19.0/v0.19.1 — event ingress config now env-aware via shared
+    // resolver. Memory `ceaf4579` (event ingress) + `aeccddac`
+    // (env-resolver generalization).
+    this.eventIngressEnabled = config.eventIngressEnabled !== undefined
+      ? config.eventIngressEnabled
+      : envCfg.eventIngressEnabled ?? false;
+    this.eventIngressAuthToken = pickEnvOptionalOption(config.eventIngressAuthToken, envCfg.eventIngressAuthToken);
     this.scheduler = config.scheduler;
     if (this.eventIngressEnabled && this.scheduler === undefined) {
       throw new Error("DashboardServer: eventIngressEnabled requires a scheduler reference");

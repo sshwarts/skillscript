@@ -430,6 +430,43 @@ The `run_id` is the runtime's `trace_id` — adopters paste it into the dashboar
 
 **Param validation is strict v1**: every declared param must be present; no unknown params accepted. No defaults; no type coercion. JSON already carries types, and a type mismatch fails inside the consuming op with a real error. Defaults + types may land in v2 if real adopter need surfaces.
 
+### `# Autonomous: true` for event/cron skills doing mutations
+
+This is **not** a v0.19.0 regression — it's the pre-existing v0.14.x mutation gate. But it surfaces more visibly with event-fired skills, so worth calling out explicitly in this section.
+
+Skills fired by cron OR event have **no interactive author** to confirm mutation ops. The runtime's mutation gate (`$ data_write` / `$ skill_write` / `file_write` / mutating MCP tools) requires explicit authorization in non-interactive contexts. Three authorization paths exist:
+
+```
+# Option A — skill-level: # Autonomous: true (recommended for cron/event skills)
+# Skill: morning-sweep
+# Status: Approved
+# Triggers: cron: 0 9 * * *
+# Autonomous: true
+
+m:
+    $ data_write content="..." tags=["digest"] -> R
+    emit(text="sweep done")
+default: m
+```
+
+```
+# Option B — per-op: approved="<reason>" kwarg
+# Skill: event-handler
+# Status: Approved
+# Triggers: event: incident-report
+# Vars: SEVERITY
+
+m:
+    $ data_write content="${SEVERITY}" approved="event-fired" -> R
+default: m
+```
+
+Option C (preceding `??` / `ask()` in same target) is for interactive contexts (CLI / dashboard) and doesn't apply to cron/event fires — there's no user to ask.
+
+Without one of these, the runtime throws `UnconfirmedMutationError` at the mutation op + the skill fails its fire. Symptom in the trace: `class: "UnconfirmedMutationError"` on the offending op.
+
+The mutation gate is identical for cron + event sources — both are non-interactive. Lint surfaces `unconfirmed-mutation` as tier-2 warning at compile time so authors get the signal before the first fire.
+
 ### `event_name` semantics
 
 - **Public contract** addressed by POSTers. Skill behind the event can swap without breaking callers — the `skill_name` is private impl.

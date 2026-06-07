@@ -150,9 +150,19 @@ describe("T6b dogfood — dashboard end-to-end", () => {
     );
     expect(reg.id).toMatch(/^trig-/);
     expect(reg.skillName).toBe("heartbeat");
-    const triggers = await rpcCall<Array<{ id: string; skillName: string }>>(ctx.baseUrl, "list_triggers");
-    expect(triggers.length).toBe(1);
-    expect(triggers[0]!.skillName).toBe("heartbeat");
+    // v0.19.1 — declarative registration on skill_write/skill_status
+    // means heartbeat already had its `# Triggers: cron: */1 * * * *`
+    // registered as a declarative trigger when it was Approved in test 5.
+    // The imperative register_trigger above adds a second registration
+    // for the same skill+cron, so list shows 2 entries (declarative +
+    // imperative). Both have skillName "heartbeat".
+    const triggers = await rpcCall<Array<{ id: string; skillName: string; declarative: boolean }>>(ctx.baseUrl, "list_triggers");
+    expect(triggers.length).toBe(2);
+    expect(triggers.every((t) => t.skillName === "heartbeat")).toBe(true);
+    const declarative = triggers.filter((t) => t.declarative);
+    const imperative = triggers.filter((t) => !t.declarative);
+    expect(declarative.length).toBe(1);
+    expect(imperative.length).toBe(1);
   });
 
   it("7. Fire skill via scheduler; trace recorded; health_metrics reflects success", async () => {

@@ -413,6 +413,63 @@ export class Scheduler {
   }
 
   /**
+   * v0.19.1 — sync declarative triggers for a single skill against the
+   * scheduler. Used by `skill_write` (re-register on body change) +
+   * `skill_status` (Approved → register; Disabled/Draft → unregister).
+   *
+   * Closes the v0.19.0 friction where event triggers registered only at
+   * boot, forcing a restart after every `skill_write`. External POSTers
+   * waiting for `event_name X` to become live no longer have to wait
+   * for the next process restart — the trigger is live immediately
+   * after `skill_write` succeeds.
+   *
+   * Semantics:
+   *   - status === "Approved": drop existing declarative triggers for
+   *     this skill from the registry; register the parsed triggers
+   *     from the new source. Event-trigger params auto-derive from
+   *     the skill's `# Vars:` per v0.19.0 wireDeclarativeTriggers.
+   *   - status !== "Approved" (Draft or Disabled): drop all
+   *     declarative triggers for this skill. The skill's body still
+   *     exists in the SkillStore but no triggers fire.
+   *
+   * Cron + event sources both flow through this path. Per v0.19.0
+   * trigger model collapse, those are the only two valid sources.
+   */
+  syncDeclarativeTriggersForSkill(
+    skillName: string,
+    parsedTriggers: ReadonlyArray<{ source: string; name: string }>,
+    parsedVars: ReadonlyArray<string>,
+    status: "Approved" | "Draft" | "Disabled",
+  ): { added: number; removed: number } {
+    // Drop existing declarative triggers for this skill regardless of
+    // status — Approved re-adds below; non-Approved doesn't.
+    let removed = 0;
+    for (const [id, t] of [...this.triggers.entries()]) {
+      if (t.declarative && t.skillName === skillName) {
+        this.triggers.delete(id);
+        this.cronState.delete(id);
+        removed++;
+      }
+    }
+    let added = 0;
+    if (status === "Approved") {
+      for (const t of parsedTriggers) {
+        // Per v0.19.0 trigger model: only cron + event accepted.
+        if (t.source !== "cron" && t.source !== "event") continue;
+        this.registerTrigger({
+          skillName,
+          source: t.source,
+          name: t.name,
+          declarative: true,
+          ...(t.source === "event" ? { params: [...parsedVars] } : {}),
+        });
+        added++;
+      }
+    }
+    return { added, removed };
+  }
+
+  /**
    * v0.19.0 — fire an event-triggered skill from external POST. Returns
    * synchronously with `{ run_id }` after validation; the actual skill
    * dispatch runs async (caller does NOT await skill completion). The

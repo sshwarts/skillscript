@@ -7,6 +7,7 @@ import type { Registry } from "./connectors/registry.js";
 import { healthMetrics, type HealthMetrics } from "./metrics.js";
 import { lint } from "./lint.js";
 import { compile } from "./compile.js";
+import { parse as parseSkill } from "./parser.js";
 import { listKnownConnectorClasses } from "./connectors/config.js";
 import { LintFailureError, MissingSkillReferenceError, OpError } from "./errors.js";
 import {
@@ -475,7 +476,13 @@ export class McpServer {
             name,
           );
         }
-        return this.deps.skillStore.update_status(name, newState);
+        const result = await this.deps.skillStore.update_status(name, newState);
+        // v0.19.1 — sync declarative triggers on status transition.
+        // Approved → register the skill's declared triggers; Draft or
+        // Disabled → drop them. Closes Perry F1 + adopter Finding 2:
+        // mid-session status changes are live immediately, no restart.
+        await this.syncTriggersForSkill(name, newState);
+        return result;
       },
     });
 
@@ -511,12 +518,35 @@ export class McpServer {
         required: ["skill_name", "source", "name"],
       },
       handler: async (args) => {
+        const skillName = args["skill_name"] as string;
+        const source = args["source"] as ResolvableTriggerSource;
+        // v0.19.1 — auto-derive event-trigger params from the named
+        // skill's `# Vars:` declaration. Closes Perry F2 (memory
+        // `f68eb84d`): declarative wiring already does this for event
+        // triggers; imperative register_trigger forgot to. Without it,
+        // a POST /event with params for an imperatively-registered
+        // event 400s with "unknown params" because registration.params=[].
+        // Share the derivation pattern across both paths.
+        let params: string[] | undefined;
+        if (source === "event") {
+          try {
+            const loaded = await this.deps.skillStore.load(skillName);
+            const parsed = parseSkill(loaded.source);
+            params = parsed.vars.map((v) => v.name);
+          } catch {
+            // Skill not found or unparseable — pass params undefined.
+            // The scheduler will register with no declared params;
+            // /event POSTs without params still work; POSTs with
+            // params hit the strict-validation gate as expected.
+          }
+        }
         const reg: Omit<TriggerRegistration, "id" | "registeredAt" | "enabled"> = {
-          skillName: args["skill_name"] as string,
-          source: args["source"] as ResolvableTriggerSource,
+          skillName,
+          source,
           name: args["name"] as string,
           declarative: false,
           ...(typeof args["expires_at"] === "number" ? { expiresAt: args["expires_at"] } : {}),
+          ...(params !== undefined ? { params } : {}),
         };
         return this.deps.scheduler.registerTrigger(reg);
       },
@@ -986,6 +1016,13 @@ export class McpServer {
     // SkillStore.store() runs tier-1 lint as part of its contract and throws
     // LintFailureError on rejection. Surface that to the caller verbatim.
     const versionInfo = await this.deps.skillStore.store(name, bodyToStore, metadata);
+    // v0.19.1 — sync declarative triggers immediately on write. Pre-
+    // v0.19.1 triggers only wired at boot via wireDeclarativeTriggers,
+    // so a skill authored mid-session wasn't live until restart —
+    // contradicting the "POST /event accepts the new event_name now"
+    // expectation external systems have. Closes Perry F1 + adopter
+    // Finding 2 from memory `d538f7df`.
+    await this.syncTriggersForSkill(name, versionInfo.status);
     return {
       name: versionInfo.name,
       version: versionInfo.version,
@@ -993,6 +1030,43 @@ export class McpServer {
       status: versionInfo.status,
       changed_at: versionInfo.changed_at,
     };
+  }
+
+  /**
+   * v0.19.1 — re-derive + re-register the skill's declarative triggers
+   * against the scheduler. Called from skill_write + skill_status to
+   * close the "registered-only-at-boot" gap surfaced by Perry F1 +
+   * adopter Finding 2. Shared helper to avoid drift between the two
+   * call sites; also matches the param-derivation logic in
+   * wireDeclarativeTriggers (declarative + dynamic paths converge here
+   * AND on Scheduler.syncDeclarativeTriggersForSkill).
+   *
+   * Safely no-ops when the scheduler is unavailable (e.g., test fixtures
+   * that skip scheduler wiring); the v0.19.0 trigger machinery requires
+   * the scheduler to be present for dispatch anyway.
+   */
+  private async syncTriggersForSkill(name: string, status: SkillStatus): Promise<void> {
+    if (this.deps.scheduler === undefined) return;
+    let loaded;
+    try {
+      loaded = await this.deps.skillStore.load(name);
+    } catch {
+      // Skill removed between write and sync — drop any prior triggers.
+      this.deps.scheduler.syncDeclarativeTriggersForSkill(name, [], [], "Draft");
+      return;
+    }
+    let parsedTriggers: ReadonlyArray<{ source: string; name: string }> = [];
+    let parsedVars: string[] = [];
+    try {
+      const parsed = parseSkill(loaded.source);
+      parsedTriggers = parsed.triggers;
+      parsedVars = parsed.vars.map((v) => v.name);
+    } catch {
+      // Parse failure — drop any triggers for safety.
+      this.deps.scheduler.syncDeclarativeTriggersForSkill(name, [], [], "Draft");
+      return;
+    }
+    this.deps.scheduler.syncDeclarativeTriggersForSkill(name, parsedTriggers, parsedVars, status);
   }
 
   /**

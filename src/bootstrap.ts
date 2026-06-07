@@ -24,6 +24,7 @@
 
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { dirname } from "node:path";
+import { resolveRuntimeConfigFromEnv, pickEnvOptionalOption } from "./runtime-env-resolver.js";
 
 import { Registry } from "./connectors/registry.js";
 import { FilesystemSkillStore } from "./connectors/skill-store.js";
@@ -332,33 +333,23 @@ export function defaultRegistry(opts: DefaultRegistryOpts): { registry: Registry
  *      `result.mcpServer`.
  */
 export function bootstrap(opts: BootstrapOpts): BootstrapResult {
-  // v0.18.9 — shell allowlist env-fallback per adopter CR `f2549ddf` +
-  // Perry signoff `42de3d72`. Closes the silent default-deny that hit
-  // programmatic-bootstrap adopters: pre-v0.18.9 the env var was honored
-  // on the CLI path (cli.ts cascade) but ignored on bootstrap() — the
-  // op read injected `deps.shellAllowlist`, not `process.env`.
+  // v0.19.1 — centralized env-resolver per adopter CR `f2549ddf` +
+  // follow-up `aeccddac`. Pre-v0.19.1 each env→option translation lived
+  // inside the CLI cascade; programmatic adopters using bootstrap() got
+  // silent default-off on every SKILLSCRIPT_* knob. v0.19.1 calls the
+  // shared resolver here so bootstrap() inherits env support for ALL
+  // current + future SKILLSCRIPT_* knobs — no per-feature patches.
   //
-  // Precedence per Perry's REQUIRED guard:
-  //   - opts.shellAllowlist === undefined  → fall back to env
-  //   - opts.shellAllowlist === [<list>]   → authoritative (explicit list wins)
-  //   - opts.shellAllowlist === []         → authoritative (explicit deny-all wins)
+  // Perry's explicit-wins guard (memory `42de3d72`) is preserved per-
+  // field via `pickEnvOptionalOption` (and `pickEnvOption` where
+  // applicable): any defined opt value — including `false`, `[]`, `0`,
+  // `""` — is authoritative; only `undefined` falls back to env.
   //
-  // CRITICAL: do NOT collapse "undefined" and "empty array" into a
-  // single falsy-check — that would let a stray env var silently
-  // widen an adopter's intentional `shellAllowlist: []` lockdown.
-  //
-  // .env file loading is NOT done here — the CLI's loadEnvFile is
-  // CLI-only by design. Programmatic adopters either set the env in
-  // their launch environment or call `process.loadEnvFile()` (or
-  // equivalent) before invoking bootstrap. See adopter playbook
-  // § "Shell binary allowlist · Programmatic bootstrap path."
-  const resolvedShellAllowlist = opts.shellAllowlist !== undefined
-    ? opts.shellAllowlist
-    : (() => {
-        const raw = process.env["SKILLSCRIPT_SHELL_ALLOWLIST"];
-        if (raw === undefined) return undefined;
-        return raw.split(",").map((b) => b.trim()).filter((b) => b.length > 0);
-      })();
+  // .env file loading remains CLI-only by adopter recommendation
+  // (memory `8f2d8931`). Programmatic adopters either set env in their
+  // launch environment or call `process.loadEnvFile()` themselves.
+  const envCfg = resolveRuntimeConfigFromEnv();
+  const resolvedShellAllowlist = pickEnvOptionalOption(opts.shellAllowlist, envCfg.shellAllowlist);
 
   // v0.10 — pre-load connectors.json (if configured) to extract substrate
   // intent BEFORE defaultRegistry runs. The substrate section selects
@@ -396,7 +387,18 @@ export function bootstrap(opts: BootstrapOpts): BootstrapResult {
     ...(agentConnectorToUse !== undefined ? { agentConnector: agentConnectorToUse } : {}),
   });
   const traceStore = new FilesystemTraceStore(opts.traceDir);
-  const enableUnsafeShell = opts.enableUnsafeShell ?? false;
+  // v0.19.1 — env-fallback per Perry's explicit-wins guard. Defined opt
+  // wins; only undefined falls through to env. Default false preserves
+  // v0.18.x behavior.
+  const enableUnsafeShell = opts.enableUnsafeShell !== undefined
+    ? opts.enableUnsafeShell
+    : envCfg.enableUnsafeShell ?? false;
+  const resolvedForceAlwaysDraft = opts.forceAlwaysDraft !== undefined
+    ? opts.forceAlwaysDraft
+    : envCfg.forceAlwaysDraft;
+  const resolvedPollIntervalSeconds = pickEnvOptionalOption(opts.pollIntervalSeconds, envCfg.pollIntervalSeconds);
+  const resolvedAbsoluteTimeoutMs = pickEnvOptionalOption(opts.absoluteTimeoutMs, envCfg.absoluteTimeoutMs);
+  const resolvedMaxRecursionDepth = pickEnvOptionalOption(opts.maxRecursionDepth, envCfg.maxRecursionDepth);
   const mode = opts.mode ?? "dashboard";
 
   // v0.4.0 — register the MCP connectors from the pre-loaded connectors.json
@@ -443,9 +445,9 @@ export function bootstrap(opts: BootstrapOpts): BootstrapResult {
     registry,
     skillStore,
     traceStore,
-    ...(opts.pollIntervalSeconds !== undefined ? { pollIntervalSeconds: opts.pollIntervalSeconds } : {}),
-    ...(opts.absoluteTimeoutMs !== undefined ? { absoluteTimeoutMs: opts.absoluteTimeoutMs } : {}),
-    ...(opts.maxRecursionDepth !== undefined ? { maxRecursionDepth: opts.maxRecursionDepth } : {}),
+    ...(resolvedPollIntervalSeconds !== undefined ? { pollIntervalSeconds: resolvedPollIntervalSeconds } : {}),
+    ...(resolvedAbsoluteTimeoutMs !== undefined ? { absoluteTimeoutMs: resolvedAbsoluteTimeoutMs } : {}),
+    ...(resolvedMaxRecursionDepth !== undefined ? { maxRecursionDepth: resolvedMaxRecursionDepth } : {}),
     ...(resolvedShellAllowlist !== undefined ? { shellAllowlist: resolvedShellAllowlist } : {}),
     ...(opts.trace !== undefined ? { trace: opts.trace, traceStore } : {}),
     ...(onTriggersChanged !== undefined ? { onTriggersChanged } : {}),
@@ -465,7 +467,7 @@ export function bootstrap(opts: BootstrapOpts): BootstrapResult {
     runtimeMode: mode,
     ...(resolvedShellAllowlist !== undefined ? { shellAllowlist: resolvedShellAllowlist } : {}),
     ...(opts.triggersFilePath !== undefined ? { triggersFilePath: opts.triggersFilePath } : {}),
-    ...(opts.forceAlwaysDraft === true ? { forceAlwaysDraft: true } : {}),
+    ...(resolvedForceAlwaysDraft === true ? { forceAlwaysDraft: true } : {}),
   });
 
   return {

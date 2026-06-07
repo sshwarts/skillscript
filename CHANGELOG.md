@@ -1,5 +1,147 @@
 # Changelog
 
+## 0.19.1 — 2026-06-07 — Env-resolver unification + dynamic trigger registration + imperative param derivation
+
+Post-v0.19.0 friction patches. Three convergent fixes from live-test
+signal:
+
+### A. Shared `resolveRuntimeConfigFromEnv()` — structural cleanup
+
+**Closes adopter CR `f2549ddf` + follow-up `aeccddac`.** Pre-v0.19.1
+each env→option translation lived inside the CLI cascade — so
+programmatic adopters using `bootstrap()` or `DashboardServer`
+directly hit silent default-off behavior on every SKILLSCRIPT_* knob.
+v0.18.9 patched the shell allowlist instance feature-specifically;
+v0.19.0 immediately reproduced the same bug with two new env vars
+(`SKILLSCRIPT_EVENT_INGRESS_ENABLED` + `SKILLSCRIPT_EVENT_INGRESS_AUTH_TOKEN`).
+
+The structural fix: a shared `resolveRuntimeConfigFromEnv()` resolver
+in `src/runtime-env-resolver.ts` covering ALL SKILLSCRIPT_* knobs:
+
+```
+port / host
+mcpCallerIdentityHeader
+enableUnsafeShell
+forceAlwaysDraft
+pollIntervalSeconds
+absoluteTimeoutMs
+maxRecursionDepth
+shellAllowlist
+eventIngressEnabled
+eventIngressAuthToken
+```
+
+Both `bootstrap()` and `DashboardServer` call it. New SKILLSCRIPT_*
+knobs added to the resolver inherit env support across CLI +
+programmatic paths automatically — the bug class closes, not just
+this instance.
+
+**Perry's explicit-wins guard (from `42de3d72`) generalized**:
+- `opts.X === undefined` → fall back to env
+- `opts.X === any defined value` (including `false`, `0`, `[]`, `""`)
+  → authoritative; env does NOT widen
+
+Adopters who explicitly pass `shellAllowlist: []` or
+`eventIngressEnabled: false` to assert specific posture get exactly
+that, regardless of ambient env. Security-load-bearing.
+
+### B. Dynamic declarative-trigger registration
+
+**Closes Perry F1 (`f68eb84d`) + adopter Finding 2 (`d538f7df`).**
+Pre-v0.19.1, declarative triggers (`# Triggers: cron|event:`) only
+wired at boot via `wireDeclarativeTriggers`. Skills authored
+mid-session via `skill_write` weren't live until next restart —
+contradicted the "POST /event accepts the new event_name now"
+expectation external POSTers have.
+
+`skill_write` + `skill_status` MCP handlers now call a new
+`Scheduler.syncDeclarativeTriggersForSkill(name, parsedTriggers,
+parsedVars, status)` that:
+- Drops prior declarative triggers for the skill
+- Re-registers them from the new parsed source IF status === Approved
+- Status transitions Approved→Disabled drop; Disabled→Approved restore
+
+Author skill → /event accepts immediately. No restart.
+
+### C. Imperative `register_trigger` derives params from `# Vars:`
+
+**Closes Perry F2 (`f68eb84d`).** Declarative wiring derived event-
+trigger params from the skill's `# Vars:` (v0.19.0 feature); imperative
+MCP `register_trigger` didn't apply the same derivation. Result: POST
+/event with params for an imperatively-registered event 400'd with
+"unknown params" because `registration.params = []`.
+
+`register_trigger` handler now loads the named skill, parses, derives
+params from `# Vars:` for event-source registrations. Cron registrations
+unchanged (cron has no params).
+
+### D. Schema enum trim regression guard
+
+**Closes Perry F3 (`f68eb84d`).** v0.19.0 already trimmed the MCP
+`register_trigger` / `list_triggers` `source` enums to `["cron",
+"event"]` in source + dist; Perry's live test likely hit a stale
+cached state. v0.19.1 adds explicit regression tests asserting the
+enum literals so future trigger-source changes can't silently
+desynchronize the schema and the parser.
+
+### E. Doc add: `# Autonomous: true` for event/cron mutation skills
+
+**Closes adopter Finding 1 (`d538f7df`).** Not a v0.19.x regression
+— it's the pre-existing v0.14.x mutation gate. But event-fired skills
+are a new category where adopters first discover this. Adopter-playbook
+"Trigger model" section now has an explicit subsection with worked
+examples covering:
+
+- Skill-level `# Autonomous: true` for cron/event-fired mutation skills
+- Per-op `approved="<reason>"` kwarg as an alternative
+- Why `??` / `ask()` doesn't apply (no interactive author in cron/event
+  contexts)
+
+### Tests
+
+23 new tests in `v0.19.1-dynamic-registration-and-env-resolver.test.ts`:
+- 7 env-resolver parse cases (every SKILLSCRIPT_* knob; invalid values
+  fall through; explicit false stays false; empty allowlist string;
+  whitespace trim)
+- 4 bootstrap env-fallback cases (env populates Scheduler config;
+  explicit opts win over env including `[]` deny-all + `false`)
+- 4 DashboardServer env-fallback cases (event ingress + port + host +
+  auth token from env)
+- 4 dynamic-registration cases (skill_write registers immediately;
+  Draft → no registration; Approved → Disabled drops; Disabled →
+  Approved restores)
+- 2 imperative-param-derivation cases (event derives from #Vars; cron
+  doesn't)
+- 2 schema-enum regression cases (register_trigger + list_triggers
+  source enum is `["cron", "event"]`)
+
+Plus 1 existing test updated (`dogfood-t6b.test.ts` test 6) to reflect
+the new dynamic-registration semantics (heartbeat's declarative cron
+trigger registers immediately on Approved → list_triggers shows 2
+entries after the test 6 imperative-register, not 1).
+
+1814 tests total; typecheck clean.
+
+### Banking note (feedback memory `9d969eb1`)
+
+"Operator-controllable knobs ALL flow through a shared env resolver;
+never patch the env→option translation per-feature." Two-release thrash
+(v0.18.8 → v0.18.9 patch → v0.19.0 reintroduces → v0.19.1 generalizes)
+is the structural-vs-per-feature lesson. Future SKILLSCRIPT_* knobs
+extend the resolver; the bug class is closed.
+
+### Docs
+
+- `docs/adopter-playbook.md` — new "`# Autonomous: true` for event/
+  cron skills" subsection under "Trigger model"
+- No other doc changes; existing trigger-model + env-var docs already
+  cover the surfaces
+
+No breaking changes (v0.19.0's removal of session/agent-event/file-watch/
+sensor sources stands; v0.19.1 doesn't change parser behavior).
+
+---
+
 ## 0.19.0 — 2026-06-07 — **BREAKING** — Simplified trigger model: cron + event only; new `POST /event` HTTP ingress
 
 Closes the locked Scott + Perry decision (memory `ceaf4579`): collapse

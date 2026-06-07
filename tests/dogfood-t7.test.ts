@@ -24,8 +24,8 @@ const REPO_ROOT = join(__dirname, "..");
 const PACKAGE_JSON = JSON.parse(readFileSync(join(REPO_ROOT, "package.json"), "utf8")) as Record<string, unknown>;
 
 describe("T7 — package.json polish", () => {
-  it("1. version is 0.19.0 (BREAKING — simplified trigger model: cron + event only; session/agent-event/file-watch/sensor removed; POST /event HTTP ingress with run_id=trace_id + bearer-token auth + self-describing durability; DeliveryMeta.trigger_kind 'session' fully scrubbed)", () => {
-    expect(PACKAGE_JSON["version"]).toBe("0.19.0");
+  it("1. version is 0.19.1 (post-v0.19.0 friction patches: shared resolveRuntimeConfigFromEnv for all SKILLSCRIPT_* knobs (CLI + bootstrap + DashboardServer); dynamic declarative-trigger registration on skill_write + skill_status; imperative register_trigger derives params from # Vars:; schema-enum regression guard; doc add for # Autonomous: true on cron/event mutation skills)", () => {
+    expect(PACKAGE_JSON["version"]).toBe("0.19.1");
   });
 
   it("2. main + types + bin + engines.node ≥ 22.5 declared", () => {
