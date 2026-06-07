@@ -70,13 +70,14 @@ describe("McpServer protocol", () => {
     }
   });
 
-  it("tools/list returns 14 built-in tools (v0.9.0 added set_trigger_enabled)", async () => {
+  it("tools/list returns 17 built-in tools (v0.18.9 added blocked_shell_attempts)", async () => {
     const { server, cleanup } = withServer();
     try {
       const resp = await server.handle(rpc("tools/list"));
       const r = (resp as { result: { tools: Array<{ name: string }> } }).result;
       const names = r.tools.map((t) => t.name).sort();
       expect(names).toEqual([
+        "blocked_shell_attempts",
         "compile_skill",
         "data_read",
         "execute_skill",

@@ -333,6 +333,34 @@ export function defaultRegistry(opts: DefaultRegistryOpts): { registry: Registry
  *      `result.mcpServer`.
  */
 export function bootstrap(opts: BootstrapOpts): BootstrapResult {
+  // v0.18.9 — shell allowlist env-fallback per adopter CR `f2549ddf` +
+  // Perry signoff `42de3d72`. Closes the silent default-deny that hit
+  // programmatic-bootstrap adopters: pre-v0.18.9 the env var was honored
+  // on the CLI path (cli.ts cascade) but ignored on bootstrap() — the
+  // op read injected `deps.shellAllowlist`, not `process.env`.
+  //
+  // Precedence per Perry's REQUIRED guard:
+  //   - opts.shellAllowlist === undefined  → fall back to env
+  //   - opts.shellAllowlist === [<list>]   → authoritative (explicit list wins)
+  //   - opts.shellAllowlist === []         → authoritative (explicit deny-all wins)
+  //
+  // CRITICAL: do NOT collapse "undefined" and "empty array" into a
+  // single falsy-check — that would let a stray env var silently
+  // widen an adopter's intentional `shellAllowlist: []` lockdown.
+  //
+  // .env file loading is NOT done here — the CLI's loadEnvFile is
+  // CLI-only by design. Programmatic adopters either set the env in
+  // their launch environment or call `process.loadEnvFile()` (or
+  // equivalent) before invoking bootstrap. See adopter playbook
+  // § "Shell binary allowlist · Programmatic bootstrap path."
+  const resolvedShellAllowlist = opts.shellAllowlist !== undefined
+    ? opts.shellAllowlist
+    : (() => {
+        const raw = process.env["SKILLSCRIPT_SHELL_ALLOWLIST"];
+        if (raw === undefined) return undefined;
+        return raw.split(",").map((b) => b.trim()).filter((b) => b.length > 0);
+      })();
+
   // v0.10 — pre-load connectors.json (if configured) to extract substrate
   // intent BEFORE defaultRegistry runs. The substrate section selects
   // SkillStore / DataStore / LocalModel impls; the MCP-connector entries
@@ -419,7 +447,7 @@ export function bootstrap(opts: BootstrapOpts): BootstrapResult {
     ...(opts.pollIntervalSeconds !== undefined ? { pollIntervalSeconds: opts.pollIntervalSeconds } : {}),
     ...(opts.absoluteTimeoutMs !== undefined ? { absoluteTimeoutMs: opts.absoluteTimeoutMs } : {}),
     ...(opts.maxRecursionDepth !== undefined ? { maxRecursionDepth: opts.maxRecursionDepth } : {}),
-    ...(opts.shellAllowlist !== undefined ? { shellAllowlist: opts.shellAllowlist } : {}),
+    ...(resolvedShellAllowlist !== undefined ? { shellAllowlist: resolvedShellAllowlist } : {}),
     ...(opts.trace !== undefined ? { trace: opts.trace, traceStore } : {}),
     ...(onTriggersChanged !== undefined ? { onTriggersChanged } : {}),
     enableUnsafeShell,
@@ -436,7 +464,7 @@ export function bootstrap(opts: BootstrapOpts): BootstrapResult {
     registry,
     enableUnsafeShell,
     runtimeMode: mode,
-    ...(opts.shellAllowlist !== undefined ? { shellAllowlist: opts.shellAllowlist } : {}),
+    ...(resolvedShellAllowlist !== undefined ? { shellAllowlist: resolvedShellAllowlist } : {}),
     ...(opts.triggersFilePath !== undefined ? { triggersFilePath: opts.triggersFilePath } : {}),
     ...(opts.forceAlwaysDraft === true ? { forceAlwaysDraft: true } : {}),
   });

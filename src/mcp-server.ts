@@ -304,6 +304,64 @@ export class McpServer {
     });
 
     this.registerTool({
+      name: "blocked_shell_attempts",
+      description: "v0.18.9 — list shell op dispatches refused by the binary allowlist gate. Queries the trace store cross-skill, filters to op records carrying `blocked_reason: \"binary-not-allowed\"`. Returns flat list ready for the dashboard's observe→promote loop (operator sees what binaries skills tried to invoke; decides whether to add any to `SKILLSCRIPT_SHELL_ALLOWLIST`).",
+      inputSchema: {
+        type: "object",
+        properties: {
+          since_ms: { type: "number", description: "Earliest unix-ms timestamp to include (default: last 7 days)." },
+          limit: { type: "number", description: "Max records to return (default: 100)." },
+        },
+      },
+      handler: async (args) => {
+        const sinceMs = typeof args["since_ms"] === "number"
+          ? args["since_ms"]
+          : Date.now() - 7 * 24 * 60 * 60 * 1000;
+        const limit = typeof args["limit"] === "number" ? args["limit"] : 100;
+        // Query trace store for the recent window. Filter in-memory:
+        // ops carrying blocked_reason: "binary-not-allowed". Substrates
+        // that natively index by blocked_reason could optimize this,
+        // but the v0.18.9 reference path is in-memory filtering against
+        // the standard trace shape.
+        const traces = await this.deps.traceStore.query({ since_ms: sinceMs, limit: 500 });
+        const attempts: Array<{
+          skill_name: string;
+          target: string;
+          binary: string;
+          body: string;
+          fired_at_ms: number;
+        }> = [];
+        for (const trace of traces) {
+          for (const op of trace.ops) {
+            if (op.blocked_reason !== "binary-not-allowed") continue;
+            // Extract first token from the op body — same shape the
+            // runtime checks against the allowlist. For unsafe ops the
+            // body is the unsafe payload; the actual blocked binary is
+            // always `bash` per v0.18.8 reframe. Heuristic: if body
+            // contains a pipe or other bash syntax tokens, label `bash`;
+            // else use the first whitespace-delimited token.
+            const trimmed = op.body.trim();
+            const binary = /[|;&$`]/.test(trimmed) || trimmed.startsWith("bash")
+              ? "bash"
+              : (/^([^\s]+)/.exec(trimmed)?.[1] ?? "(unknown)");
+            attempts.push({
+              skill_name: trace.skill_name,
+              target: op.target,
+              binary,
+              body: op.body.length > 200 ? `${op.body.slice(0, 200)}...` : op.body,
+              fired_at_ms: op.started_at_ms,
+            });
+            if (attempts.length >= limit) break;
+          }
+          if (attempts.length >= limit) break;
+        }
+        // Sort newest first so the dashboard surfaces "what just got blocked."
+        attempts.sort((a, b) => b.fired_at_ms - a.fired_at_ms);
+        return { attempts, total: attempts.length };
+      },
+    });
+
+    this.registerTool({
       name: "skill_metadata",
       description: "Get metadata + version history + recent fires + approval-gate state for a specific skill by name. For the source body itself, call skill_read.",
       inputSchema: {

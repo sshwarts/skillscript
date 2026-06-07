@@ -24,8 +24,8 @@ const REPO_ROOT = join(__dirname, "..");
 const PACKAGE_JSON = JSON.parse(readFileSync(join(REPO_ROOT, "package.json"), "utf8")) as Record<string, unknown>;
 
 describe("T7 — package.json polish", () => {
-  it("1. version is 0.18.8 (BREAKING — default-deny shell binary allowlist: SKILLSCRIPT_SHELL_ALLOWLIST env + config + lint shell-binary-not-allowed + runtime ShellBinaryNotAllowedError + skillfile shell-audit pre-upgrade migration helper + trace blocked_reason)", () => {
-    expect(PACKAGE_JSON["version"]).toBe("0.18.8");
+  it("1. version is 0.18.9 (human-reviewer observability: dashboard Security view + blocked_shell_attempts MCP tool + skill-detail security signals panel + source highlighting orange/yellow tints + adopter CR bootstrap-env-fallback with Perry's explicit-[] guard + error message names all three wiring paths)", () => {
+    expect(PACKAGE_JSON["version"]).toBe("0.18.9");
   });
 
   it("2. main + types + bin + engines.node ≥ 22.5 declared", () => {

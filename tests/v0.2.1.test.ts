@@ -132,12 +132,12 @@ describe("v0.2.1 — runtime_capabilities MCP tool", () => {
     rmSync(home, { recursive: true, force: true });
   });
 
-  it("appears in tools/list (v0.13.8 ships 16 tools total; runtime_capabilities is among them)", async () => {
+  it("appears in tools/list (v0.18.9 ships 17 tools total — v0.18.9 added blocked_shell_attempts)", async () => {
     const { mcpServer } = bootstrap({ skillsDir: join(home, "skills"), traceDir: join(home, "traces") });
     const resp = await mcpServer.handle(rpc("tools/list"));
     const r = (resp as { result: { tools: Array<{ name: string }> } }).result;
     expect(r.tools.map((t) => t.name)).toContain("runtime_capabilities");
-    expect(r.tools).toHaveLength(16);
+    expect(r.tools).toHaveLength(17);
   });
 
   it("returns all categories when called without filter", async () => {

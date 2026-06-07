@@ -12,6 +12,7 @@ const state = {
   triggers: [],
   metrics: null,
   capabilities: null,
+  blockedShellAttempts: null,
   lastUpdate: null,
 };
 
@@ -42,7 +43,7 @@ async function refresh() {
   const ts = new Date();
   document.getElementById("poll-status").textContent = `polling…`;
   try {
-    const [catalog, triggers, metrics, capabilities] = await Promise.all([
+    const [catalog, triggers, metrics, capabilities, blocked] = await Promise.all([
       // v0.9.8 — skill_list returns SkillCatalog (pre-grouped by audience).
       // Dashboard wants the full picture (all categories); flatten the
       // groups into a single array for the existing rendering code.
@@ -50,6 +51,10 @@ async function refresh() {
       callTool("list_triggers", {}),
       callTool("health_metrics", {}),
       callTool("runtime_capabilities", { include: ["mcpConnectors", "mcpConnectorClasses", "localModels", "dataStores", "skillStores", "agentConnectors", "runtimeVersion"] }),
+      // v0.18.9 — blocked shell attempts for the Security view's
+      // observe→promote loop. Graceful: pre-v0.18.9 servers don't have
+      // this tool; catch returns null and the Security view degrades.
+      callTool("blocked_shell_attempts", { limit: 100 }).catch(() => null),
     ]);
     state.skills = [
       ...(catalog.receives ?? []),
@@ -59,6 +64,7 @@ async function refresh() {
     state.triggers = triggers;
     state.metrics = metrics;
     state.capabilities = capabilities;
+    state.blockedShellAttempts = blocked;
     state.lastUpdate = ts;
     document.getElementById("poll-status").textContent = `last updated ${ts.toLocaleTimeString()}`;
     renderCurrentView();
@@ -201,9 +207,11 @@ async function renderSkillDetail(name) {
         </div>
       </section>
 
+      ${source ? renderSecuritySignalsPanel(source) : ""}
+
       <section>
         <h2>Source</h2>
-        ${source ? `<pre>${esc(source)}</pre>` : `<div class="empty">Source not available.</div>`}
+        ${source ? `<pre class="skill-source">${renderHighlightedSkillBody(source)}</pre>` : `<div class="empty">Source not available.</div>`}
       </section>
 
       ${renderComposesSection(name, source)}
@@ -312,6 +320,214 @@ function renderTriggers() {
                   </td>
                 </tr>`;
               }).join("")}
+            </tbody>
+          </table>`}
+    </section>
+  `;
+}
+
+// v0.18.9 — security highlighting in the skill source viewer. Two
+// severity tiers visualized as soft background tints in the <pre> body
+// so a human reviewer can scan-prioritize "what's risky in this skill":
+//
+//   HIGH (orange tint) — bypasses human-in-loop OR has unbounded blast radius:
+//     - `unsafe=true` kwarg (bash interpretation enabled)
+//     - `# Autonomous: true` frontmatter (no human-in-loop)
+//     - `approved="..."` kwarg (per-op author authorization)
+//     - `$ skill_write`, `$ data_write`, `file_write(...)` (mutation ops)
+//
+//   MEDIUM (yellow tint) — touches OS / live-session surfaces:
+//     - `shell(...)` ops (OS-level dispatch even when allowlisted)
+//     - `notify(agent="X@session", ...)` (wake-class interrupt)
+//
+// Implementation: regex-based annotation pass over the already-esc'd
+// source string. Each pattern wraps its match in a <span class=...>
+// with low-alpha background. Patterns are deliberately conservative —
+// false negatives are fine (the highlight aids scanning, not gating);
+// false positives are worse because they desensitize the reviewer.
+function renderHighlightedSkillBody(source) {
+  let body = esc(source);
+  // HIGH tier — must apply on the esc'd string, so patterns reference
+  // entity-escaped quote chars (e.g., approved=&quot;...&quot;).
+  const highPatterns = [
+    // Frontmatter signal: `# Autonomous: true`
+    /(^|\n)(# Autonomous:\s*true)/g,
+    // Per-op author authorization kwarg
+    /(approved=&quot;[^&]*&quot;)/g,
+    // Unsafe shell axis
+    /(unsafe\s*=\s*true)/g,
+    // Mutation ops (substrate writes + filesystem writes + skill writes)
+    /(file_write\s*\()/g,
+    /(\$\s*skill_write\b)/g,
+    /(\$\s*data_write\b)/g,
+  ];
+  // MEDIUM tier — shell() ops + wake-class notify
+  const mediumPatterns = [
+    /(shell\s*\()/g,
+    /(notify\s*\(\s*agent\s*=\s*&quot;[^&]*@[^&]*&quot;)/g,
+  ];
+  for (const re of highPatterns) {
+    body = body.replace(re, (_match, p1, p2) => {
+      const prefix = p2 !== undefined ? p1 : "";
+      const captured = p2 !== undefined ? p2 : p1;
+      return `${prefix}<span class="sig-high">${captured}</span>`;
+    });
+  }
+  for (const re of mediumPatterns) {
+    body = body.replace(re, (m) => `<span class="sig-medium">${m}</span>`);
+  }
+  return body;
+}
+
+// v0.18.9 — security signals summary panel. Glance-first surface
+// showing aggregated counts so a reviewer knows WHAT to look for before
+// scanning the body. Pairs with renderHighlightedSkillBody() (the
+// WHERE).
+function renderSecuritySignalsPanel(source) {
+  const sig = collectSecuritySignals(source);
+  const items = [];
+  if (sig.shellOps > 0) {
+    items.push(`<li class="sig-medium-text">${sig.shellOps} shell op${sig.shellOps === 1 ? "" : "s"}${sig.shellBinaries.length > 0 ? ` (binaries: ${sig.shellBinaries.map(esc).join(", ")})` : ""}</li>`);
+  }
+  if (sig.unsafeShell > 0) {
+    items.push(`<li class="sig-high-text">${sig.unsafeShell} unsafe shell op${sig.unsafeShell === 1 ? "" : "s"} <small>(requires <code>SKILLSCRIPT_ENABLE_UNSAFE_SHELL=true</code> AND <code>bash</code> on allowlist)</small></li>`);
+  }
+  if (sig.autonomous) {
+    items.push(`<li class="sig-high-text"><code># Autonomous: true</code> <small>(bypasses human-in-loop on mutation ops)</small></li>`);
+  }
+  if (sig.approvedOps > 0) {
+    items.push(`<li class="sig-high-text">${sig.approvedOps} <code>approved="..."</code> per-op authorization${sig.approvedOps === 1 ? "" : "s"}</li>`);
+  }
+  if (sig.writeOps > 0) {
+    items.push(`<li class="sig-high-text">${sig.writeOps} mutation op${sig.writeOps === 1 ? "" : "s"} <small>(<code>skill_write</code> / <code>data_write</code> / <code>file_write</code>)</small></li>`);
+  }
+  if (sig.wakeAddresses > 0) {
+    items.push(`<li class="sig-medium-text">${sig.wakeAddresses} <code>@session</code> wake-class deliver${sig.wakeAddresses === 1 ? "" : "s"}</li>`);
+  }
+  if (sig.cronTriggers > 0) {
+    items.push(`<li class="sig-info-text">${sig.cronTriggers} cron trigger${sig.cronTriggers === 1 ? "" : "s"} <small>(autonomous fire)</small></li>`);
+  }
+  if (items.length === 0) return "";
+  return `
+    <section>
+      <h2>Security signals</h2>
+      <ul class="security-signals">
+        ${items.join("")}
+      </ul>
+      <p><small>Scan the source below — highlighted spans match these signals. <span class="sig-high">Orange</span> = review carefully; <span class="sig-medium">yellow</span> = worth noting.</small></p>
+    </section>
+  `;
+}
+
+function collectSecuritySignals(source) {
+  const lines = source.split("\n");
+  let shellOps = 0;
+  let unsafeShell = 0;
+  let autonomous = false;
+  let approvedOps = 0;
+  let writeOps = 0;
+  let wakeAddresses = 0;
+  let cronTriggers = 0;
+  const shellBinaries = new Set();
+  for (const line of lines) {
+    if (/^# Autonomous:\s*true\s*$/i.test(line)) autonomous = true;
+    if (/^# Triggers:\s*cron:/i.test(line)) cronTriggers++;
+    const shellMatch = /shell\s*\(\s*command\s*=\s*"([^"]+)"/.exec(line);
+    if (shellMatch !== null) {
+      shellOps++;
+      const cmd = shellMatch[1]!.trim();
+      const isUnsafe = /unsafe\s*=\s*true/.test(line);
+      if (isUnsafe) {
+        unsafeShell++;
+        shellBinaries.add("bash");
+      } else if (cmd.length > 0 && !cmd.startsWith("${") && !cmd.startsWith("$(")) {
+        const binary = /^([^\s]+)/.exec(cmd);
+        if (binary !== null) shellBinaries.add(binary[1]!);
+      }
+    }
+    if (/approved\s*=\s*"/.test(line)) approvedOps++;
+    if (/\$\s*skill_write\b|\$\s*data_write\b|file_write\s*\(/.test(line)) writeOps++;
+    if (/notify\s*\(\s*agent\s*=\s*"[^"]*@[^"]*"/.test(line)) wakeAddresses++;
+  }
+  return {
+    shellOps,
+    unsafeShell,
+    autonomous,
+    approvedOps,
+    writeOps,
+    wakeAddresses,
+    cronTriggers,
+    shellBinaries: [...shellBinaries].sort(),
+  };
+}
+
+// v0.18.9 — Security view. Cross-skill observability for the shell
+// allowlist's observe→promote loop. Operator sees what binaries skills
+// tried to invoke off-list; decides whether to add any to .env.
+function renderSecurity() {
+  const blocked = state.blockedShellAttempts;
+  if (blocked === null) {
+    return `
+      <section>
+        <h2>Security</h2>
+        <div class="empty">
+          <strong>blocked_shell_attempts tool unavailable.</strong>
+          The runtime serving this dashboard is pre-v0.18.9 and doesn't expose the
+          blocked-attempts query surface. Upgrade to v0.18.9+ to see what shell
+          binaries skills tried to invoke off the allowlist.
+        </div>
+      </section>
+    `;
+  }
+  const attempts = blocked.attempts ?? [];
+  // Group by binary for the "what should I consider adding?" angle.
+  const byBinary = {};
+  for (const a of attempts) {
+    if (!byBinary[a.binary]) byBinary[a.binary] = { count: 0, skills: new Set(), latest: 0 };
+    byBinary[a.binary].count++;
+    byBinary[a.binary].skills.add(a.skill_name);
+    if (a.fired_at_ms > byBinary[a.binary].latest) byBinary[a.binary].latest = a.fired_at_ms;
+  }
+  const groups = Object.entries(byBinary).sort((a, b) => b[1].count - a[1].count);
+  return `
+    <section>
+      <h2>Security · Blocked shell attempts</h2>
+      <p>
+        Skills attempted these shell binaries; the runtime refused each because
+        the binary isn't in <code>SKILLSCRIPT_SHELL_ALLOWLIST</code>. Review the
+        list — add any you intended to permit to your <code>.env</code>, then
+        restart the runtime. Run <code>skillfile shell-audit</code> from the
+        CLI to scan the full corpus instead of the recent trace window.
+      </p>
+      ${attempts.length === 0
+        ? `<div class="empty">No blocked shell attempts in the recent trace window.</div>`
+        : `<h3>By binary (${groups.length})</h3>
+          <table>
+            <thead><tr><th>Binary</th><th>Attempts</th><th>Skills</th><th>Last attempt</th></tr></thead>
+            <tbody>
+              ${groups.map(([binary, g]) => `
+                <tr>
+                  <td><code>${esc(binary)}</code></td>
+                  <td>${g.count}</td>
+                  <td>${[...g.skills].sort().map((s) => `<a href="#skill/${encodeURIComponent(s)}">${esc(s)}</a>`).join(", ")}</td>
+                  <td>${new Date(g.latest).toLocaleString()}</td>
+                </tr>
+              `).join("")}
+            </tbody>
+          </table>
+          <h3 style="margin-top: 24px;">Recent attempts (${attempts.length})</h3>
+          <table>
+            <thead><tr><th>When</th><th>Skill</th><th>Target</th><th>Binary</th><th>Body</th></tr></thead>
+            <tbody>
+              ${attempts.slice(0, 25).map((a) => `
+                <tr>
+                  <td>${new Date(a.fired_at_ms).toLocaleString()}</td>
+                  <td><a href="#skill/${encodeURIComponent(a.skill_name)}">${esc(a.skill_name)}</a></td>
+                  <td><code>${esc(a.target)}</code></td>
+                  <td><code>${esc(a.binary)}</code></td>
+                  <td><code style="font-size: 0.85em;">${esc(a.body)}</code></td>
+                </tr>
+              `).join("")}
             </tbody>
           </table>`}
     </section>
@@ -576,6 +792,7 @@ async function renderCurrentView() {
     case "skills":     main.innerHTML = renderSkills(); break;
     case "triggers":   main.innerHTML = renderTriggers(); break;
     case "connectors": main.innerHTML = renderConnectors(); break;
+    case "security":   main.innerHTML = renderSecurity(); break;
     default: main.innerHTML = `<section><div class="empty">Unknown view: ${esc(hash)}</div></section>`;
   }
 }

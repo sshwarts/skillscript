@@ -97,3 +97,42 @@ pre {
 }
 
 .empty { color: #6c757d; padding: 24px; text-align: center; font-style: italic; }
+
+/* v0.18.9 — Security signal highlighting in the skill source viewer.
+ * Two tiers as soft tints on the dark <pre> background. Low alpha so
+ * the prose stays readable; the eye picks up the tinted spans on a
+ * scan without being overwhelmed. */
+pre.skill-source { white-space: pre-wrap; word-break: break-word; }
+.sig-high {
+  background: rgba(255, 140, 50, 0.30);
+  padding: 1px 3px;
+  border-radius: 3px;
+}
+.sig-medium {
+  background: rgba(255, 215, 0, 0.22);
+  padding: 1px 3px;
+  border-radius: 3px;
+}
+
+/* Inline color chips for the security-signals summary panel + the
+ * "what colors mean what" legend at the bottom of that panel. */
+.security-signals { list-style: none; padding-left: 0; margin: 0; }
+.security-signals li {
+  padding: 6px 10px;
+  margin: 4px 0;
+  border-radius: 4px;
+  border-left: 3px solid transparent;
+}
+.security-signals .sig-high-text {
+  background: rgba(255, 140, 50, 0.10);
+  border-left-color: rgba(255, 140, 50, 0.75);
+}
+.security-signals .sig-medium-text {
+  background: rgba(255, 215, 0, 0.10);
+  border-left-color: rgba(255, 215, 0, 0.80);
+}
+.security-signals .sig-info-text {
+  background: #fafbfc;
+  border-left-color: #c4cad0;
+}
+.security-signals small { color: #6c757d; }

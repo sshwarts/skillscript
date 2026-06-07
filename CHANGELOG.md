@@ -1,5 +1,119 @@
 # Changelog
 
+## 0.18.9 — 2026-06-07 — Human-reviewer observability (dashboard) + adopter CR (bootstrap env fallback)
+
+v0.18.8 shipped the shell-allowlist data plumbing but only half the
+dashboard surface. v0.18.9 closes that and adds skill-viewer security
+highlighting + folds in the adopter's `f2549ddf` CR for programmatic-
+bootstrap adopters who hit silent default-deny on the env path.
+
+### A. Dashboard "Security" view
+
+New top-nav route `#security`:
+- **Blocked shell attempts** panel — cross-skill list of refused
+  `shell(...)` calls from the trace store, filtered by
+  `blocked_reason: "binary-not-allowed"`. Aggregated by binary (count +
+  skills + last attempt) plus a recent-attempts table with
+  `{when, skill, target, binary, body}` per row.
+- Closes the observe→promote loop Scott + Perry called out in the
+  v0.18.8 requirement (memory `7aab6f3f`).
+- Graceful degrade against pre-v0.18.9 runtimes — the SPA shows an
+  "upgrade to v0.18.9+" note when the new MCP tool isn't found.
+
+Backed by a new MCP tool `blocked_shell_attempts` (cross-skill trace
+query; flat list with `{skill_name, target, binary, body, fired_at_ms}`).
+Tool count: 16 → 17.
+
+### B. Skill-detail security highlighting
+
+Each skill detail view now shows:
+
+**"Security signals" summary panel** at the top — aggregated counts:
+shell ops + binaries used, unsafe-shell count, `# Autonomous: true`,
+per-op `approved="..."` authorizations, mutation ops
+(`$ skill_write` / `$ data_write` / `file_write`), wake-class
+`@session` deliveries, cron triggers.
+
+**Inline source-body tinting**, two tiers:
+- **Orange (HIGH)** — `unsafe=true`, `# Autonomous: true`,
+  `approved="..."`, mutation ops. These bypass human-in-loop OR have
+  unbounded blast radius.
+- **Yellow (MEDIUM)** — `shell(...)` calls, `notify(agent="X@session", ...)`
+  wake-class deliveries. Touch OS / live-session surfaces.
+
+Soft tints (low alpha) so prose stays readable; summary tells you
+WHAT, highlights tell you WHERE.
+
+### C. Adopter CR — bootstrap env fallback for shell allowlist
+
+Closes adopter CR `f2549ddf` + Perry's signoff `42de3d72`:
+programmatic-`bootstrap()` adopters hit silent default-deny when
+their `.env` set `SKILLSCRIPT_SHELL_ALLOWLIST=curl` — the env var
+was honored on CLI but ignored on programmatic path.
+
+**`bootstrap()` now reads `SKILLSCRIPT_SHELL_ALLOWLIST` from
+`process.env`** when `opts.shellAllowlist === undefined`. Comma-split,
+trimmed, empties dropped. Mirrors existing `OLLAMA_BASE_URL`
+env-reading pattern in `bootstrap.ts`.
+
+**Perry's required guard (security-load-bearing)**: explicit
+`shellAllowlist` opt — including explicit `[]` deny-all — is
+**authoritative** and **env does NOT widen it**. Critical: `undefined`
+and `[]` are NOT collapsed into a single falsy check. An adopter who
+passes `shellAllowlist: []` to assert lockdown gets lockdown
+regardless of ambient env.
+
+| `opts.shellAllowlist` | `SKILLSCRIPT_SHELL_ALLOWLIST` env | Effective |
+|---|---|---|
+| `undefined` (omitted) | unset | undefined → default-deny |
+| `undefined` (omitted) | `"curl,jq"` | `["curl", "jq"]` (env fallback) |
+| `["curl"]` | anything | `["curl"]` (explicit opt wins) |
+| `[]` (explicit) | `"ssh,kubectl"` | `[]` (explicit deny-all; env does NOT widen) |
+
+**`.env` auto-loading remains CLI-only** — by design + adopter
+recommendation. Programmatic adopters either `process.loadEnvFile()`
+themselves or set env in their launch environment. Documented as the
+one line `(a)` can't collapse to.
+
+### D. ShellBinaryNotAllowedError — all three wiring paths
+
+Adopter CR (c): error remediation now names env + config +
+`bootstrap({ shellAllowlist })` so the message is actionable for all
+adopter shapes, not just CLI. "The error message IS the remediation
+doc" property (Perry's v0.18.8 framing) extends to programmatic
+adopters.
+
+### Tests
+
+23 new tests across two files:
+- `v0.18.9-dashboard-security-surfaces.test.ts` (15): MCP tool returns
+  empty/surfaces-blocked/identifies-bash-on-pipeline/respects-limit;
+  security-signal regex correctness (8 cases); highlighting-regex
+  spot checks (3 cases).
+- `v0.18.9-shell-allowlist-bootstrap-env.test.ts` (8): env fallback
+  populates; trimming + empties dropped; empty env string → explicit
+  `[]`; Perry's required guard (explicit `[]` resists env, explicit
+  list resists env, omitted opt falls through to env); error message
+  names all three wiring paths.
+
+1768 tests total; typecheck clean; LOC budget holds.
+
+### Docs
+
+- `docs/adopter-playbook.md` — new "Programmatic bootstrap path"
+  subsection with precedence table; new "Dashboard observability
+  (v0.18.9)" subsection describing Security view + skill-detail
+  highlights.
+- `docs/configuration.md` — env-var table extended with cascade
+  showing `bootstrap()` opt wins.
+- `README.md` — MCP tool count 16 → 17 with `blocked_shell_attempts`
+  in Observability row.
+
+No language-reference changes (skill syntax unchanged); that doc is
+Perry's atom surface.
+
+---
+
 ## 0.18.8 — 2026-06-06 — **BREAKING** — default-deny shell binary allowlist
 
 **This is a breaking change.** Default behavior changes from "any

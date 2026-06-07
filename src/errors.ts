@@ -306,10 +306,14 @@ export class ShellBinaryNotAllowedError extends OpError {
         : allowlist.join(", ");
     const message = `\`shell\` op refused: binary '${binary}' is not in the operator's shell allowlist. Current allowlist: ${allowlistDisplay}.`;
     const remediation =
-      `Add '${binary}' to \`SKILLSCRIPT_SHELL_ALLOWLIST\` in your \`.env\` file (or \`shellAllowlist\` in \`skillscript.config.json\`) and restart the runtime. ` +
+      `Add '${binary}' to the runtime's shell allowlist via one of three wiring paths: ` +
+      `(1) \`SKILLSCRIPT_SHELL_ALLOWLIST\` env var (comma-separated; works on CLI + bootstrap()); ` +
+      `(2) \`shellAllowlist\` field in \`skillscript.config.json\`; ` +
+      `(3) \`bootstrap({ shellAllowlist: [...] })\` programmatic opt for embedders. ` +
+      `Then restart the runtime. ` +
       `To discover what binaries your existing skill corpus uses, run \`skillfile shell-audit\` — it scans every skill and prints the union of binaries ready to paste into the allowlist. ` +
       `Binary-scope is an operator boundary the skill author cannot escape via the \`unsafe\` keyword or any other in-skill mechanism. ` +
-      `See \`docs/adopter-playbook.md\` § "Shell binary allowlist" for the migration walkthrough.`;
+      `See \`docs/adopter-playbook.md\` § "Shell binary allowlist" for the migration walkthrough (including the programmatic-bootstrap path's \`.env\` auto-load gotcha).`;
     super(message, "shell", remediation, target);
     this.name = "ShellBinaryNotAllowedError";
   }

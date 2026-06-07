@@ -287,6 +287,43 @@ pnpm install skillscript-runtime@^0.18.8
 
 Running the audit *after* the break is fine but adopter-unfriendly — operators discover problems through runtime errors instead of explicit decisions. The CLI tool exists precisely to make pre-upgrade the canonical path.
 
+### Programmatic bootstrap path (`bootstrap()` adopters)
+
+The CLI path auto-loads `$SKILLSCRIPT_HOME/.env` and reads `SKILLSCRIPT_SHELL_ALLOWLIST` from `process.env`. The programmatic path (`bootstrap()` from your own embedder code) does NOT auto-load `.env` — that's intentionally CLI-only to keep `bootstrap()` decoupled from the dotenv convention and `SKILLSCRIPT_HOME`.
+
+For your shell allowlist to work on the programmatic path, ensure the env var is in `process.env` BEFORE calling `bootstrap()`. Two patterns:
+
+```typescript
+// Pattern A — load .env yourself before bootstrap
+import { join } from "node:path";
+import { bootstrap } from "skillscript-runtime";
+
+const home = process.env.SKILLSCRIPT_HOME ?? join(homedir(), ".skillscript");
+try { process.loadEnvFile(join(home, ".env")); } catch {}  // Node 22+ built-in
+const { mcpServer, scheduler } = bootstrap({
+  skillsDir: join(home, "skills"),
+  traceDir: join(home, "traces"),
+  // shellAllowlist intentionally omitted → bootstrap reads env (v0.18.9+)
+});
+
+// Pattern B — pass shellAllowlist explicitly (env-independent)
+const { mcpServer, scheduler } = bootstrap({
+  skillsDir: join(home, "skills"),
+  traceDir: join(home, "traces"),
+  shellAllowlist: ["curl", "git", "jq"],
+});
+```
+
+**`bootstrap()` env fallback semantics (v0.18.9+)**: when `opts.shellAllowlist === undefined`, the runtime reads `SKILLSCRIPT_SHELL_ALLOWLIST` from `process.env` (comma-separated, trimmed). When `opts.shellAllowlist` is supplied — including the explicit `[]` deny-all — the option is authoritative and **env does NOT widen it**. This is security-load-bearing: an adopter passing `shellAllowlist: []` to assert lockdown gets lockdown regardless of ambient env.
+
+| `opts.shellAllowlist` | `SKILLSCRIPT_SHELL_ALLOWLIST` env | Effective allowlist |
+|---|---|---|
+| `undefined` (omitted) | unset | `undefined` → default-deny |
+| `undefined` (omitted) | `"curl,jq"` | `["curl", "jq"]` (env fallback) |
+| `undefined` (omitted) | `""` (explicit empty) | `[]` (explicit deny-all from env) |
+| `["curl"]` | anything | `["curl"]` (explicit opt wins) |
+| `[]` (explicit) | `"ssh,kubectl"` | `[]` (explicit deny-all wins; env does NOT widen) |
+
 ### Trust model — lint vs. runtime
 
 **Lint is local advisory; runtime is authoritative.** The `shell-binary-not-allowed` lint rule checks against the *author's* environment allowlist (their local `.env` or the linter's loaded config), which may differ from production. Passing lint does NOT guarantee the call will run.
@@ -308,6 +345,18 @@ Argument-level policy (host allowlists, URL pattern matching) and OS-level egres
 - Container with curated `/usr/bin` (immutable distroless image)
 
 Per Perry's reframe (memory `7aab6f3f`): parse-based binary enumeration of `bash -c <body>` would be unsound — `e=curl; $e ...`, `$(printf cur)l ...`, `eval`, `xargs`, var-built command names all defeat it. Against agent-author threat models, false confidence is worse than no enforcement.
+
+### Dashboard observability (v0.18.9)
+
+The dashboard SPA at `http://<host>:<port>` exposes two security-focused surfaces for the observe→promote loop:
+
+**Security view (`#security` route).** Cross-skill list of blocked shell attempts — `{skill, target, binary, body, timestamp}` per refused call. Aggregated by binary so you can see at a glance "what did skills try to invoke that I haven't allowlisted." Backed by the new `blocked_shell_attempts` MCP tool, which filters trace records by `blocked_reason: "binary-not-allowed"`. Pre-v0.18.9 runtimes don't expose this tool; the view degrades cleanly to an "upgrade to v0.18.9+" note.
+
+**Skill detail view — security signals + source highlighting.** Each skill's detail page (clicking a skill name from `#skills`) shows:
+- A **"Security signals"** panel at the top: aggregated counts of shell ops + binaries used, unsafe-shell count, `# Autonomous: true`, per-op `approved="..."` authorizations, mutation ops (`$ skill_write` / `$ data_write` / `file_write`), wake-class `@session` deliveries, cron triggers.
+- **Inline tinted highlighting** on the skill source `<pre>` body. Two tiers: **orange** for HIGH-tier signals (`unsafe=true`, `# Autonomous: true`, `approved="..."`, mutation ops); **yellow** for MEDIUM-tier signals (`shell(...)` calls, `notify(agent="X@session", ...)` wake-class deliveries). Reviewers scan-prioritize: orange = review carefully; yellow = worth noting.
+
+The two surfaces compose: summary panel tells you WHAT to look for; highlights tell you WHERE to look.
 
 ### Future direction (NOT shipped in v0.18.8)
 
