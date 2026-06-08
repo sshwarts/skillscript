@@ -1,9 +1,14 @@
 import { describe, it, expect } from "vitest";
+import { readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { parse } from "../src/parser.js";
 import { execute } from "../src/runtime.js";
 import { compile } from "../src/compile.js";
 import { lint } from "../src/lint.js";
 import { Registry } from "../src/connectors/registry.js";
+
+const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 
 /**
  * v0.19.4 — body-text-as-output template ring (memory `c7ddfc50`).
@@ -697,10 +702,9 @@ Hello, \${WHO}!
     expect(r.errors).toEqual([]);
   });
 
-  it("bundled hello-world.skill.md is template-only after migration", async () => {
-    const { readFileSync } = await import("node:fs");
+  it("bundled hello-world.skill.md is template-only after migration", () => {
     const src = readFileSync(
-      "/Users/scotts/Development/skillscript/examples/skillscripts/hello-world.skill.md",
+      join(REPO_ROOT, "examples", "skillscripts", "hello-world.skill.md"),
       "utf-8",
     );
     const p = parse(src);

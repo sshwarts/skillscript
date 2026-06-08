@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.19.6 — 2026-06-08 — Clean ship of the v0.19.5 hotfix (CI-only path fix in the regression test)
+
+v0.19.5 tag was pushed but the release pipeline failed: the new
+regression test for the bundled `hello-world.skill.md` had a hardcoded
+absolute path (`/Users/scotts/Development/skillscript/...`) that
+worked locally but ENOENT'd in CI. No artifact shipped (no npm publish,
+no GHCR push).
+
+Fix in v0.19.6: same regression test, now using `REPO_ROOT`-relative
+resolution (`fileURLToPath(import.meta.url)`-derived). All other
+v0.19.5 fixes carry forward unchanged.
+
+Lesson: CI-only path failures slip past local probes. Worth pinning a
+test for the test surface itself — but the simpler discipline is "never
+hardcode an absolute path in a test." Sibling to v0.19.5's own banked
+lesson.
+
 ## 0.19.5 — 2026-06-08 — HOTFIX — Template-only skills now valid (closes Perry's 9d0a5e7d dogfood finding)
 
 v0.19.4 shipped a contradiction: the c7ddfc50 design intent was *"strip

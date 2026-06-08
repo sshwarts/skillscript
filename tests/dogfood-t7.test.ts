@@ -24,8 +24,8 @@ const REPO_ROOT = join(__dirname, "..");
 const PACKAGE_JSON = JSON.parse(readFileSync(join(REPO_ROOT, "package.json"), "utf8")) as Record<string, unknown>;
 
 describe("T7 — package.json polish", () => {
-  it("1. version is 0.19.5 (HOTFIX — template-only skills now valid per Perry's 9d0a5e7d dogfood finding. The original c7ddfc50 design intent — 'strip the compute block → still a valid skill that emits the template' — was contradicted by 3 sites: no-targets lint, compile.ts zero-targets guard, compile.ts no-entry-target guard. Now: a skill is valid if it has EITHER a target with ops OR a body-text-as-output template. Bundled hello-world simplified from noop-target ceremony to pure template-only shape. +6 regression tests.)", () => {
-    expect(PACKAGE_JSON["version"]).toBe("0.19.5");
+  it("1. version is 0.19.6 (HOTFIX — template-only skills now valid per Perry's 9d0a5e7d dogfood finding. The original c7ddfc50 design intent — 'strip the compute block → still a valid skill that emits the template' — was contradicted by 3 sites: no-targets lint, compile.ts zero-targets guard, compile.ts no-entry-target guard. Now: a skill is valid if it has EITHER a target with ops OR a body-text-as-output template. Bundled hello-world simplified from noop-target ceremony to pure template-only shape. +6 regression tests. v0.19.5 tag attempted but release failed on a CI-only path bug in the new regression test — fixed via REPO_ROOT-relative path. v0.19.6 is the clean ship.)", () => {
+    expect(PACKAGE_JSON["version"]).toBe("0.19.6");
   });
 
   it("2. main + types + bin + engines.node ≥ 22.5 declared", () => {
