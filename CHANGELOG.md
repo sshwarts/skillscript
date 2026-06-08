@@ -1,5 +1,68 @@
 # Changelog
 
+## 0.19.7 — 2026-06-08 — HOTFIX — Silent-drop guards (closes Perry's 9a62c1f2 minion-test finding)
+
+The worst authorability failure mode: parser silently swallows a real
+directive, author/agent gets zero signal that their logic was discarded.
+
+Perry ran qwen authorability rungs against v0.19.6 and surfaced a real
+case. Qwen wrote:
+
+```
+# Skill: greet
+# Vars: WHO=world
+
+Hello ${WHO}.
+
+default: stamp
+    shell(command="date +'%Y-%m-%d'") -> TODAY
+```
+
+(Ops written directly under `default: stamp` instead of declaring a
+`stamp:` target first, then `default: stamp` separately.)
+
+Pre-v0.19.7: compiled cleanly. Zero errors, zero warnings, zero
+advisories. Template-only output: `"Hello world."` — the entire shell
+op silently vanished. `entryTarget` got set to `"stamp"` (a target that
+doesn't exist). Both forms of silent-drop are now loud errors.
+
+### The fix — two new parser errors
+
+1. **Orphan indented op** — an indented op line with no enclosing
+   target body raises a tier-1 parse error. Message guides the author
+   to declare the target first.
+2. **Entry target referencing missing target** — `default: <name>`
+   where `<name>` isn't in `parsed.targets` raises a tier-1 parse error
+   with the declared-targets list to help the author self-correct.
+
+Both fire at parse time, so lint preflight + compile both surface them
+loud.
+
+### What changed
+
+- `src/parser.ts` — orphan-indented-op guard at the silent-skip site
+  (was `if (!currentTarget) continue` — now pushes a parseError);
+  entry-target-existence check after target collection.
+- `tests/v0.19.4-output-template.test.ts` — 5 regression tests pinning
+  parser + compile rejection of the malformed shape Perry's qwen
+  produced, plus positive tests confirming well-formed skills still
+  parse cleanly.
+
+### Bug-class lesson
+
+Silent-drop is asymptotic worst-case authorability — the author has no
+signal to self-correct, can't get unstuck, just gives up. For the
+"agents author skills" thesis where the agent is a small model that
+sometimes gets structure wrong, every silent-drop is a give-up
+trigger. Worth a permanent discipline rule: a parser path that drops
+content unconditionally is a bug. `if (X) continue` with no error
+push is the structural smell.
+
+This is the second discipline lesson banked this v0.19.x series
+alongside `69e0f91d` (audit all consumers when adding a typed field)
+and the v0.19.5 lesson (test the simplest-case shape the design
+promises). Three lessons across four hotfix rings.
+
 ## 0.19.6 — 2026-06-08 — Clean ship of the v0.19.5 hotfix (CI-only path fix in the regression test)
 
 v0.19.5 tag was pushed but the release pipeline failed: the new

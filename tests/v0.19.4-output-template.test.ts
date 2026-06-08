@@ -715,6 +715,80 @@ Hello, \${WHO}!
 });
 
 // ────────────────────────────────────────────────────────────────────────
+// 11c. Silent-drop guards (v0.19.7 — Perry's 9a62c1f2 minion-test finding)
+// ────────────────────────────────────────────────────────────────────────
+//
+// Pre-v0.19.7: malformed skills where an author wrote ops directly under
+// `default: <name>` (without first defining `<name>:` as a target) silently
+// compiled — entryTarget pointed at a non-existent target, indented op
+// lines were swallowed, output rendered template-only with the whole
+// compute block disappeared. Worst authorability failure mode. Two loud
+// errors now: orphan-indented-op + entry-target-points-at-missing.
+
+describe("v0.19.7 — silent-drop guards", () => {
+  it("orphan indented op raises parse error", () => {
+    const src = `# Skill: greet
+# Vars: WHO=world
+
+Hello \${WHO}.
+
+default: stamp
+    shell(command="date") -> TODAY
+`;
+    const p = parse(src);
+    expect(p.parseErrors.some((e) => e.includes("Indented op") && e.includes("no enclosing target"))).toBe(true);
+  });
+
+  it("entry target referencing missing target raises parse error", () => {
+    const src = `# Skill: greet
+# Vars: WHO=world
+
+Hello \${WHO}.
+
+default: nonexistent
+`;
+    const p = parse(src);
+    expect(p.parseErrors.some((e) => e.includes("default: nonexistent") && e.includes("doesn't exist"))).toBe(true);
+  });
+
+  it("compile rejects the malformed shape Perry's qwen produced", async () => {
+    const src = `${APPROVED}
+# Skill: greet
+# Vars: WHO=world
+
+Hello \${WHO}, it's great to see you today.
+
+default: stamp
+    shell(command="date") -> TODAY
+`;
+    await expect(compile(src)).rejects.toThrow();
+  });
+
+  it("well-formed template-only skill (no targets, no default:) still parses cleanly", () => {
+    const src = `# Skill: hello
+# Vars: WHO=world
+
+Hello, \${WHO}!
+`;
+    const p = parse(src);
+    expect(p.parseErrors).toEqual([]);
+  });
+
+  it("well-formed target + default: parses cleanly", () => {
+    const src = `# Skill: hello
+
+run:
+    emit(text="hi")
+
+default: run
+`;
+    const p = parse(src);
+    expect(p.parseErrors).toEqual([]);
+    expect(p.entryTarget).toBe("run");
+  });
+});
+
+// ────────────────────────────────────────────────────────────────────────
 // 12. e2e — compile + execute + canonical output reaches caller
 // ────────────────────────────────────────────────────────────────────────
 

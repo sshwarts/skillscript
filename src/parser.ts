@@ -1477,7 +1477,21 @@ export function parse(source: string): ParsedSkill {
       result.targets.set(name, currentTarget);
       continue;
     }
-    if (!currentTarget || scopeStack.length === 0) continue;
+    // v0.19.7 — orphan indented op detection. An indented line outside
+    // any target body was silently swallowed pre-v0.19.7 (the most common
+    // pattern: an author writes ops directly under `default: <name>`
+    // instead of defining a `<name>:` target first). Closes Perry's
+    // `9a62c1f2` minion-test finding — silent-drop is the worst
+    // authorability failure mode. Loud error here so the author can
+    // self-correct.
+    if (!currentTarget || scopeStack.length === 0) {
+      result.parseErrors.push(
+        `Indented op '${line.replace(/^\s+/, "")}' has no enclosing target body. ` +
+        `If this is a target's op, declare the target first (\`<name>:\` on its own line, then the indented ops below). ` +
+        `If you meant to specify the entry point with ops inline, that's not supported — use \`<name>:\` + ops, then a separate \`default: <name>\` line.`,
+      );
+      continue;
+    }
     const lineIndent = leadingSpaces(rawLine);
     const stripped0 = line.replace(/^\s+/, "");
     // Conditional chain continuation: `elif:` / `else:` re-enters the same
@@ -2069,6 +2083,21 @@ export function parse(source: string): ParsedSkill {
   if (result.entryTarget === null && result.targets.size > 0) {
     const names = Array.from(result.targets.keys());
     result.entryTarget = names[names.length - 1] ?? null;
+  }
+
+  // v0.19.7 — entry target points at a target that doesn't exist. Author
+  // wrote `default: stamp` but never declared `stamp:`. Silent-drop pre-fix:
+  // entryTarget would set to "stamp", template-only path would render the
+  // body template (or fail with no-targets), and the missing target would
+  // never be flagged. Loud parse error so the author can self-correct.
+  // Closes Perry's `9a62c1f2` minion-test finding alongside the orphan-
+  // indented-op guard.
+  if (result.entryTarget !== null && !result.targets.has(result.entryTarget)) {
+    result.parseErrors.push(
+      `\`default: ${result.entryTarget}\` references a target that doesn't exist. ` +
+      `Declared targets: ${result.targets.size === 0 ? "(none)" : Array.from(result.targets.keys()).map((n) => `'${n}'`).join(", ")}. ` +
+      `Did you mean to declare \`${result.entryTarget}:\` as a target above the \`default:\` line?`,
+    );
   }
 
   // v0.19.4 — finalize the body-text-as-output template. Trim leading
