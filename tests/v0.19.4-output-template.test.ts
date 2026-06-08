@@ -789,6 +789,152 @@ default: run
 });
 
 // ────────────────────────────────────────────────────────────────────────
+// 11d. Template-anywhere (v0.19.8 — Perry's 349a1d49 design)
+// ────────────────────────────────────────────────────────────────────────
+//
+// Authors' instinct is compute-first-output-last (every language they
+// know puts return/print at the end). Pre-v0.19.8: bottom-placed
+// templates parsed as malformed targets with misdirecting errors.
+// v0.19.8 applies Pin 4 uniformly: a column-0 `<name>:` line is a
+// target only if followed by an indented op-block. Otherwise it's
+// template text, regardless of position.
+
+describe("v0.19.8 — template at top OR bottom OR both", () => {
+  const minimalCtx = () => ({
+    agentId: "test-agent",
+    registry: new Registry(),
+  });
+
+  it("bottom template after default: parses cleanly", () => {
+    const src = `# Skill: fetch
+# Vars: URL=""
+
+get:
+    $set FetchedPage = "stub"
+default: get
+
+OUTPUTS: \${FetchedPage}
+`;
+    const p = parse(src);
+    expect(p.parseErrors).toEqual([]);
+    expect(p.outputTemplate).toBe("OUTPUTS: ${FetchedPage}");
+    expect([...p.targets.keys()]).toEqual(["get"]);
+    expect(p.entryTarget).toBe("get");
+  });
+
+  it("compile + execute renders bottom template", async () => {
+    const src = `${APPROVED}
+# Skill: bottom-render
+# Vars: (none)
+
+run:
+    $set RESULT = "done"
+default: run
+
+Final: \${RESULT}
+`;
+    const compiled = await compile(src);
+    const r = await execute(compiled.parsed, {}, compiled.targetOrder, minimalCtx());
+    expect(r.outputs.text).toBe("Final: done");
+  });
+
+  it("Perry's qwen case (column-0 OUTPUTS: line at bottom) renders, no misdirecting target error", async () => {
+    const src = `${APPROVED}
+# Skill: fetch-page
+# Vars: URL="https://example.com"
+
+get:
+    $set FetchedPage = "stub-html-body"
+default: get
+
+OUTPUTS: \${FetchedPage}
+`;
+    const r = await lint(src);
+    // No missing-dependency / orphan-target / template-looks-like-target on the bottom line
+    const findings = r.findings.filter((f) =>
+      f.rule === "missing-dependency" ||
+      f.rule === "orphan-target" ||
+      f.rule === "template-looks-like-target",
+    );
+    expect(findings).toEqual([]);
+  });
+
+  it("multi-region template (top AND bottom) raises parse error", () => {
+    const src = `# Skill: split
+# Vars: ()
+
+Top template prose.
+
+run:
+    $set _ = "noop"
+default: run
+
+Bottom template prose.
+`;
+    const p = parse(src);
+    expect(p.parseErrors.some((e) => e.includes("two places"))).toBe(true);
+  });
+
+  it("top template alone still works", () => {
+    const src = `# Skill: top-only
+# Vars: WHO=world
+
+Hello, \${WHO}!
+
+run:
+    $set _ = "noop"
+default: run
+`;
+    const p = parse(src);
+    expect(p.parseErrors).toEqual([]);
+    expect(p.outputTemplate).toBe("Hello, ${WHO}!");
+  });
+
+  it("bottom template alone still works", () => {
+    const src = `# Skill: bottom-only
+# Vars: WHO=world
+
+run:
+    $set _ = "noop"
+default: run
+
+Hello, \${WHO}!
+`;
+    const p = parse(src);
+    expect(p.parseErrors).toEqual([]);
+    expect(p.outputTemplate).toBe("Hello, ${WHO}!");
+  });
+
+  it("target body internal blanks (Bug 15) NOT captured as template", () => {
+    const src = `# Skill: bug15
+# Vars: ()
+
+run:
+    $set X = "a"
+
+    $set Y = "b"
+default: run
+
+Result: \${X}\${Y}
+`;
+    const p = parse(src);
+    expect(p.parseErrors).toEqual([]);
+    expect(p.outputTemplate).toBe("Result: ${X}${Y}");
+  });
+
+  it("bundled corpus — all 10 skills still parse with zero parse errors", () => {
+    const { readdirSync } = require("node:fs");
+    const dir = join(REPO_ROOT, "examples", "skillscripts");
+    for (const f of readdirSync(dir)) {
+      if (!f.endsWith(".skill.md")) continue;
+      const src = readFileSync(join(dir, f), "utf-8");
+      const p = parse(src);
+      expect(p.parseErrors, `${f} parse errors`).toEqual([]);
+    }
+  });
+});
+
+// ────────────────────────────────────────────────────────────────────────
 // 12. e2e — compile + execute + canonical output reaches caller
 // ────────────────────────────────────────────────────────────────────────
 

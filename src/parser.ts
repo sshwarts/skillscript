@@ -1094,72 +1094,103 @@ export function parse(source: string): ParsedSkill {
   let currentTarget: SkillTarget | null = null;
   let scopeStack: ScopeFrame[] = [];
 
-  // v0.19.4 — body-text-as-output template state. While true, lines that
-  // are not frontmatter (`#`-prefixed) and not real targets are captured
-  // into templateLines. Exits to false when the first real target /
-  // `default:` declaration is encountered (Pin 4 lookahead).
-  let inTemplateRegion = true;
+  // v0.19.4 / v0.19.8 — body-text-as-output template.
+  // `templateLines` accumulates from anywhere in the source: prose between
+  // frontmatter and the first target (top template), AND prose after the
+  // last target body (bottom template — added v0.19.8). Pin 4 is applied
+  // uniformly: a column-0 `<name>:` line is a target only if followed by
+  // an indented op-block. Otherwise it's template text, regardless of
+  // position. Closes Perry's `349a1d49` template-anywhere design.
   const templateLines: string[] = [];
+  // Track whether template content appears both before AND after any
+  // target so we can flag multi-region templates as a parse error
+  // (Perry's "one template region per skill" recommendation).
+  let hasTargetOrDefaultBeenSeen = false;
+  let templateContentBeforeTarget = false;
+  let templateContentAfterTarget = false;
+
+  const recordTemplate = (rawLine: string, line: string): void => {
+    templateLines.push(rawLine);
+    const isNonBlank = line !== "";
+    if (isNonBlank) {
+      if (hasTargetOrDefaultBeenSeen) templateContentAfterTarget = true;
+      else templateContentBeforeTarget = true;
+    }
+  };
 
   for (let i = 0; i < lines.length; i++) {
     const rawLine = lines[i]!;
     const line = rawLine.replace(/\s+$/, "");
 
-    // === v0.19.4 template-region capture ===
-    // Runs BEFORE the existing blank/`#`/target handlers so it can claim
-    // template lines before they fall through to the comment/no-op paths.
-    if (inTemplateRegion) {
-      if (line === "") {
-        // Internal blanks are preserved so multi-paragraph templates
-        // render with their authored spacing. Leading/trailing blanks
-        // trimmed after the loop.
-        templateLines.push("");
-        continue;
+    // === v0.19.4 / v0.19.8 template capture ===
+    // Pin 4 applied uniformly: column-0 `<name>:` is a target only when
+    // followed by indented op-block. Anything else (column-0 prose,
+    // column-0 `<name>:` without op-block) is template text at any
+    // position. Indented lines inside a target body fall through to the
+    // existing op-walking logic; indented lines outside a target body
+    // are either pre-target template prose or post-target orphans
+    // (v0.19.7 error).
+
+    if (line === "") {
+      // Only capture blanks as template-eligible when we're outside a
+      // target body. Inside a target body, blanks are Bug 15
+      // whitespace (visual sectioning of long target bodies) and must
+      // NOT contaminate the bottom template.
+      if (currentTarget === null) {
+        recordTemplate(rawLine, line);
       }
-      if (!line.startsWith("#")) {
-        if (!/^\s/.test(line)) {
-          // Top-level control-flow keywords (`if`/`elif`/`else:`) are
-          // hard parse errors per existing guards below; do NOT swallow
-          // them as template content. Fall through.
-          if (/^(if|elif)\s+/.test(line) || /^else:\s*$/.test(line)) {
-            inTemplateRegion = false;
-          } else {
+      continue;
+    }
+    if (!line.startsWith("#")) {
+      if (!/^\s/.test(line)) {
+        // Top-level control-flow keywords (`if`/`elif`/`else:`) are
+        // hard parse errors per existing guards below; do NOT swallow
+        // them as template content. Fall through.
+        if (/^(if|elif)\s+/.test(line) || /^else:\s*$/.test(line)) {
+          // fall through to existing top-level if/elif/else guard
+        } else {
           const identColon = /^([A-Za-z_][\w-]*)\s*:(.*)$/.exec(line);
           if (identColon !== null) {
             const isDefault = identColon[1] === "default";
             const hasOpBlock = nextNonBlankLineIsIndented(lines, i);
             const afterColon = identColon[2]!.trim();
             if (isDefault || hasOpBlock) {
-              // Real target or `default:` declaration — exit template
-              // region and fall through to existing target handling.
-              inTemplateRegion = false;
+              // Real target or `default:` declaration — fall through
+              // to existing target-handling logic below. Mark that we
+              // crossed the first-target boundary so any subsequent
+              // template content is classified as "after target."
+              hasTargetOrDefaultBeenSeen = true;
             } else {
               // Pin 4: content-after-colon without an op-block is
               // template prose. Bare `<word>:` alone without an
-              // op-block is genuinely ambiguous — capture as template
-              // AND record for tier-2 lint A6.
+              // op-block is ambiguous — capture as template AND
+              // record for tier-2 lint A6.
               if (afterColon === "") {
                 result.templateAmbiguousLines.push(i + 1);
               }
-              templateLines.push(rawLine);
+              recordTemplate(rawLine, line);
               continue;
             }
           } else {
             // Plain template text — no identifier-colon shape.
-            templateLines.push(rawLine);
+            recordTemplate(rawLine, line);
             continue;
           }
-          }
-        } else {
-          // Indented line in the template region — unusual but legal
-          // template content (e.g. an authored line preserved verbatim
-          // before the first target). Capture and continue.
-          templateLines.push(rawLine);
+        }
+      } else {
+        // Indented line outside a target body (currentTarget === null
+        // AND scopeStack empty). Two sub-cases:
+        //   - Pre-first-target: legacy v0.19.4 top template behavior —
+        //     captured as indented template prose (rare but legal).
+        //   - Post-target: falls through to the v0.19.7 orphan-indented-op
+        //     parse error (loud; closes Perry's 9a62c1f2 silent-drop).
+        if (!hasTargetOrDefaultBeenSeen && (currentTarget === null || scopeStack.length === 0)) {
+          recordTemplate(rawLine, line);
           continue;
         }
       }
     }
-    // === end template-region capture ===
+    // === end template capture ===
 
     if (line === "") {
       // v0.2.12 Bug 15. Blank lines must NOT reset currentTarget/scopeStack —
@@ -2100,13 +2131,27 @@ export function parse(source: string): ParsedSkill {
     );
   }
 
-  // v0.19.4 — finalize the body-text-as-output template. Trim leading
-  // and trailing blank lines; internal blanks preserved. Empty result
-  // collapses to `null` so legacy emit-only skills are byte-equivalent
-  // to pre-v0.19.4 parse output.
+  // v0.19.4 / v0.19.8 — finalize the body-text-as-output template.
+  // Trim leading and trailing blank lines; internal blanks preserved.
+  // Empty result collapses to `null` so legacy emit-only skills are
+  // byte-equivalent to pre-v0.19.4 parse output. Template-anywhere
+  // (v0.19.8) means content may originate pre-first-target OR
+  // post-last-target — we concatenate in source order.
   if (templateLines.length > 0) {
     const joined = templateLines.join("\n").replace(/^\n+/, "").replace(/\n+$/, "");
     if (joined !== "") result.outputTemplate = joined;
+  }
+
+  // v0.19.8 — multi-region template guard. Per Perry's `349a1d49`
+  // recommendation: error on a skill that has body template content
+  // both BEFORE any target AND AFTER all targets. Don't silently
+  // concatenate; force the author to pick one location.
+  if (templateContentBeforeTarget && templateContentAfterTarget) {
+    result.parseErrors.push(
+      `Skill has body-text-as-output template content in two places (before targets AND after targets). ` +
+      `Pick one location: put the template either above all targets OR below them, not both. ` +
+      `Concatenating across regions silently would hide the structural ambiguity.`,
+    );
   }
 
   return result;

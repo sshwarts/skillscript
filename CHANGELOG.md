@@ -1,5 +1,86 @@
 # Changelog
 
+## 0.19.8 — 2026-06-08 — Template-anywhere (closes Perry's 349a1d49 — bottom-placed templates now parse)
+
+Authors' instinct is **compute first, output last** — every language they
+know puts return/print at the end. Perry's qwen authorability test
+caught the gap: when finally prompted to add an output template, the
+model placed it at the bottom (after `default:`). Pre-v0.19.8 this
+parsed as a malformed target with a misdirecting error:
+
+```
+# Skill: fetch-page
+# Vars: URL=""
+
+get:
+    shell(command="curl -s ${URL}") -> FetchedPage
+default: get
+
+OUTPUTS: ${FetchedPage}      ← misparsed as `target OUTPUTS with deps`
+```
+
+→ `Tier-1 [missing-dependency] Target 'OUTPUTS' depends on '${FetchedPage}'…`
+
+### The fix — Pin 4 applied uniformly
+
+Pin 4 was already the disambiguation rule for the top region. v0.19.8
+extends it to all positions:
+
+> **A column-0 `<name>:` line is a TARGET only if it is followed by an
+> indented op-block. Otherwise it's template text — regardless of
+> position (top, bottom, or both).**
+
+Subsumes the original top-only rule. Position is now free. Bottom-placed
+templates parse cleanly: `OUTPUTS: ${FetchedPage}` (no op-block follows)
+reads as template prose.
+
+### Multi-region templates — explicit error
+
+If template content appears BOTH before any target AND after all
+targets, raise a parse error per Perry's recommendation:
+
+> "Skill has body-text-as-output template content in two places
+> (before targets AND after targets). Pick one location: put the
+> template either above all targets OR below them, not both.
+> Concatenating across regions silently would hide the structural
+> ambiguity."
+
+Loud over silent-concat. Forces the author to pick one location.
+
+### What changed
+
+- `src/parser.ts` — removed the `inTemplateRegion` permanent-exit
+  state. Template capture now runs on every line and applies Pin 4
+  uniformly. Added `recordTemplate` helper + multi-region tracking.
+  Blank lines inside target body (Bug 15 whitespace) NOT captured
+  as template — only blanks outside any target body. The v0.19.7
+  orphan-indented-op guard still fires for indented lines past any
+  target (preserves the silent-drop fix).
+
+- `tests/v0.19.4-output-template.test.ts` — 8 regression tests:
+  bottom template parsing + compile + execute, Perry's qwen
+  `OUTPUTS:` case rendering clean, multi-region parse error,
+  top-only / bottom-only individually, Bug 15 target-body blanks
+  not contaminating template, full bundled-corpus regression.
+
+1883 total tests (+8 net new).
+
+### Migration
+
+No migration required. Top templates continue to work unchanged.
+Authors may now write the template at the bottom of a skill as
+their language instincts suggest.
+
+### Note: `bdf760f4` (tier-3 advisory) deferred
+
+Perry's companion finding — a tier-3 "no explicit output" advisory
+that fires when a skill binds vars but writes no template / emit —
+was deferred per her own sequencing note: "the template-anywhere
+change reduces this one's urgency — once authors can put the
+template where instinct says (the bottom), the 'forgot it entirely'
+rate should drop. So I'd sequence this after the position fix
+and re-measure." Watching the next dogfood rung before deciding.
+
 ## 0.19.7 — 2026-06-08 — HOTFIX — Silent-drop guards (closes Perry's 9a62c1f2 minion-test finding)
 
 The worst authorability failure mode: parser silently swallows a real

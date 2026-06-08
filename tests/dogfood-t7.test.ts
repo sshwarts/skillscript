@@ -24,8 +24,8 @@ const REPO_ROOT = join(__dirname, "..");
 const PACKAGE_JSON = JSON.parse(readFileSync(join(REPO_ROOT, "package.json"), "utf8")) as Record<string, unknown>;
 
 describe("T7 — package.json polish", () => {
-  it("1. version is 0.19.7 (HOTFIX — silent-drop guards closing Perry's 9a62c1f2 minion-test finding. When an author wrote ops directly under `default: <name>` without first defining `<name>:` as a target, the parser silently swallowed both the indented op lines AND the missing-target reference. Now two loud parse errors: (1) orphan indented op with no enclosing target body, (2) entry target referencing a target that doesn't exist. 5 regression tests pin the path. Worst authorability failure mode — silent-drop with no signal — is closed.)", () => {
-    expect(PACKAGE_JSON["version"]).toBe("0.19.7");
+  it("1. version is 0.19.8 (template-anywhere per Perry's 349a1d49 design — authors' instinct is compute-first-output-last. Pin 4 now applies UNIFORMLY: a column-0 `<name>:` line is a target only if followed by an indented op-block. Otherwise it's template text, regardless of position (top, bottom, or both). Multi-region templates (top AND bottom) raise a parse error — pick one location. 8 regression tests pin the path. Closes Perry's qwen-authorability finding: bottom-placed templates now parse cleanly instead of misparsing as malformed targets.)", () => {
+    expect(PACKAGE_JSON["version"]).toBe("0.19.8");
   });
 
   it("2. main + types + bin + engines.node ≥ 22.5 declared", () => {
