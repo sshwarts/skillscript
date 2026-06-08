@@ -223,14 +223,16 @@ If that bet is wrong, skillscript stays a nice niche tool. If it's right, skills
 # Install (global for single-instance use)
 npm install -g skillscript-runtime
 
-# Author your first skill
+# Author your first skill — body text IS the output
 mkdir -p ./skills && cat > ./skills/hello.skill.md <<'EOF'
 # Skill: hello
 # Status: Approved
 # Vars: WHO=world
 
+Hello, ${WHO}!
+
 greet:
-    emit(text="Hello, ${WHO}!")
+    $set _ = "noop"
 
 default: greet
 EOF
@@ -266,20 +268,22 @@ The hello example is a single static target. A more representative shape is a cr
 # Triggers: cron:"0 6 * * *"
 # Autonomous: true
 
+Snapshot written for ${NOW}.
+
 snapshot:
     shell(command="df -h --output=source,pcent,target") -> USAGE
     file_write(path="/var/log/skillscript/disk-${EVENT.fired_at_unix}.txt",
                content="${USAGE}")
-    emit(text="Snapshot written for ${NOW}")
 
 default: snapshot
 ```
 
-Three things to notice:
+Four things to notice:
 
 1. **`# Triggers: cron:"..."`** — the runtime registers the cron schedule at load time; no external scheduler.
 2. **`# Autonomous: true`** — the skill-author's declaration that mutation ops (here `file_write`) are authorized to fire without per-call confirmation. Without this header, mutation ops require an inline `approved="<reason>"` kwarg on each call site.
 3. **`${EVENT.fired_at_unix}` + `${NOW}`** — ambient refs the runtime substitutes per-fire. `EVENT.*` covers the trigger payload; `NOW` is the ISO timestamp at op dispatch. See [Language Reference §3](docs/language-reference.md) for the full ambient list.
+4. **Body text above `snapshot:` is the output template** — the runtime renders `Snapshot written for ${NOW}.` against final vars and publishes it as the skill's canonical output. No `emit()` ceremony needed for declarative outputs; see the adopter-playbook's "Output template" section.
 
 Swap in `$ ticketing_search`, `$ llm`, `$ data_write` once you've wired connectors, and the same skill shape becomes a real triage pipeline.
 

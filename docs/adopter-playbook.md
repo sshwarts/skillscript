@@ -505,6 +505,81 @@ If you have pre-v0.19.0 skills with `# Triggers: session: start` / `agent-event:
 
 Skills declaring removed sources fail to parse on v0.19.0 (tier-1 parse error). Run `skillfile lint` against your corpus pre-upgrade to find them.
 
+## Output template — body text IS the output
+
+A skill's body text — the prose between the frontmatter and the first target — is its declarative output template. The runtime interpolates `${VAR}` references against final vars and publishes the rendered string as the skill's canonical output (`outputs.text` or the agent/template/file payload, depending on `# Output:` kind). No `emit()` ceremony required for the common case.
+
+### The shape
+
+```
+# Skill: get-weather
+# Vars: AREA="Brooklyn", TEMP="72", UNIT="F", DESC="sunny"
+
+${AREA}: ${TEMP}°${UNIT} and ${DESC}.
+
+fetch:
+    shell(command="curl -s --max-time 10 https://wttr.in/${AREA|url}?format=j1") -> RAW
+    $ json_parse ${RAW} -> W
+    $set TEMP = "${W.current_condition.0.temp_F}"
+    $set DESC = "${W.current_condition.0.weatherDesc.0.value|trim}"
+default: fetch
+```
+
+Strip the compute block and the skill still emits the template with whatever the `# Vars:` defaults are. The author writes the sentence they want as output; the compute block fills in the holes.
+
+### Complementary channels — template vs. emit
+
+Two independent output channels:
+
+| Channel | Source | Consumer |
+|---|---|---|
+| Canonical output (`outputs.text`, agent/template/file payloads) | Body template if authored, else joined `emit()` text | The caller / lifecycle-hook recipient / file write |
+| Transcript (`emissions[]`) | All `emit(text=...)` calls + reasoning ops (`?`, `@`) | Trace records, dashboard `/fires` view, debug log |
+
+When a skill defines both a template AND `emit(text=...)` calls, the template owns canonical output; `emit()` populates transcript only. This is intentional — emit is the debugging / reasoning channel. The `emit-with-template` advisory lint surfaces this to confirm intent.
+
+If you want emit to keep being your canonical output (the pre-v0.19.4 shape), don't write a body template. Emit-only skills work exactly as before.
+
+### Output kinds
+
+The body template populates whatever `# Output:` kind the skill declares:
+
+- `# Output: text` (default) — caller reads `outputs.text`
+- `# Output: agent: <name>` — rendered template delivered as augment payload to `<name>` via AgentConnector
+- `# Output: template: <name>` — rendered template delivered as playbook payload
+- `# Output: file: <path>` — rendered template written via file ops in the body
+
+### Target syntax — what counts as a target
+
+A target is `<name>:` alone on a line, with an indented op-block on the next non-blank line. Anything else in the body region — content after a colon, a bare `Note:` with no following op-block, plain prose — reads as template text.
+
+Two examples that are legal but worth knowing:
+
+```
+Summary: today is hot.        ← template (content after colon, no op-block)
+Temp: ${T}                    ← template (content after colon)
+
+Note:                          ← AMBIGUOUS — lint `template-looks-like-target` fires
+                                  bare word: alone, no op-block. Disambiguate by adding
+                                  content after the colon OR indent an op-block under it.
+```
+
+Target declarations with dependencies still work via the explicit `needs:` keyword, which makes intent unambiguous:
+
+```
+report: needs: fetch_issues
+    emit(text="…")
+```
+
+The legacy `report: fetch_issues` shape (deps after colon, no `needs:` keyword) is still parsed as a target when an indented op-block follows on the next line, but `needs:` is the recommended form for new skills.
+
+### Lints to know
+
+- **`unset-template-var`** (tier-1) — every `${VAR}` in the template must resolve to a `# Vars:` / `# Requires:` input, an ambient ref (`NOW`, `USER`, ...), or a `$set` / `->` binding somewhere in the skill body. Tier-1 because an unbound ref renders empty silently.
+- **`template-looks-like-target`** (tier-2) — bare `<word>:` alone in the template region, no following op-block. Ambiguous shape — author may have meant a target.
+- **`body-template-detected`** (tier-3) — non-blank, non-`#` lines in the body region, no `${...}` interpolations, no text-consuming `# Output:` declaration. Suggests "I wrote prose; it became template by accident." Prefix with `#` to mark as comments, or add an interpolation / `# Output:` to confirm intent.
+- **`emit-with-template`** (tier-3) — skill has both a template AND `emit(text=...)` calls. Confirms the channel-shift is intentional.
+
 ## Wiring the AgentConnector
 
 `AgentConnector` is the substrate-neutral delivery surface for `# Output: agent: X` / `# Output: template: X` lifecycle hooks and `notify()` / `exchange()` ops. The runtime calls into the contract; your impl decides where the payload lands (webhook, tmux session, file drop, IPC pipe, Slack thread, your own agent harness, etc.).

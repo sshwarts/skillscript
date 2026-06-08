@@ -2263,6 +2263,153 @@ const UNEXPORTED_FINAL_VAR_ACCESS: LintRule = {
   },
 };
 
+// ─── v0.19.4 body-text-as-output template rules ──────────────────────────
+//
+// Four rules covering the new authoring surface. The template region is the
+// text between the frontmatter and the first target; runtime renders it as
+// canonical output. Per Perry+CC sign-off in c7ddfc50 / 920078c8 / ad0b868e.
+
+/**
+ * v0.19.4 — every `${VAR}` / `$(VAR)` in the template must resolve to a
+ * declared input (`# Vars:` / `# Requires:`), a `$set` or `->` binding
+ * anywhere in the skill, an ambient ref, or a dotted access on one of the
+ * above. Mechanical coupling — no semantic guessing. Same machinery as
+ * `undeclared-var` (tier-1), applied to the template instead of op bodies.
+ * Tier-1: a template referencing unbound vars renders empty at runtime,
+ * silently producing wrong-looking output.
+ */
+const UNSET_TEMPLATE_VAR: LintRule = {
+  id: "unset-template-var",
+  severity: "error",
+  description: "A `${VAR}` reference in the body-text-as-output template doesn't resolve to a declared `# Vars:` / `# Requires:` input, an ambient ref, or a `$set` / `->` binding anywhere in the skill body. Substitution will render empty — the published output silently drops the value.",
+  remediation: "Add VAR to `# Vars:`, bind it via `$set VAR = ...` or `<op> -> VAR` in a target's compute block, or check the spelling against the declared / bound variable list.",
+  check: (ctx) => {
+    if (ctx.parsed.outputTemplate === null) return [];
+    const declared = new Set<string>(AMBIENT_VARS);
+    for (const v of ctx.parsed.vars) declared.add(v.name);
+    for (const r of ctx.parsed.requires) declared.add(r.target);
+    for (const target of ctx.parsed.targets.values()) {
+      const collect = (op: SkillOp): void => {
+        if (op.setName !== undefined) declared.add(op.setName);
+        if (op.outputVar !== undefined) declared.add(op.outputVar);
+        if (op.foreachIter !== undefined) declared.add(op.foreachIter);
+      };
+      walkOps(target.ops, collect);
+      if (target.elseBlock !== undefined) walkOps(target.elseBlock, collect);
+    }
+    const findings: LintFinding[] = [];
+    const reported = new Set<string>();
+    // Match both legacy `$(NAME)` and canonical `${NAME}` — first identifier
+    // segment only; dotted access (`R.field`) checks against the base var.
+    const re = /\$[({]([A-Za-z_]\w*)/g;
+    let m: RegExpExecArray | null;
+    while ((m = re.exec(ctx.parsed.outputTemplate)) !== null) {
+      const ref = m[1]!;
+      if (declared.has(ref)) continue;
+      if (reported.has(ref)) continue;
+      reported.add(ref);
+      findings.push({
+        rule: "unset-template-var",
+        severity: "error",
+        message: `Output template references undeclared variable \`\${${ref}}\` — substitution will render empty at runtime. Declare it in \`# Vars:\` or bind it via \`$set\` / \`-> ${ref}\` in a target.`,
+        extras: { var_name: ref },
+      });
+    }
+    return findings;
+  },
+};
+
+/**
+ * v0.19.4 — Pin 4 tier-2 advisory. Parser captures lines in the template
+ * region that match bare `<word>:` alone (no content after colon, no
+ * following op-block). These read ambiguously: an author might have meant
+ * a target header that they forgot to indent under, or template prose
+ * (section header). Flag for disambiguation.
+ */
+const TEMPLATE_LOOKS_LIKE_TARGET: LintRule = {
+  id: "template-looks-like-target",
+  severity: "warning",
+  description: "A line in the body-text-as-output template region is shaped like a target header (bare `<word>:` alone on its line, no content after colon, no following indented op-block). Parser treats it as template prose under the Pin 4 disambiguation rule, but the shape is ambiguous to a reader.",
+  remediation: "If you meant a target, add an indented op-block on the next line. If you meant template prose (e.g. a section header), add content after the colon (`Summary: today's outlook`) or rephrase to disambiguate.",
+  check: (ctx) => {
+    const findings: LintFinding[] = [];
+    for (const lineNum of ctx.parsed.templateAmbiguousLines) {
+      findings.push({
+        rule: "template-looks-like-target",
+        severity: "warning",
+        message: `Line ${lineNum}: a bare \`<word>:\` shape in the output template could read as a target header. Parser treats it as template prose (no following op-block), but the ambiguity is worth disambiguating: add content after the colon, rephrase, or indent an op-block to make it a real target.`,
+        extras: { line: lineNum },
+      });
+    }
+    return findings;
+  },
+};
+
+/**
+ * v0.19.4 — tier-3 advisory. Non-blank, non-`#` lines in the body-template
+ * region detected, AND no `# Output:` declaration that consumes text, AND
+ * no `${...}` interpolations in the template. Three-condition guard so
+ * legitimate interpolating templates never fire. Catches the "I wrote
+ * prose; it became template by accident" case.
+ */
+const BODY_TEMPLATE_DETECTED: LintRule = {
+  id: "body-template-detected",
+  severity: "info",
+  description: "Non-blank, non-`#` lines between the frontmatter and the first target were captured as a body-text-as-output template, BUT the template has no `${...}` interpolations AND the skill declares no text-consuming `# Output:` kind. The lines may have been intended as informal documentation.",
+  remediation: "If the lines are intentional output template, add at least one `${VAR}` interpolation OR an explicit `# Output: text` / `# Output: agent: <name>` declaration. If they were intended as documentation, prefix with `#` so the parser treats them as comments.",
+  check: (ctx) => {
+    if (ctx.parsed.outputTemplate === null) return [];
+    if (/\$[({][A-Za-z_]/.test(ctx.parsed.outputTemplate)) return [];
+    const hasTextConsumingDecl = ctx.parsed.outputs.some((d) => d.kind === "text" || d.kind === "agent" || d.kind === "template" || d.kind === "file");
+    if (hasTextConsumingDecl) return [];
+    return [{
+      rule: "body-template-detected",
+      severity: "info",
+      message: "Body-text-as-output template captured, but it has no `${...}` interpolations and the skill declares no text-consuming `# Output:` kind. If the lines were intended as documentation, prefix them with `#` to mark as comments; otherwise add an interpolation or a `# Output:` declaration to confirm intent.",
+    }];
+  },
+};
+
+/**
+ * v0.19.4 — tier-3 advisory. Skill has both a body template AND at least
+ * one `emit(text=...)` call AND `# Output:` is `text` or absent. Warns the
+ * author about the complementary-channels semantic (`c7ddfc50`): template
+ * owns canonical output, emit() feeds transcript only. Silently changing
+ * the channel semantics when an emit-based skill adds a template is the
+ * surprise case Perry called out in `ad0b868e`.
+ */
+const EMIT_WITH_TEMPLATE: LintRule = {
+  id: "emit-with-template",
+  severity: "info",
+  description: "Skill defines both a body-text-as-output template AND `emit(text=...)` calls. Under v0.19.4 complementary-channels semantics, the template owns canonical output (`outputs.text` / agent delivery payload); `emit()` entries feed the transcript only.",
+  remediation: "Confirm intent: if you want emit() to populate canonical output, remove the body template. If you want the template to populate canonical output and emit() to keep populating the transcript (debug log, reasoning trace), no change needed — this is the intended semantic.",
+  check: (ctx) => {
+    if (ctx.parsed.outputTemplate === null) return [];
+    // Filter to text-consuming kinds that route through canonical output.
+    // `none` skips the canonical output channel; agent/template/file each
+    // consume the template payload, so the emit-demotion is silent there.
+    const outputKinds = ctx.parsed.outputs.length === 0 ? ["text"] : ctx.parsed.outputs.map((d) => d.kind);
+    const hasTextLike = outputKinds.some((k) => k === "text" || k === "agent" || k === "template" || k === "file");
+    if (!hasTextLike) return [];
+    let hasEmit = false;
+    for (const target of ctx.parsed.targets.values()) {
+      walkOps(target.ops, (op) => {
+        if (op.kind === "emit") hasEmit = true;
+      });
+      if (target.elseBlock !== undefined) walkOps(target.elseBlock, (op) => {
+        if (op.kind === "emit") hasEmit = true;
+      });
+      if (hasEmit) break;
+    }
+    if (!hasEmit) return [];
+    return [{
+      rule: "emit-with-template",
+      severity: "info",
+      message: "Skill has both a body-text-as-output template and `emit(text=...)` calls. Under v0.19.4 complementary-channels semantics, the template owns canonical output (`outputs.text` / agent delivery payload); `emit()` entries feed the transcript only. If you want emit() to be the canonical output, remove the template; otherwise this is the intended pattern.",
+    }];
+  },
+};
+
 const TRANSCRIPT_FOOTGUN: LintRule = {
   id: "transcript-footgun",
   severity: "warning",
@@ -2981,6 +3128,7 @@ const RULES: LintRule[] = [
   UNDECLARED_VAR,
   UNKNOWN_RETURNS_REF,
   UNKNOWN_FILTER,
+  UNSET_TEMPLATE_VAR,
   MALFORMED_OP_GRAMMAR,
   INVALID_CONDITIONAL_SYNTAX,
   SINGLE_EQUALS,
@@ -3022,6 +3170,7 @@ const RULES: LintRule[] = [
   DEPRECATED_ADDRESSED_TO,
   LEGACY_FRONTMATTER_HEADER,
   TRANSCRIPT_FOOTGUN,
+  TEMPLATE_LOOKS_LIKE_TARGET,
   UNEXPORTED_FINAL_VAR_ACCESS,
   SET_JSON_LITERAL_ADVISORY,
   SKILL_NAME_COLLISION,
@@ -3038,6 +3187,8 @@ const RULES: LintRule[] = [
   UNPARSED_JSON_FIELD_ACCESS,
   OBJECT_ITERATION_ADVISORY,
   ADDRESS_ROUTED_WAKE_INFO,
+  BODY_TEMPLATE_DETECTED,
+  EMIT_WITH_TEMPLATE,
 ];
 
 /** Read-only view of the rule registry — for tooling that introspects v1 rules. */

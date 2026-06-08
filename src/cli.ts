@@ -418,8 +418,18 @@ async function cmdRun(args: string[]): Promise<number> {
       ...(traceMode !== undefined ? { trace: { mode: traceMode } } : {}),
       ...(traceStore !== undefined ? { traceStore } : {}),
     });
-    for (const line of result.emissions) {
-      process.stdout.write(`${line}\n`);
+    // v0.19.4 — complementary-channels output. Template-bearing skills
+    // own canonical output via `outputs.text` (rendered string); legacy
+    // emit-only skills produce emissions which are the canonical output.
+    // CLI surfaces whichever the skill authored — template > emissions —
+    // matching the c7ddfc50 channel semantic. Emit-only skills continue
+    // to print emissions exactly as before.
+    if (compiled.parsed.outputTemplate !== null && typeof result.outputs.text === "string") {
+      process.stdout.write(`${result.outputs.text}\n`);
+    } else {
+      for (const line of result.emissions) {
+        process.stdout.write(`${line}\n`);
+      }
     }
     if (result.errors.length > 0) {
       process.stderr.write(`\n${result.errors.length} error(s):\n`);

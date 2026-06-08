@@ -1,5 +1,109 @@
 # Changelog
 
+## 0.19.4 — 2026-06-08 — Body-text-as-output template (declarative output, no emit ceremony)
+
+A skill's body text — the prose between the frontmatter and the first
+target — is now its declarative output template. The runtime interpolates
+`${VAR}` references against final vars and publishes the rendered string
+as the skill's canonical output. Per Scott + Perry's c7ddfc50 design lock
++ 920078c8 / ad0b868e sign-off.
+
+### Why
+
+The `emit(text="${SUMMARY}")` ceremony for what is structurally just
+"render this template and output it" was the highest-leverage authorability
+tax on the most common operation. From Perry's c7ddfc50:
+
+> Author writes the sentence they want; the compute block fills in the
+> holes. The same skill stripped of its compute block still emits the
+> template with whatever defaults `# Vars:` declares.
+
+Wins:
+- Declarative output (author writes the sentence they want)
+- No throwaway `${SUMMARY}` var ceremony
+- Branch resolved into vars; template stays single-shape
+- Strip the compute block → still a valid skill that emits the template
+
+### What's new
+
+**Parser** (`src/parser.ts`):
+- `ParsedSkill.outputTemplate: string | null` — the captured template
+  (null when none authored). Internal blanks preserved; leading/trailing
+  blanks trimmed.
+- Pin 4 disambiguation rule (`nextNonBlankLineIsIndented` lookahead): a
+  target is `<name>:` with an indented op-block on the next non-blank
+  line. Content-after-colon (`Summary: hot today`) without an op-block
+  is template text. Bare `<word>:` alone with no op-block in the template
+  region is captured AND recorded as ambiguous for lint.
+- `ParsedSkill.templateAmbiguousLines: number[]` — line numbers for the
+  tier-2 lint surface.
+
+**Runtime** (`src/runtime.ts`):
+- When `parsed.outputTemplate !== null`, render once via `substituteRuntime`
+  with the final vars map; the rendered string owns `outputs[key]` across
+  all `# Output:` kinds. Legacy emit-only path (no template) preserved
+  byte-equivalent — `outputs.text` falls back to `emissions.slice()` /
+  `lastBoundVar` exactly as before.
+- Complementary channels: `emit()` continues to populate `emissions[]`
+  (transcript) independently. Template = canonical output; emit =
+  transcript. No competition.
+
+**CLI** (`src/cli.ts`):
+- `skillfile execute` now prints the rendered template when one is
+  authored (matching the canonical-output channel). Emit-only skills
+  continue to print emissions exactly as before.
+
+**Lint** (`src/lint.ts`) — four new rules:
+- `unset-template-var` (tier-1, error) — every `${VAR}` in the template
+  must resolve to a `# Vars:` input, ambient ref, or `$set`/`->` binding
+  somewhere in the skill body. Tier-1 because an unbound ref renders
+  empty silently.
+- `template-looks-like-target` (tier-2, warning) — bare `<word>:` alone
+  in the template region, no following op-block. Reads ambiguously;
+  author should disambiguate.
+- `body-template-detected` (tier-3, info) — template captured but has
+  no `${...}` interpolations AND no text-consuming `# Output:`. Suggests
+  "I wrote prose; it became template by accident."
+- `emit-with-template` (tier-3, info) — skill has both a template AND
+  `emit(text=...)` calls; confirms the channel-shift is intentional
+  (template owns canonical output; emit goes to transcript).
+
+### Migration
+
+Additive — emit-based skills work unchanged. Bundled corpus verified
+clean (13 skills; no body-template content; all produce
+`outputTemplate: null`).
+
+The lookahead disambiguation rule is stricter than the pre-v0.19.4
+target detection: a line at column 0 matching `<identifier>:` parses
+as a target only when the next non-blank line is indented. Every real
+target has an op-block under it, so no observed corpus skill regresses.
+
+The legacy `target: dep_a dep_b` deps-form is preserved (lookahead sees
+the indented op-block and confirms target intent). The explicit
+`needs: dep_a dep_b` keyword form is recommended for new skills.
+
+### Docs
+
+- README quickstart + canonical autonomous skill updated to use the
+  template shape; new "fourth thing to notice" callout in the autonomous
+  example.
+- `docs/adopter-playbook.md` gains a new "Output template — body text IS
+  the output" section covering the shape, complementary channels,
+  output kinds, target syntax rules, and the four lints.
+
+### Tests
+
+- `tests/v0.19.4-output-template.test.ts` — 34 tests: parser extraction
+  + Pin 4 disambiguation + migration safety + runtime render + output-kind
+  matrix + complementary channels + 4 lints (positive + negative) + e2e
+  (compile + execute + lint preflight blocking).
+- Live HTTP probe + idempotent twice-run + edge cases (multi-line, special
+  chars, lint preflight, emit + template).
+
+1860 tests total (+34 net new). Narrow-core LOC ceiling bumped
+11100 → 11250 per the signal-not-budget rule (clear code wins).
+
 ## 0.19.3 — 2026-06-07 — Real SPA render coverage (closes the test gap that let v0.18.9–v0.19.1 ship broken)
 
 The v0.19.2 hotfix patched the specific syntax bug; v0.19.3 closes

@@ -220,7 +220,18 @@ const CORE_PATHS = [
 // discipline-only-contract or adds language-level UX), reads clearly,
 // and would lose meaning if compressed. Per the signal-not-budget rule:
 // clear code wins.
-const NARROW_MAX_LOC = 11100;
+// v0.19.4: nudged narrow ceiling 11100 → 11250 for the body-text-as-output
+// template ring (Perry+CC c7ddfc50). New: parser body-region capture with
+// Pin 4 lookahead disambiguation (~60 LOC src/parser.ts including doc
+// comments), runtime canonical-template render (~12 LOC src/runtime.ts),
+// four lint rules covering the new authoring surface (~120 LOC src/lint.ts:
+// tier-1 unset-template-var + tier-2 template-looks-like-target + two
+// tier-3 advisories body-template-detected + emit-with-template). Each
+// rule is self-contained and named for what it catches — compressing
+// would lose grep-ability. Per the signal-not-budget rule: clear code
+// wins. Complementary-channels semantic (template = canonical output,
+// emit = transcript) is the headline win on small-model authorability.
+const NARROW_MAX_LOC = 11250;
 const NARROW_MAX_FILES = 23;
 const BROAD_INFO_LOC = 9500;
 const BROAD_INFO_FILES = 28;

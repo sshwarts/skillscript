@@ -511,10 +511,23 @@ export async function execute(
   const outputDecls: OutputDecl[] = parsed.outputs.length > 0
     ? parsed.outputs
     : [{ kind: "text" }];
+  // v0.19.4 — body-text-as-output template. When the skill authored a
+  // template (text between frontmatter and first target), render it
+  // once with the final vars map and let it own canonical output across
+  // all kinds. Empty / absent template preserves legacy joined-emissions
+  // / lastBoundVar fallbacks exactly. Complementary channels per
+  // c7ddfc50: emit() continues to feed transcript via `emissions`
+  // unchanged — only the canonical-output channel shifts. Per
+  // Perry+CC sign-off in 920078c8.
+  const canonicalTemplate: string | null = parsed.outputTemplate !== null
+    ? substituteRuntime(parsed.outputTemplate, vars)
+    : null;
   const outputs: Record<string, unknown> = {};
   for (const decl of outputDecls) {
     const key = decl.target !== undefined ? `${decl.kind}:${decl.target}` : decl.kind;
-    if (TEXT_COERCED_OUTPUT_KINDS.has(decl.kind)) {
+    if (canonicalTemplate !== null) {
+      outputs[key] = canonicalTemplate;
+    } else if (TEXT_COERCED_OUTPUT_KINDS.has(decl.kind)) {
       outputs[key] = emissions.join("\n");
     } else if (lastBoundVar !== null && vars.has(lastBoundVar)) {
       outputs[key] = vars.get(lastBoundVar);

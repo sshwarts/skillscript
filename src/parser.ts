@@ -206,6 +206,29 @@ export interface ParsedSkill {
   triggers: TriggerDecl[];
   outputs: OutputDecl[];
   /**
+   * v0.19.4 — body-text-as-output template. Text between end of
+   * frontmatter and first target is a declarative output template;
+   * runtime renders it (interpolating vars + $set-bound targets via
+   * substituteRuntime) and publishes the result into the canonical
+   * output channel. `null` when no template content was authored —
+   * preserves the legacy emit-only path exactly. Per Perry+CC
+   * sign-off in c7ddfc50 / 920078c8 / ad0b868e.
+   *
+   * Pin 4 disambiguation: a target is `<name>:` with the immediately
+   * following non-blank line indented (op-block). Bare `<name>:` alone
+   * with no following op-block (and content-after-colon without a
+   * following op-block) reads as template text. `default:` is special
+   * (entry-point declaration) — always exits the template region.
+   */
+  outputTemplate: string | null;
+  /**
+   * v0.19.4 — line numbers (1-indexed) where bare `<word>:` alone
+   * appears in the template region without a following op-block. The
+   * tier-2 `template-looks-like-target` lint reads this list to flag
+   * genuinely-ambiguous lines for the author to disambiguate.
+   */
+  templateAmbiguousLines: number[];
+  /**
    * v0.9.2 — true iff the source contained an explicit `default: <target>`
    * declaration. False when the parser's last-target fallback fired
    * (legacy behavior preserved for back-compat; lint surfaces the
@@ -445,6 +468,22 @@ const INDENT_STEP = 4;
 function leadingSpaces(rawLine: string): number {
   const m = /^( *)/.exec(rawLine);
   return m ? m[1]!.length : 0;
+}
+
+/**
+ * v0.19.4 — Pin 4 disambiguation lookahead. From the line at `fromIdx`,
+ * scan forward until the first non-blank line; return true if it is
+ * indented (the op-block that confirms a target header), false otherwise.
+ * Trailing-whitespace-only lines count as blank. End-of-source counts as
+ * "no following op-block" → false.
+ */
+function nextNonBlankLineIsIndented(lines: string[], fromIdx: number): boolean {
+  for (let j = fromIdx + 1; j < lines.length; j++) {
+    const next = lines[j]!.replace(/\s+$/, "");
+    if (next === "") continue;
+    return /^\s/.test(next);
+  }
+  return false;
 }
 
 /**
@@ -1037,6 +1076,8 @@ export function parse(source: string): ParsedSkill {
     onError: null,
     triggers: [],
     outputs: [],
+    outputTemplate: null,
+    templateAmbiguousLines: [],
     eventType: null,
     templates: [],
     autonomous: null,
@@ -1053,8 +1094,73 @@ export function parse(source: string): ParsedSkill {
   let currentTarget: SkillTarget | null = null;
   let scopeStack: ScopeFrame[] = [];
 
-  for (const rawLine of lines) {
+  // v0.19.4 — body-text-as-output template state. While true, lines that
+  // are not frontmatter (`#`-prefixed) and not real targets are captured
+  // into templateLines. Exits to false when the first real target /
+  // `default:` declaration is encountered (Pin 4 lookahead).
+  let inTemplateRegion = true;
+  const templateLines: string[] = [];
+
+  for (let i = 0; i < lines.length; i++) {
+    const rawLine = lines[i]!;
     const line = rawLine.replace(/\s+$/, "");
+
+    // === v0.19.4 template-region capture ===
+    // Runs BEFORE the existing blank/`#`/target handlers so it can claim
+    // template lines before they fall through to the comment/no-op paths.
+    if (inTemplateRegion) {
+      if (line === "") {
+        // Internal blanks are preserved so multi-paragraph templates
+        // render with their authored spacing. Leading/trailing blanks
+        // trimmed after the loop.
+        templateLines.push("");
+        continue;
+      }
+      if (!line.startsWith("#")) {
+        if (!/^\s/.test(line)) {
+          // Top-level control-flow keywords (`if`/`elif`/`else:`) are
+          // hard parse errors per existing guards below; do NOT swallow
+          // them as template content. Fall through.
+          if (/^(if|elif)\s+/.test(line) || /^else:\s*$/.test(line)) {
+            inTemplateRegion = false;
+          } else {
+          const identColon = /^([A-Za-z_][\w-]*)\s*:(.*)$/.exec(line);
+          if (identColon !== null) {
+            const isDefault = identColon[1] === "default";
+            const hasOpBlock = nextNonBlankLineIsIndented(lines, i);
+            const afterColon = identColon[2]!.trim();
+            if (isDefault || hasOpBlock) {
+              // Real target or `default:` declaration — exit template
+              // region and fall through to existing target handling.
+              inTemplateRegion = false;
+            } else {
+              // Pin 4: content-after-colon without an op-block is
+              // template prose. Bare `<word>:` alone without an
+              // op-block is genuinely ambiguous — capture as template
+              // AND record for tier-2 lint A6.
+              if (afterColon === "") {
+                result.templateAmbiguousLines.push(i + 1);
+              }
+              templateLines.push(rawLine);
+              continue;
+            }
+          } else {
+            // Plain template text — no identifier-colon shape.
+            templateLines.push(rawLine);
+            continue;
+          }
+          }
+        } else {
+          // Indented line in the template region — unusual but legal
+          // template content (e.g. an authored line preserved verbatim
+          // before the first target). Capture and continue.
+          templateLines.push(rawLine);
+          continue;
+        }
+      }
+    }
+    // === end template-region capture ===
+
     if (line === "") {
       // v0.2.12 Bug 15. Blank lines must NOT reset currentTarget/scopeStack —
       // they're free-form whitespace authors use to visually section a long
@@ -1964,6 +2070,16 @@ export function parse(source: string): ParsedSkill {
     const names = Array.from(result.targets.keys());
     result.entryTarget = names[names.length - 1] ?? null;
   }
+
+  // v0.19.4 — finalize the body-text-as-output template. Trim leading
+  // and trailing blank lines; internal blanks preserved. Empty result
+  // collapses to `null` so legacy emit-only skills are byte-equivalent
+  // to pre-v0.19.4 parse output.
+  if (templateLines.length > 0) {
+    const joined = templateLines.join("\n").replace(/^\n+/, "").replace(/\n+$/, "");
+    if (joined !== "") result.outputTemplate = joined;
+  }
+
   return result;
 }
 
