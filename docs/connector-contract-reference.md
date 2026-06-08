@@ -47,7 +47,7 @@ interface DeliveryMeta {
   origin: {
     skill_name: string;
     entry_skill_name?: string;
-    trigger_kind: "cron" | "session" | "webhook" | "agent" | "cli" | "dashboard" | "inline";
+    trigger_kind: "cron" | "event" | "webhook" | "agent" | "cli" | "dashboard" | "inline";
     caller_agent_id?: string;
   };
   event_type?: string;
@@ -69,7 +69,7 @@ interface DeliveryMeta {
 
 - **`meta.origin.trigger_kind`**: how the originating skill was fired. Receiver routes on this without parsing content (cron-fired triage vs agent-initiated request vs webhook from external system).
 
-- **`meta.origin.caller_agent_id`**: the AUTHENTICATED CALLER who fired the dispatch — distinct from the skill's author/owner. When an MCP `/rpc` call carries the configured caller-identity header (e.g., `X-Agent-Id: cc`), that value flows here. The chain originator is preserved across composition: if `cc` invokes Alice's skill A which composes Bob's skill B, B's notify() still emits `caller_agent_id: cc`. Cron / session / cli / dashboard triggers leave it undefined (no human caller); direct `execute_skill` without an identity header also leaves it undefined (the owner is NOT used as fallback — that would be the v0.16.8-era confusion that v0.18.4 split). See [Adopter Playbook](adopter-playbook.md) §"Identity propagation" for the inbound-header wiring.
+- **`meta.origin.caller_agent_id`**: the AUTHENTICATED CALLER who fired the dispatch — distinct from the skill's author/owner. When an MCP `/rpc` call carries the configured caller-identity header (e.g., `X-Agent-Id: cc`), that value flows here. The chain originator is preserved across composition: if `cc` invokes Alice's skill A which composes Bob's skill B, B's notify() still emits `caller_agent_id: cc`. Cron / event / cli / dashboard triggers leave it undefined (no human caller); direct `execute_skill` without an identity header also leaves it undefined (the owner is NOT used as fallback — that would be the v0.16.8-era confusion that v0.18.4 split). See [Adopter Playbook](adopter-playbook.md) §"Identity propagation" for the inbound-header wiring.
 
 - **`meta.event_type`**: adopter-defined routing vocabulary — opaque to skillscript. Set via `notify(event_type=...)` kwarg (per-emit) OR `# Event-type:` skill frontmatter (skill-wide fallback). Kwarg takes precedence per-emit.
 
@@ -174,7 +174,7 @@ The distinction `wake-capability` vs `network-fault` matters. The former is stru
 | Language surface | Address shape | Runtime method | DeliveryPayload kind | meta sourced from |
 |---|---|---|---|---|
 | `# Output: agent: X` lifecycle hook | bare | `AgentConnector.deliver()` | `augment` | Frontmatter `# Event-type:` (if set); `event_type` & `correlation_id` always undefined |
-| `# Output: agent: X@session` lifecycle hook | composite | `AgentConnector.wake()` | n/a (joined emissions as `WakeOpts.context`) | n/a (wake has no envelope) |
+| `# Output: agent: X@session` lifecycle hook | composite | `AgentConnector.wake()` | n/a (canonical output as `WakeOpts.context` — body template if present, else joined emissions) | n/a (wake has no envelope) |
 | `# Output: template: X` lifecycle hook | bare | `AgentConnector.deliver()` | `template` | Same as agent-bare |
 | `# Output: template: X@session` lifecycle hook | composite | `AgentConnector.wake()` | n/a | n/a |
 | `notify(agent=X, message=..., event_type=..., correlation_id=...)` op | bare | `AgentConnector.deliver()` | `augment` | Kwargs override frontmatter for `event_type`; `correlation_id` from kwarg only |
@@ -238,7 +238,7 @@ These are the load-bearing semantic rules. Internalize before implementing.
 
 2. **entry_skill_name — deeper-than-2-level chains lose middle**: A→B→C, C emits → `skill_name=C, entry_skill_name=A`. B is in runtime trace logs, NOT the envelope. Surface boundaries are decisions, not accidents.
 
-3. **caller_agent_id — general rule**: root-trigger agent IF identifiable, else undefined. All substrate-specific cases (cron/session/webhook/agent/cli/dashboard/inline) drop out cleanly from this rule. Cron / session / cli / dashboard / inline trigger paths leave it undefined.
+3. **caller_agent_id — general rule**: root-trigger agent IF identifiable, else undefined. All substrate-specific cases (cron/event/webhook/agent/cli/dashboard/inline) drop out cleanly from this rule. Cron / event / cli / dashboard / inline trigger paths leave it undefined.
 
 4. **sent_at vs delivered_at**: `meta.sent_at` is the runtime's emit-clock (when `notify()` / `# Output:` fired). Receipt-side `delivered_at` is the substrate's acknowledgement timestamp. Substrate-side queueing may mean significant gaps (file-drop poller intervals, webhook retries, broker buffering). Adopters running staleness checks need both surfaces; `delivered_at - sent_at` = effective queue lag.
 

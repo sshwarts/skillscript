@@ -29,13 +29,14 @@ Every skill follows the same shape:
 
 1. **Trigger fires** — cron, command, event, session-start, or programmatic invocation
 2. **Process** — pull data (MCP / memory / file), classify / compose via sub-LLM + iteration, build the deliverable
-3. **Deliver** — via one or more of three channels
+3. **Deliver** — via one or more of four channels
 
-The three delivery channels are all first-class:
+The four delivery channels are all first-class:
 
 | Channel | Op | When you'd use it |
 |---|---|---|
-| **Embedded prompt** | \`emit(text="...")\` | Skill output is delivered to the receiving agent via the \`# Output: agent: <name>\` lifecycle hook |
+| **Body-text-as-output template** | prose between frontmatter + first target | Declarative output — skill body IS the output, rendered with var substitution. The clean shape for fixed-form output. |
+| **Embedded prompt** | \`emit(text="...")\` | Imperative output for variable-cardinality cases (\`foreach\` per-item emit), conditionally-different output shapes, or transcript / reasoning trace |
 | **File handoff** | \`file_write(path="...", content="...")\` | Skill writes a file at a known location for the agent to read |
 | **Data handoff** | \`$ data_write content="..." recipients=["agent"] -> R\` | Skill writes a record the target agent picks up via mailbox. Routes through the wired \`data_write\` connector (default: \`DataStoreMcpConnector\` bundled). |
 
@@ -60,15 +61,19 @@ The \`$\` prefix marks **state-affecting ops** (mutation OR external dispatch). 
 # Vars: NAME=default-value, OTHER      ← optional: declared variables
 # Triggers: cron: 0 9 * * *            ← optional: autonomous-dispatch sources
 
+\${SUMMARY}                             ← body-text-as-output template (optional)
+
 target_a:                              ← a named block of ops
     $ ticketing_search query="state:open" -> ISSUES
     $ llm prompt="Summarize: \${ISSUES}" -> SUMMARY
 
-target_b: target_a                     ← Make-style: target_b depends on target_a
-    emit(text="\${SUMMARY}")
+target_b: needs: target_a              ← target_b depends on target_a
+    $set _ = "noop"
 
 default: target_b                      ← goal target the runtime walks toward
 \`\`\`
+
+Text between the frontmatter and the first target is a **declarative output template**. The runtime interpolates \`\${VAR}\` refs against final vars and publishes the rendered string as the skill's canonical output. No \`emit()\` ceremony for fixed-shape output. See section "Body template" below.
 
 ## 4. Variable substitution
 
@@ -100,7 +105,36 @@ foreach M in \${MEMORIES}:
     emit(text="Processing \${M.id}: \${M.summary}")
 \`\`\`
 
-## 8. How to see what's broken
+## 8. Body template — when emit is overkill
+
+For fixed-shape output, write the rendered sentence directly as the skill body. The compute block fills in the holes:
+
+\`\`\`
+# Skill: get-weather
+# Vars: AREA="Brooklyn"
+
+\${AREA}: \${TEMP}°\${UNIT} and \${DESC}.
+
+fetch:
+    shell(command="curl -s https://wttr.in/\${AREA|url}?format=j1") -> RAW
+    $ json_parse \${RAW} -> W
+    $set TEMP = "\${W.current_condition.0.temp_F}"
+    $set UNIT = "F"
+    $set DESC = "\${W.current_condition.0.weatherDesc.0.value|trim}"
+
+default: fetch
+\`\`\`
+
+**Template vs. emit — complementary channels.** Template owns canonical output (\`outputs.text\` / agent or template delivery payload / file content). \`emit()\` populates the transcript (trace records, dashboard \`/fires\` view, debugging). Skills with both: template = output, emit = transcript. The \`emit-with-template\` advisory lint confirms intent.
+
+Keep \`emit()\` when:
+- Variable-cardinality output: \`foreach M in \${MEMORIES}: emit(text="\${M.id}")\` — N lines determined at runtime
+- Conditional output **shapes**: different branches produce different structural outputs (not just different values)
+- Transcript / reasoning trace: emit feeds \`/fires\` even when template feeds output
+
+Pin 4 disambiguation — a target is \`<name>:\` alone with an indented op-block following. Content after the colon (\`Summary: hot today\`) or a bare \`<word>:\` with no following op-block reads as template text. Lint \`template-looks-like-target\` flags the genuinely ambiguous shape.
+
+## 9. How to see what's broken
 
 - \`lint_skill({source})\` — diagnostics across tier-1 (errors), tier-2 (warnings), tier-3 (advisories)
 - \`compile_skill({source, inputs?})\` — render the compiled artifact + surface compile errors
@@ -411,8 +445,8 @@ Skill files open with \`# Key: value\` headers. Order isn't significant.
 - \`# Type: procedural | data\` — \`procedural\` (default) for runtime-fired skills; \`data\` for compile-time-inlined fragments referenced by \`inline(skill="...")\`.
 - \`# Vars: NAME=default, OTHER\` — declared variables. \`NAME=default\` provides a default; bare \`NAME\` is required at invocation. Quoted defaults (\`NAME="hello world"\`) strip one matched layer of surrounding quotes at parse time — quoted-spaced values bind correctly; bare values bind unchanged.
 - \`# Returns: X, Y, Z\` — declared export surface for \`execute_skill\` composition. Names that propagate from this skill's \`final_vars\` into the caller's bound \`R\`. Internal scratch vars NOT listed here stay local — never serialized into the caller's result. Skills without \`# Returns:\` export nothing from \`final_vars\` (outputs + transcript + metadata still flow). Symmetric with \`# Vars:\` (input surface ↔ output surface).
-- \`# Triggers: cron: 0 9 * * *, session: start\` — autonomous-dispatch sources. Comma-separated entries split by source-keyword boundary; cron expressions with commas (\`30,45 9 * * 1-5\`) parse correctly.
-- \`# Output: text | agent: <name> | template: <name> | file: path | none\` — output routing. Five kinds, all substrate-neutral. **Two substrate-neutral lifecycle hooks**: \`agent: <name>\` routes via AgentConnector as augment-kind delivery; \`template: <name>\` routes as template-kind delivery (receiving agent executes the rendered playbook). Both default to **joined emissions string** (the \`emit(text=...)\` lines concatenated with newlines). \`text\` / \`file:\` default to the **last-bound variable value** (structured), falling back to the emissions array when no var was bound. If your skill emits multiple lines and a downstream consumer only sees the final tool output via \`outputs.text\`, that's the structured-default behavior — use \`# Output: agent: <name>\` (or another text-coerced kind) to publish the joined emissions instead. **For substrate-specific delivery destinations** (Slack, WhatsApp, Discord, pagerduty, custom dashboards, etc.) — that's contract-between-the-skill-and-the-substrate territory, downstream of the language. Two paths: (1) \`$ <connector>.<tool> ...\` inside the skill body to dispatch through an adopter-wired MCP connector, or (2) deliver via \`agent: <name>\` to an agent whose AgentConnector decides how to surface the result.
+- \`# Triggers: cron: 0 9 * * *, event: my-event\` — autonomous-dispatch sources. Two primitives: \`cron\` (time-based) and \`event\` (HTTP POST \`/event\` ingress, named registration). Comma-separated entries split by source-keyword boundary; cron expressions with commas (\`30,45 9 * * 1-5\`) parse correctly.
+- \`# Output: text | agent: <name> | template: <name> | file: path | none\` — output routing. Five kinds, all substrate-neutral. **Two substrate-neutral lifecycle hooks**: \`agent: <name>\` routes via AgentConnector as augment-kind delivery; \`template: <name>\` routes as template-kind delivery (receiving agent executes the rendered playbook). **Output content source** (v0.19.4): if the skill has a body-text-as-output template (prose between frontmatter and first target), the rendered template populates the canonical output payload. Otherwise: agent/template kinds default to joined emissions; text/file kinds default to the last-bound variable value, falling back to the emissions array. Body template + emit() are complementary — template = canonical output, emit() = transcript. **For substrate-specific delivery destinations** (Slack, WhatsApp, Discord, pagerduty, custom dashboards, etc.) — that's contract-between-the-skill-and-the-substrate territory, downstream of the language. Two paths: (1) \`$ <connector>.<tool> ...\` inside the skill body to dispatch through an adopter-wired MCP connector, or (2) deliver via \`agent: <name>\` to an agent whose AgentConnector decides how to surface the result.
 - \`# OnError: <fallback-skill-name>\` — error-handler skill invoked when an op fails and no target-level \`else:\` catches.
 - \`# Autonomous: true | false\` — declarative authorship intent for unattended-execution skills (cron-fired, agent-fired, etc.). Silences \`unconfirmed-mutation\` lint warnings for the whole skill (since the user-confirmation pattern doesn't apply to autonomous skills); reserved as the canonical autonomous-skill category marker for future rules + scheduling defaults + discovery surfaces. Omitted = interactive (default).
 
@@ -436,11 +470,11 @@ Skill files open with \`# Key: value\` headers. Order isn't significant.
 
 \`\`\`
 # Triggers: cron: 30,45 9 * * 1-5
-# Triggers: session: start, session: end
-# Triggers: cron: 0 7 * * *, agent-event: drift-detected
+# Triggers: event: ticket-created
+# Triggers: cron: 0 7 * * *, event: drift-detected
 \`\`\`
 
-Trigger sources: \`cron\` (poll-based), \`session\` (\`start\` / \`end\` phases). Parse-only (firing not yet wired): \`event\`, \`agent-event\`, \`file-watch\`, \`sensor\`.
+Trigger sources (v0.19.0 — simplified to two primitives): \`cron\` (poll-based) and \`event\` (HTTP \`/event\` ingress with named registration; an external service POSTs to drive the skill). Removed sources (\`session\`, \`agent-event\`, \`file-watch\`, \`sensor\`) are now adapter responsibilities — external code POSTs \`/event\` when relevant.
 
 ## Ambient variables (auto-populated by the runtime)
 
@@ -451,7 +485,7 @@ The runtime injects these refs — don't declare them in \`# Vars:\` / \`# Requi
 | \`$(NOW)\` | runtime clock | ISO-8601 timestamp at op-dispatch time |
 | \`$(USER)\` | invocation context | Identity passed via \`agentId\` / CLI user |
 | \`$(SESSION_CONTEXT)\` | runtime session | Free-form session snapshot for cross-skill carry |
-| \`$(TRIGGER_TYPE)\` | scheduler | \`cron\` / \`session\` / \`webhook\` / \`agent\` / \`cli\` / \`dashboard\` / \`inline\` |
+| \`$(TRIGGER_TYPE)\` | scheduler | \`cron\` / \`event\` / \`webhook\` / \`agent\` / \`cli\` / \`dashboard\` / \`inline\` |
 | \`$(TRIGGER_PAYLOAD)\` | scheduler | JSON-serializable payload attached to the firing trigger |
 | \`$(ERROR_CONTEXT)\` | runtime error handler | Inside \`else:\` and \`# OnError:\` only; \`.kind\` / \`.message\` / \`.target\` accessible |
 
@@ -490,14 +524,16 @@ const EXAMPLES = `# Five canonical worked skills
 # Status: Approved
 # Vars: WHO=world
 
+Hello, \${WHO}!
+Welcome to Skillscript.
+
 greet:
-    emit(text="Hello, \${WHO}!")
-    emit(text="Welcome to Skillscript.")
+    $set _ = "noop"
 
 default: greet
 \`\`\`
 
-Demonstrates: required headers, variable defaults, \`emit(text="...")\` with \`\${VAR}\` substitution.
+Demonstrates: required headers, variable defaults, body-text-as-output template with \`\${VAR}\` substitution. No \`emit()\` ceremony needed for fixed-shape output — the body prose IS the output. Compare with example #5 below, which uses \`emit()\` per-item for variable-cardinality output (\`foreach\`-based).
 
 ## 2. Cron-fired numeric threshold + count
 
