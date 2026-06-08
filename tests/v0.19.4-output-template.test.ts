@@ -547,7 +547,82 @@ default: run
 });
 
 // ────────────────────────────────────────────────────────────────────────
-// 11. e2e — compile + execute + canonical output reaches caller
+// 11. Cross-consumer interactions — surfaces I initially missed
+// ────────────────────────────────────────────────────────────────────────
+//
+// New-field audit: ParsedSkill.outputTemplate is read by three more
+// consumers besides runtime, each surfaced by the bundled-corpus migration
+// rather than the dense new-surface tests above. These tests pin them
+// so they don't regress.
+
+describe("v0.19.4 — compile renderer surfaces template", () => {
+  it("renderPrompt includes a 'Tell the user:' section with rendered template", async () => {
+    const src = `${APPROVED}
+# Skill: rendered-prompt
+# Vars: WHO=world
+
+Hello, \${WHO}!
+
+run:
+    $set _ = "noop"
+default: run
+`;
+    const r = await compile(src);
+    expect(r.output).toMatch(/Tell the user:[\s\S]*?Hello, world!/);
+  });
+
+  it("renderProse includes a '**Tells the user:**' line with rendered template", async () => {
+    const src = `${APPROVED}
+# Skill: rendered-prose
+# Vars: WHO=world
+
+Hello, \${WHO}!
+
+run:
+    $set _ = "noop"
+default: run
+`;
+    const r = await compile(src, { format: "prose" });
+    expect(r.output).toMatch(/Tells the user:.*Hello, world!/);
+  });
+});
+
+describe("v0.19.4 — output-agent-target-no-emit recognizes template", () => {
+  it("does NOT fire when skill has body template (template populates delivery)", async () => {
+    const src = `${APPROVED}
+# Skill: template-feeds-agent
+# Vars: BRIEF=hello
+
+# Output: agent: receiver
+
+\${BRIEF}
+
+run:
+    $set _ = "noop"
+default: run
+`;
+    const r = await lint(src);
+    expect(r.findings.find((x) => x.rule === "output-agent-target-no-emit")).toBeUndefined();
+  });
+
+  it("still fires when skill has neither template nor emit on agent-bound output", async () => {
+    const src = `${APPROVED}
+# Skill: agent-no-content
+# Vars: ()
+
+# Output: agent: receiver
+
+run:
+    $set _ = "noop"
+default: run
+`;
+    const r = await lint(src);
+    expect(r.findings.find((x) => x.rule === "output-agent-target-no-emit")).toBeDefined();
+  });
+});
+
+// ────────────────────────────────────────────────────────────────────────
+// 12. e2e — compile + execute + canonical output reaches caller
 // ────────────────────────────────────────────────────────────────────────
 
 describe("v0.19.4 e2e — compile + execute", () => {

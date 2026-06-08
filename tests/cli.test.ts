@@ -56,7 +56,11 @@ describe("skillfile CLI", () => {
     const r = runCli(["compile", "examples/skillscripts/hello-world.skill.md"]);
     expect(r.code).toBe(0);
     expect(r.stdout).toMatch(/# Skill: hello-world/);
-    expect(r.stdout).toMatch(/Tell the user: Hello, world!/);
+    // v0.19.4 — hello-world migrated to body-template shape. The compile-time
+    // renderer surfaces the template under a "## Tell the user:" section
+    // (multi-line template rendered as a block). Test the substring across
+    // lines instead of requiring single-line emit-style output.
+    expect(r.stdout).toMatch(/Tell the user:[\s\S]*?Hello, world!/);
   });
 
   it("lint reports no findings on the bundled example", () => {

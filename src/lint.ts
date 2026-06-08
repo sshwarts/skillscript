@@ -2005,17 +2005,23 @@ const UNUSED_AUGMENTING_HEADER: LintRule = {
 };
 
 // v0.8.0 — tier-2 lint warns per the delivery-model lockdown (`bb34de4e`).
+// v0.19.4 — a body-text-as-output template also populates the delivery
+// payload (per complementary-channels semantic in c7ddfc50). When a
+// template is authored, the lint does NOT fire — the template IS the
+// content the lifecycle hook delivers.
 const OUTPUT_AGENT_TARGET_NO_EMIT: LintRule = {
   id: "output-agent-target-no-emit",
   severity: "warning",
-  description: "`# Output: agent: <name>` or `# Output: template: <name>` declared but skill has no `emit()` ops; delivery fires with empty content.",
-  remediation: "Add at least one `emit(text=\"...\")` op so the skill produces content for the lifecycle hook delivery, or remove the `# Output:` header if the skill produces no agent-targeted output.",
+  description: "`# Output: agent: <name>` or `# Output: template: <name>` declared but skill has no `emit()` ops AND no body-text-as-output template; delivery fires with empty content.",
+  remediation: "Author a body-text-as-output template (prose between the frontmatter and the first target), OR add at least one `emit(text=\"...\")` op so the skill produces content for the lifecycle hook delivery. If the skill produces no agent-targeted output, remove the `# Output:` header.",
   check: (ctx) => {
     const findings: LintFinding[] = [];
     const agentBoundOutputs = ctx.parsed.outputs.filter(
       (o) => (o.kind === "agent" || o.kind === "template") && o.target !== undefined,
     );
     if (agentBoundOutputs.length === 0) return findings;
+    // v0.19.4 — body template populates delivery payload too.
+    if (ctx.parsed.outputTemplate !== null) return findings;
     let hasEmit = false;
     for (const [, target] of ctx.parsed.targets) {
       walkOps(target.ops, (op) => { if (op.kind === "emit") hasEmit = true; });
@@ -2026,7 +2032,7 @@ const OUTPUT_AGENT_TARGET_NO_EMIT: LintRule = {
       findings.push({
         rule: "output-agent-target-no-emit",
         severity: "warning",
-        message: `\`# Output: ${decl.kind}: ${decl.target}\` declared but skill has no \`emit()\` ops; delivery fires with empty content.`,
+        message: `\`# Output: ${decl.kind}: ${decl.target}\` declared but skill has no \`emit()\` ops AND no body-text-as-output template; delivery fires with empty content.`,
       });
     }
     return findings;

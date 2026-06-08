@@ -627,6 +627,16 @@ function renderPrompt(parsed: ParsedSkill, resolved: Map<string, string>, order:
     for (const [k, v] of resolved) out.push(`- ${k} = ${v}`);
     out.push("");
   }
+  // v0.19.4 — body-text-as-output template. Surface the template at compile
+  // time so the rendered artifact reflects what the skill outputs. Resolved
+  // vars get substituted; unresolved ones render in `${VAR}` form (matches
+  // runtime substituteRuntime's pass-through for unbound refs). Step
+  // ordering: BEFORE "Steps" so the reader sees the contract (output) first.
+  if (parsed.outputTemplate !== null) {
+    out.push("## Tell the user:");
+    out.push(substitute(parsed.outputTemplate, resolved));
+    out.push("");
+  }
   out.push("## Steps (topological order)");
   let stepNum = 1;
   for (const name of order) {
@@ -719,6 +729,11 @@ function renderProse(parsed: ParsedSkill, resolved: Map<string, string>, order: 
   if (resolved.size > 0) {
     out.push("");
     out.push("**Inputs:** " + Array.from(resolved.entries()).map(([k, v]) => `${k} = ${v}`).join("; "));
+  }
+  // v0.19.4 — surface body-text-as-output template in prose format too.
+  if (parsed.outputTemplate !== null) {
+    out.push("");
+    out.push("**Tells the user:** " + substitute(parsed.outputTemplate, resolved));
   }
   for (const name of order) {
     const target = parsed.targets.get(name);
