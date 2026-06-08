@@ -175,12 +175,18 @@ export async function compile(
       `Skill parse errors:\n- ${parsed.parseErrors.join("\n- ")}`,
     );
   }
-  if (parsed.targets.size === 0) {
-    throw new Error(`Skill parsed with zero targets.`);
+  // v0.19.5 — template-only skills are valid (body template + inputs, no
+  // compute block). Per c7ddfc50 design ("strip the compute block → still
+  // a valid skill that emits the template"). Closes Perry's `9d0a5e7d`
+  // dogfood finding. The structural requirement: at least one of (a) a
+  // target with ops, (b) a non-empty body template. Lint `no-targets`
+  // enforces the same shape at tier-1.
+  if (parsed.targets.size === 0 && parsed.outputTemplate === null) {
+    throw new Error(`Skill parsed with zero targets and no body-text-as-output template.`);
   }
-  if (parsed.entryTarget === null) {
+  if (parsed.targets.size > 0 && parsed.entryTarget === null) {
     throw new Error(
-      `Skill has no entry target (missing \`default:\` line and no targets defined).`,
+      `Skill has no entry target (missing \`default:\` line).`,
     );
   }
 
@@ -254,7 +260,10 @@ export async function compile(
     // (We can't know without loading; just emit a hint.)
   }
 
-  const order = toposort(parsed.targets, parsed.entryTarget);
+  // v0.19.5 — template-only skills have zero targets; skip toposort and
+  // run with empty order. The runtime walks an empty target list and
+  // renders the body template at the end of execute() as canonical output.
+  const order = parsed.targets.size === 0 ? [] : toposort(parsed.targets, parsed.entryTarget!);
 
 
   // Default output declaration when `# Output:` is absent.

@@ -343,14 +343,21 @@ const PARSE_ERROR: LintRule = {
 const NO_TARGETS: LintRule = {
   id: "no-targets",
   severity: "error",
-  description: "Skill defines zero targets.",
-  remediation: "Declare at least one target. A target is a name + `:` + indented op lines.",
+  description: "Skill defines zero targets AND no body-text-as-output template.",
+  remediation: "Either declare at least one target (a name + `:` + indented op lines), or author a body-text-as-output template (prose between frontmatter and where targets would go). A template-only skill is valid — the template IS the work; the runtime renders it against `# Vars:` inputs.",
   check: (ctx) => {
-    if (ctx.parsed.targets.size === 0 && ctx.parsed.parseErrors.length === 0) {
+    // A skill needs at least one of: (1) a target with ops, or (2) a
+    // body-text-as-output template. Per c7ddfc50 design intent ("strip
+    // the compute block → still a valid skill that emits the template"),
+    // a template-only skill is the simplest authorability win — the
+    // template IS the work. Closes Perry's `9d0a5e7d` dogfood finding.
+    const hasTargets = ctx.parsed.targets.size > 0;
+    const hasTemplate = ctx.parsed.outputTemplate !== null;
+    if (!hasTargets && !hasTemplate && ctx.parsed.parseErrors.length === 0) {
       return [{
         rule: "no-targets",
         severity: "error",
-        message: "Skill defines no targets. A skill needs at least one target with ops.",
+        message: "Skill defines no targets and no body-text-as-output template. A skill needs either at least one target with ops, or a body template (prose between frontmatter and where targets would go).",
       }];
     }
     return [];

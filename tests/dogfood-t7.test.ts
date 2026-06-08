@@ -24,8 +24,8 @@ const REPO_ROOT = join(__dirname, "..");
 const PACKAGE_JSON = JSON.parse(readFileSync(join(REPO_ROOT, "package.json"), "utf8")) as Record<string, unknown>;
 
 describe("T7 — package.json polish", () => {
-  it("1. version is 0.19.4 (body-text-as-output template: skill body prose between frontmatter and first target IS the declarative output, rendered via substituteRuntime, populating canonical output across all # Output: kinds. Complementary channels — template = canonical output, emit() = transcript. Pin 4 lookahead disambiguation (content-after-colon = template; bare `word:` alone = ambiguous; indented op-block confirms target). 4 lints: tier-1 unset-template-var + tier-2 template-looks-like-target + tier-3 body-template-detected + tier-3 emit-with-template. 34 new tests + live HTTP probe + edge cases.)", () => {
-    expect(PACKAGE_JSON["version"]).toBe("0.19.4");
+  it("1. version is 0.19.5 (HOTFIX — template-only skills now valid per Perry's 9d0a5e7d dogfood finding. The original c7ddfc50 design intent — 'strip the compute block → still a valid skill that emits the template' — was contradicted by 3 sites: no-targets lint, compile.ts zero-targets guard, compile.ts no-entry-target guard. Now: a skill is valid if it has EITHER a target with ops OR a body-text-as-output template. Bundled hello-world simplified from noop-target ceremony to pure template-only shape. +6 regression tests.)", () => {
+    expect(PACKAGE_JSON["version"]).toBe("0.19.5");
   });
 
   it("2. main + types + bin + engines.node ≥ 22.5 declared", () => {

@@ -622,6 +622,95 @@ default: run
 });
 
 // ────────────────────────────────────────────────────────────────────────
+// 11b. Template-only skills (v0.19.5 hotfix — Perry's 9d0a5e7d)
+// ────────────────────────────────────────────────────────────────────────
+//
+// Template-only skill = body template + `# Vars:` inputs + NO compute
+// block. The original c7ddfc50 design said "strip the compute block →
+// still a valid skill that emits the template." v0.19.4 shipped with
+// three sites rejecting this: no-targets lint, compile.ts zero-targets
+// guard, and compile.ts no-entry-target guard. Perry's dogfood caught
+// it. These tests pin the template-only shape end-to-end.
+
+describe("v0.19.5 — template-only skills (no compute block) are valid", () => {
+  const minimalCtx = () => ({
+    agentId: "test-agent",
+    registry: new Registry(),
+  });
+
+  it("parser accepts template-only skill (targets.size === 0, outputTemplate set)", () => {
+    const src = `# Skill: hello
+# Vars: WHO=world
+
+Hello, \${WHO}!
+`;
+    const p = parse(src);
+    expect(p.parseErrors).toEqual([]);
+    expect(p.targets.size).toBe(0);
+    expect(p.outputTemplate).toBe("Hello, ${WHO}!");
+  });
+
+  it("no-targets lint does NOT fire when a template is present", async () => {
+    const src = `${APPROVED}
+# Skill: template-only
+# Vars: WHO=world
+
+Hello, \${WHO}!
+`;
+    const r = await lint(src);
+    expect(r.findings.find((x) => x.rule === "no-targets")).toBeUndefined();
+  });
+
+  it("no-targets lint STILL fires when neither template nor target present", async () => {
+    const src = `${APPROVED}
+# Skill: empty
+# Vars: ()
+`;
+    const r = await lint(src);
+    const f = r.findings.find((x) => x.rule === "no-targets");
+    expect(f).toBeDefined();
+    expect(f!.severity).toBe("error");
+  });
+
+  it("compile accepts template-only skill (no targets, no entry)", async () => {
+    const src = `${APPROVED}
+# Skill: template-only-compile
+# Vars: WHO=world
+
+Hello, \${WHO}!
+`;
+    const r = await compile(src, { inputs: { WHO: "Scott" } });
+    expect(r.parsed.targets.size).toBe(0);
+    expect(r.targetOrder).toEqual([]);
+    expect(r.output).toMatch(/Tell the user:[\s\S]*?Hello, Scott!/);
+  });
+
+  it("runtime executes template-only skill end-to-end", async () => {
+    const src = `# Skill: template-only-run
+# Vars: WHO=world
+
+Hello, \${WHO}!
+`;
+    const parsed = parse(src);
+    const r = await execute(parsed, { WHO: "Perry" }, [], minimalCtx());
+    expect(r.outputs.text).toBe("Hello, Perry!");
+    expect(r.errors).toEqual([]);
+  });
+
+  it("bundled hello-world.skill.md is template-only after migration", async () => {
+    const { readFileSync } = await import("node:fs");
+    const src = readFileSync(
+      "/Users/scotts/Development/skillscript/examples/skillscripts/hello-world.skill.md",
+      "utf-8",
+    );
+    const p = parse(src);
+    expect(p.parseErrors).toEqual([]);
+    expect(p.targets.size).toBe(0);
+    expect(p.outputTemplate).toContain("Hello, ${WHO}!");
+  });
+});
+
+// ────────────────────────────────────────────────────────────────────────
 // 12. e2e — compile + execute + canonical output reaches caller
 // ────────────────────────────────────────────────────────────────────────
 

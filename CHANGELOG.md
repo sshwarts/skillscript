@@ -1,5 +1,82 @@
 # Changelog
 
+## 0.19.5 — 2026-06-08 — HOTFIX — Template-only skills now valid (closes Perry's 9d0a5e7d dogfood finding)
+
+v0.19.4 shipped a contradiction: the c7ddfc50 design intent was *"strip
+the compute block → still a valid skill that emits the template,"* but
+three sites in the codebase rejected zero-target template-only skills:
+
+1. **`no-targets` lint** (tier-1) — fired unconditionally when
+   `parsed.targets.size === 0`, regardless of whether a template was
+   present.
+2. **`compile.ts` zero-targets guard** — threw `"Skill parsed with zero
+   targets"`.
+3. **`compile.ts` no-entry-target guard** — threw `"Skill has no entry
+   target"` (entryTarget is null when there are no targets).
+
+Result: the simplest authorability case — `hello-world` with `# Vars: WHO=world`
+and just `Hello, ${WHO}!` as the body — failed to compile. Authors hit
+the contradiction immediately, and the v0.19.4 migrated `hello-world`
+itself had a `$set _ = "noop"` workaround I'd unconsciously added to
+make the corpus compile — exactly the ceremony the feature was meant
+to remove.
+
+Perry's dogfood (rewriting `hello-world` and `perry-ping` against the
+shipped v0.19.4 runtime) caught it. Reported in `9d0a5e7d`.
+
+### The fix
+
+A skill is valid if it has **at least one of**:
+- A target with ops, OR
+- A non-empty body-text-as-output template.
+
+All three rejection sites updated to honor this. Runtime path was
+already correct — `execute()` walks an empty target list cleanly and
+renders the template at the end as canonical output.
+
+### What changed
+
+- `src/lint.ts` — `no-targets` rule updated to require BOTH targets
+  empty AND template null before firing.
+- `src/compile.ts` — zero-targets guard now allows `outputTemplate !== null`;
+  no-entry-target guard scoped to `targets.size > 0` (entryTarget being
+  null is correct for template-only skills); `toposort` skipped when no
+  targets.
+- `examples/skillscripts/hello-world.skill.md` + `scaffold/skills/hello-world.skill.md`
+  — removed the `$set _ = "noop"` ceremony. Now pure template:
+
+```
+# Skill: hello-world
+# Vars: WHO=world
+
+Hello, ${WHO}!
+Your install is healthy. Try skill-store-roundtrip + data-store-roundtrip next to verify substrate wiring.
+```
+
+- `tests/v0.19.4-output-template.test.ts` — 6 new regression tests
+  covering parser + lint + compile + runtime + bundled corpus for the
+  template-only path.
+
+1870 total tests (+6 net new).
+
+### Migration
+
+No migration required. Pre-v0.19.5 skills (with or without templates,
+all of which had at least one target) continue to work unchanged. The
+fix unlocks the simplest case — template-only skills — which v0.19.4
+rejected.
+
+### Bug-class lesson
+
+v0.19.4 was the canonical "design intent → implementation contradiction
+shipped" case. My v0.19.4 unit tests all had at least a `$set _ = "noop"`
+target; I never tested the template-only shape the design promised.
+Perry's dogfood (live re-test against shipped runtime) flushed it. The
+test surface added in v0.19.5 closes the gap. See banked discipline
+memory `69e0f91d` — "when adding a typed field to a shared type, audit
+ALL consumers." The simplest-case test for any new shape is also worth
+explicitly pinning.
+
 ## 0.19.4 — 2026-06-08 — Body-text-as-output template (declarative output, no emit ceremony)
 
 A skill's body text — the prose between the frontmatter and the first
