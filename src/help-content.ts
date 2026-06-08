@@ -305,7 +305,7 @@ execute_skill(name="extract-json-number", JSON_BLOB="\${RAW}", FIELD_PATH="total
 emit(text="Extracted: \${RESULT.outputs.text}")
 \`\`\`
 
-**v0.17.3 — Returns filter.** \`R.final_vars\` is filtered to the called skill's \`# Returns: X, Y, Z\` declaration. Skills without \`# Returns:\` declared export nothing from \`final_vars\` — the caller sees \`outputs\` + \`transcript\` + execution metadata, but no internal vars. Internal scratch (large JSON, intermediate computations, debug values) stays local to the child and never serializes into the caller's \`R\`. To expose a value for caller consumption, declare it in the called skill's \`# Returns:\` header.
+**Returns filter.** \`R.final_vars\` is filtered to the called skill's \`# Returns: X, Y, Z\` declaration. Skills without \`# Returns:\` declared export nothing from \`final_vars\` — the caller sees \`outputs\` + \`transcript\` + execution metadata, but no internal vars. Internal scratch (large JSON, intermediate computations, debug values) stays local to the child and never serializes into the caller's \`R\`. To expose a value for caller consumption, declare it in the called skill's \`# Returns:\` header.
 
 \`name\` is the canonical kwarg, aligning with \`skill_read({name})\` / \`skill_write({name})\` / \`skill_status({name})\`. \`skill_name\` is accepted as a silent back-compat alias.
 
@@ -446,7 +446,7 @@ Skill files open with \`# Key: value\` headers. Order isn't significant.
 - \`# Vars: NAME=default, OTHER\` — declared variables. \`NAME=default\` provides a default; bare \`NAME\` is required at invocation. Quoted defaults (\`NAME="hello world"\`) strip one matched layer of surrounding quotes at parse time — quoted-spaced values bind correctly; bare values bind unchanged.
 - \`# Returns: X, Y, Z\` — declared export surface for \`execute_skill\` composition. Names that propagate from this skill's \`final_vars\` into the caller's bound \`R\`. Internal scratch vars NOT listed here stay local — never serialized into the caller's result. Skills without \`# Returns:\` export nothing from \`final_vars\` (outputs + transcript + metadata still flow). Symmetric with \`# Vars:\` (input surface ↔ output surface).
 - \`# Triggers: cron: 0 9 * * *, event: my-event\` — autonomous-dispatch sources. Two primitives: \`cron\` (time-based) and \`event\` (HTTP POST \`/event\` ingress, named registration). Comma-separated entries split by source-keyword boundary; cron expressions with commas (\`30,45 9 * * 1-5\`) parse correctly.
-- \`# Output: text | agent: <name> | template: <name> | file: path | none\` — output routing. Five kinds, all substrate-neutral. **Two substrate-neutral lifecycle hooks**: \`agent: <name>\` routes via AgentConnector as augment-kind delivery; \`template: <name>\` routes as template-kind delivery (receiving agent executes the rendered playbook). **Output content source** (v0.19.4): if the skill has a body-text-as-output template (prose between frontmatter and first target), the rendered template populates the canonical output payload. Otherwise: agent/template kinds default to joined emissions; text/file kinds default to the last-bound variable value, falling back to the emissions array. Body template + emit() are complementary — template = canonical output, emit() = transcript. **For substrate-specific delivery destinations** (Slack, WhatsApp, Discord, pagerduty, custom dashboards, etc.) — that's contract-between-the-skill-and-the-substrate territory, downstream of the language. Two paths: (1) \`$ <connector>.<tool> ...\` inside the skill body to dispatch through an adopter-wired MCP connector, or (2) deliver via \`agent: <name>\` to an agent whose AgentConnector decides how to surface the result.
+- \`# Output: text | agent: <name> | template: <name> | file: path | none\` — output routing. Five kinds, all substrate-neutral. **Two substrate-neutral lifecycle hooks**: \`agent: <name>\` routes via AgentConnector as augment-kind delivery; \`template: <name>\` routes as template-kind delivery (receiving agent executes the rendered playbook). **Output content source**: if the skill has a body-text-as-output template (prose between frontmatter and first target), the rendered template populates the canonical output payload. Otherwise: agent/template kinds default to joined emissions; text/file kinds default to the last-bound variable value, falling back to the emissions array. Body template + emit() are complementary — template = canonical output, emit() = transcript. **For substrate-specific delivery destinations** (Slack, WhatsApp, Discord, pagerduty, custom dashboards, etc.) — that's contract-between-the-skill-and-the-substrate territory, downstream of the language. Two paths: (1) \`$ <connector>.<tool> ...\` inside the skill body to dispatch through an adopter-wired MCP connector, or (2) deliver via \`agent: <name>\` to an agent whose AgentConnector decides how to surface the result.
 - \`# OnError: <fallback-skill-name>\` — error-handler skill invoked when an op fails and no target-level \`else:\` catches.
 - \`# Autonomous: true | false\` — declarative authorship intent for unattended-execution skills (cron-fired, agent-fired, etc.). Silences \`unconfirmed-mutation\` lint warnings for the whole skill (since the user-confirmation pattern doesn't apply to autonomous skills); reserved as the canonical autonomous-skill category marker for future rules + scheduling defaults + discovery surfaces. Omitted = interactive (default).
 
@@ -474,7 +474,7 @@ Skill files open with \`# Key: value\` headers. Order isn't significant.
 # Triggers: cron: 0 7 * * *, event: drift-detected
 \`\`\`
 
-Trigger sources (v0.19.0 — simplified to two primitives): \`cron\` (poll-based) and \`event\` (HTTP \`/event\` ingress with named registration; an external service POSTs to drive the skill). Removed sources (\`session\`, \`agent-event\`, \`file-watch\`, \`sensor\`) are now adapter responsibilities — external code POSTs \`/event\` when relevant.
+Trigger sources: two primitives — \`cron\` (poll-based) and \`event\` (HTTP \`/event\` ingress with named registration; an external service POSTs to drive the skill). Anything substrate-coupled — session lifecycle, agent events, file-watch, sensors — is adapter responsibility: external code POSTs \`/event\` when relevant.
 
 ## Ambient variables (auto-populated by the runtime)
 
@@ -753,7 +753,7 @@ The bound \`-> R\` carries the child's execution record into the host's scope:
 - \`\${R.final_vars.FIELD}\` — the child's declared exports (see \`# Returns:\` below)
 - \`\${R.errors}\`, \`\${R.target_order}\` — execution metadata
 
-**Declaring what gets exported (v0.17.3).** The child skill controls what's visible to the caller via its \`# Returns: X, Y, Z\` frontmatter header. Internal scratch (large JSON, intermediate computations) stays local; only declared names propagate into \`R.final_vars\`. Skills without \`# Returns:\` export nothing from \`final_vars\` — outputs + transcript + metadata still flow.
+**Declaring what gets exported.** The child skill controls what's visible to the caller via its \`# Returns: X, Y, Z\` frontmatter header. Internal scratch (large JSON, intermediate computations) stays local; only declared names propagate into \`R.final_vars\`. Skills without \`# Returns:\` export nothing from \`final_vars\` — outputs + transcript + metadata still flow.
 
 \`\`\`
 # Skill: get-weather
@@ -874,7 +874,7 @@ Three tiers per ERD §3:
 
 ## Tier-2 (warning)
 
-- \`deprecated-question\` — bare \`?\` op (deprecated v1; compile-error in v1.x)
+- \`deprecated-question\` — bare \`?\` op (deprecated; compile-error path)
 - \`deprecated-substitution-shape\` — \`$(VAR)\` substitution form compiles but warns; rewrite to \`\${VAR}\`.
 - \`unsafe-shell-ambiguous-subst\` — \`$(NAME)\` inside \`shell(command=..., unsafe=true)\` body that isn't a declared variable; collides with bash command-sub syntax
 - \`unsafe-shell-op\` — \`shell(command=..., unsafe=true)\` present; requires human review every time
@@ -890,7 +890,7 @@ Three tiers per ERD §3:
 
 - \`no-default-target\` — no \`default:\` declaration (relevant for data skills only; procedural skills hit tier-1)
 - \`duplicate-skill-name\` — name collides with an existing stored skill
-- \`plugin-collision\` — placeholder for v1.x plugin-loader name conflicts
+- \`plugin-collision\` — placeholder for future plugin-loader name conflicts
 - \`deferred-skill-reference\` — composition ref (\`inline\` / \`$ execute_skill\` / \`# Templates:\`) targets a skill not currently in the SkillStore; resolution deferred to execute time. Confirms the forward-reference path is engaged; clears once the target is stored.
 - \`unparsed-json-field-access\` — op text contains \`$(VAR|json_parse).field\`; the \`|json_parse\` filter is no longer supported. Use \`$ json_parse $(VAR) -> P\` then \`$(P.field)\`.
 - \`object-iteration-advisory\` — \`foreach IT in \${VAR}\` iterates a bound variable whose origin is a \`$\` MCP tool output, without a \`.field\` accessor. MCP tools commonly wrap arrays in an envelope object (\`.items\`, \`.results\`, \`.issuesPage\`, \`.data\`, \`.records\`). Check the tool's response shape; rewrite as \`foreach IT in \${VAR.items}\` (or the correct field).
