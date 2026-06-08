@@ -15,7 +15,7 @@
 
 import { execSync } from "node:child_process";
 import { readFileSync } from "node:fs";
-import { dirname, join, normalize } from "node:path";
+import { dirname, join, posix } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const REPO_ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
@@ -71,8 +71,11 @@ function main() {
   //  - it names a directory under which at least one file ships
   //    (e.g. "examples/" or "examples" → any ship path starts with "examples/")
   const shipArray = Array.from(ship);
+  // `npm pack` reports POSIX paths on every platform; markdown links are
+  // authored in POSIX form. Use `posix.normalize` so Windows runners don't
+  // produce backslash-normalized strings that fail the set lookup.
   const resolves = (linkPath) => {
-    const normalized = normalize(linkPath);
+    const normalized = posix.normalize(linkPath);
     if (ship.has(normalized)) return true;
     const dirPrefix = normalized.endsWith("/") ? normalized : normalized + "/";
     return shipArray.some((p) => p.startsWith(dirPrefix));
