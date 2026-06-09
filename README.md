@@ -59,14 +59,11 @@ A skillscript skill is a declarative recipe, a small program with a dependency D
 # Description: The canonical first-run example.
 # Vars: WHO=world
 
-greet:
-    emit(text="Hello, ${WHO}!")
-    emit(text="Welcome to Skillscript.")
-
-default: greet
+Hello, ${WHO}!
+Welcome to Skillscript.
 ```
 
-That's a complete, runnable skill. Five lines, no dependencies, no boilerplate. The same shape scales to multi-stage DAGs that classify inputs, dispatch to LLMs, query data stores, branch on conditions, and orchestrate sub-agents, all in the same declarative grammar.
+That's a complete, runnable skill — and the body text **is** the output. No target, no boilerplate, no `emit()` ceremony: the runtime renders the body against the skill's variables and publishes it. The same shape scales to multi-stage DAGs that classify inputs, dispatch to LLMs, query data stores, branch on conditions, and orchestrate sub-agents, all in the same declarative grammar.
 
 ## Why a new language
 
@@ -119,7 +116,19 @@ Every skillscript skill is one of three shapes, determined by the relationship t
 
 The kinds compose. A Headless monitor fires on cron, evaluates a condition, and routes into an Augmenting skill that wakes an agent with context, which itself references a Template skill for the agent to execute.
 
-The three kinds describe the skill's *role* (who consumes the output). Orthogonal to that is the skill's *delivery channel* — the actual op that ships the result. Three channels are first-class: `emit(text="...")` for embedded prompt-context, `$ data_write content="..." addressed_to="<agent>"` for data handoff, and `file_write(path="...", content="...")` for file handoff. A single skill can use any combination. See the [Language Reference](docs/language-reference.md) §1 for the full taxonomy.
+The three kinds describe the skill's *role* (who consumes the output). Orthogonal to that is *how* the result ships. The default is the **body-text output template**: any non-op text in the skill body is rendered against the skill's final variables and published as its canonical output — no ceremony, as in the `hello` skill above. For what the template can't express, three explicit delivery ops are first-class: `emit(text="...")` for incremental or per-item output, `$ data_write content="..." recipients=[...]` for data handoff, and `file_write(path="...", content="...")` for file handoff. Template and ops coexist — the body template is the canonical output, `emit` lines are additional. See the [Language Reference](docs/language-reference.md) §1 for the full taxonomy.
+
+The canonical use for `emit` is per-item output inside a loop, where there's no single template to render — one line per iteration:
+
+```
+# Vars: TICKETS=[...]
+
+process:
+    foreach T in ${TICKETS}:
+        emit(text="${T.id}: ${T.urgency}")
+
+default: process
+```
 
 ### Local models as tools for the frontier
 
@@ -134,14 +143,17 @@ The cost shape that follows: routine work runs at local-model cost (free at scal
 A skill can invoke another skill via `execute_skill(...)`:
 
 ```
+Extracted: ${RESULT.final_vars.VALUE|trim}
+
 parent:
-    execute_skill(skill_name="extract-json-number", JSON_BLOB="${RAW}", FIELD_PATH="total_count") -> RESULT
-    emit(text="Extracted: ${RESULT.final_vars.VALUE|trim}")
+    execute_skill(name="extract-json-number", JSON_BLOB="${RAW}", FIELD_PATH="total_count") -> RESULT
+
+default: parent
 ```
 
 The child skill runs to completion against the runtime's wired connectors, returns its full execution record (final vars, transcript, outputs), and binds to the parent's named variable. Field access on the bound result (`${RESULT.final_vars.X}`) lets the parent reach into whatever the child produced.
 
-Composition is what makes skill libraries accumulate. Utility skills (`extract-json-number`, `summarize-thread`, `classify-urgency`) get authored once and orchestrated forever. The composition primitive is symmetric across the MCP surface — `execute_skill({skill_name, inputs?, mechanical?})` works the same way at the runtime entry point as it does inside a skill body. `mechanical: true` previews the dispatch graph without firing real ops, propagating through nested composition calls. TestFlight your multi-skill chains before commitment.
+Composition is what makes skill libraries accumulate. Utility skills (`extract-json-number`, `summarize-thread`, `classify-urgency`) get authored once and orchestrated forever. The composition primitive is symmetric across the MCP surface — `execute_skill({name, inputs?, mechanical?})` works the same way at the runtime entry point as it does inside a skill body. `mechanical: true` previews the dispatch graph without firing real ops, propagating through nested composition calls. TestFlight your multi-skill chains before commitment.
 
 ### Waking agents
 
@@ -175,7 +187,7 @@ This is what makes *"Headless monitor → wake agent with context"* a real compo
 
 Skills have an execution model orthogonal to their kind. A **dynamic skill** requires the Skillscript runtime to execute — the runtime walks the DAG, fires dispatches against wired connectors, threads outputs. A **static skill** compiles to a portable artifact that any agent capable of reading prose can execute without the runtime.
 
-The static case matters for shareable artifacts. A skill whose body has only `emit(...)` ops (no `$ tool` MCP dispatches, no `shell(...)`, no `file_read`/`file_write`) compiles to a self-contained recipe. Email it, post it, hand it to a frontier agent in a different environment — they read the compiled output and execute the steps using their own tools. The skill becomes the deliverable.
+The static case matters for shareable artifacts. A skill whose body is just an output template or `emit(...)` lines — no `$ tool` MCP dispatches, no `shell(...)`, no `file_read`/`file_write` — compiles to a self-contained recipe. Email it, post it, hand it to a frontier agent in a different environment — they read the compiled output and execute the steps using their own tools. The skill becomes the deliverable.
 
 Template-kind skills are the canonical static shape; their compiled artifact is the prompt the receiving agent acts on. Headless and Augmenting skills are usually dynamic. The axes are independent — author the combination the work calls for.
 
@@ -185,12 +197,9 @@ Template-kind skills are the canonical static shape; their compiled artifact is 
 # Status: Approved
 # Vars: TICKETS_JSON=[...]
 
-walk:
-    emit(text="For each ticket in the input, classify urgency as critical/normal/low.")
-    emit(text="For critical tickets, suggest immediate owner from the runbook.")
-    emit(text="Input: ${TICKETS_JSON}")
-
-default: walk
+For each ticket in the input, classify urgency as critical/normal/low.
+For critical tickets, suggest immediate owner from the runbook.
+Input: ${TICKETS_JSON}
 ```
 
 That compiles to a procedure + data bundle a recipient can run anywhere.
@@ -223,18 +232,13 @@ If that bet is wrong, skillscript stays a nice niche tool. If it's right, skills
 # Install (global for single-instance use)
 npm install -g skillscript-runtime
 
-# Author your first skill — body text IS the output
+# Author your first skill — body text IS the output, no target needed
 mkdir -p ./skills && cat > ./skills/hello.skill.md <<'EOF'
 # Skill: hello
 # Status: Approved
 # Vars: WHO=world
 
 Hello, ${WHO}!
-
-greet:
-    $set _ = "noop"
-
-default: greet
 EOF
 
 # Start the runtime + dashboard
@@ -344,7 +348,7 @@ Two credential shapes:
 
 ## CLI
 
-15 commands cover the full authoring + ops lifecycle:
+The CLI covers the full authoring + ops lifecycle:
 
 | Command | Purpose |
 |---|---|
@@ -368,7 +372,7 @@ Run `skillfile <command> --help` for per-command flags. Use `serve` for producti
 
 ## MCP server surface
 
-The runtime exposes 17 tools over MCP (HTTP at `/rpc`) for cold-client authoring + observability. v0.19.0 also serves `POST /event` for external HTTP-triggered skills when `SKILLSCRIPT_EVENT_INGRESS_ENABLED=true`:
+The runtime exposes its tools over MCP (HTTP at `/rpc`) for cold-client authoring + observability. It also serves `POST /event` for external HTTP-triggered skills when `SKILLSCRIPT_EVENT_INGRESS_ENABLED=true`:
 
 | Category | Tools |
 |---|---|
@@ -377,10 +381,10 @@ The runtime exposes 17 tools over MCP (HTTP at `/rpc`) for cold-client authoring
 | Authoring | `lint_skill`, `compile_skill` |
 | Composition | `execute_skill` |
 | Triggers | `list_triggers`, `register_trigger`, `unregister_trigger`, `set_trigger_enabled` |
-| Observability | `health_metrics`, `blocked_shell_attempts` (v0.18.9) |
+| Observability | `health_metrics`, `blocked_shell_attempts` |
 | Discovery | `runtime_capabilities`, `help` |
 
-This is the "agent reaches MCP" path — an external agent (Claude, GPT, anything that speaks MCP) can author, validate, and deploy skills entirely over the wire. `help()` is the entry point — call with no arguments for a ~500-token quickstart, or with `{topic: "ops" | "frontmatter" | "examples" | "connectors" | "lint-codes"}` for deeper sections. `execute_skill` runs a skill end-to-end against the runtime's connectors in either of two modes: `{skill_name}` invokes a stored skill (subject to the v0.9.0 hash-token approval gate); `{source}` runs an ad-hoc inline body that's never persisted (one-off scripting without polluting the store). Both modes honor `mechanical: true` for dispatch-graph preview, and (v0.14.1) enforce the mutation gate at runtime so `$ data_write` / `file_write` without `# Autonomous: true` / `??` / `approved=...` throw `UnconfirmedMutationError` regardless of which mode invoked them.
+This is the "agent reaches MCP" path — an external agent (Claude, GPT, anything that speaks MCP) can author, validate, and deploy skills entirely over the wire. `help()` is the entry point — call with no arguments for a ~500-token quickstart, or with `{topic: "ops" | "frontmatter" | "examples" | "connectors" | "lint-codes"}` for deeper sections. `execute_skill` runs a skill end-to-end against the runtime's connectors in either of two modes: `{name}` invokes a stored skill (subject to the hash-token approval gate); `{source}` runs an ad-hoc inline body that's never persisted (one-off scripting without polluting the store). Both modes honor `mechanical: true` for dispatch-graph preview, and enforce the mutation gate at runtime so `$ data_write` / `file_write` without `# Autonomous: true` / `??` / `approved=...` throw `UnconfirmedMutationError` regardless of which mode invoked them.
 
 ## Examples
 
