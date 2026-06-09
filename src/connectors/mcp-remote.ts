@@ -330,7 +330,16 @@ export class RemoteMcpConnector implements McpConnector {
     return new Promise((resolve, reject) => {
       const timeoutHandle = setTimeout(() => {
         this.pending.delete(id);
-        reject(new RemoteMcpDispatchError(`${method} timed out after ${timeoutMs}ms`));
+        // v0.19.9 — clearer init-timeout error. A timed-out `initialize` is
+        // very often a framing mismatch (child speaks newline-delimited but
+        // we sent LSP, or vice versa) — the child can't parse the request
+        // and never replies. Closes the adopter `14609652` finding 2:
+        // mcp-remote (and most MCP stdio servers per spec) use
+        // newline-delimited; default 'lsp' framing silently hangs.
+        const hint = method === "initialize"
+          ? ` Framing in use: '${this.framing}'. If the server speaks the other framing (e.g., the npm 'mcp-remote' package and most spec-compliant MCP stdio servers use newline-delimited), set "framing": "newline" or "framing": "lsp" explicitly in this connector's config. Other causes: child process exited before handshake (check spawn logs), wrong --header / auth, server requires capabilities the client didn't advertise.`
+          : "";
+        reject(new RemoteMcpDispatchError(`${method} timed out after ${timeoutMs}ms.${hint}`));
       }, timeoutMs);
       this.pending.set(id, { resolve, reject, timeoutHandle });
       this.child!.stdin?.write(encoded, (err) => {

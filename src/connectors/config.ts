@@ -372,6 +372,26 @@ export function loadConnectorsConfig(opts: LoadConnectorsConfigOpts): LoadConnec
       continue;
     }
 
+    // v0.19.9 — SECURITY: misplaced `allowed_tools` guard. Closes the
+    // adopter `14609652` silent-allow-all bypass: writing the allowlist
+    // inside `config:` (the natural intuitive placement — it's a
+    // per-connector restriction) instead of at the entry top-level
+    // silently allows ALL tools, no lint flag, no warning, no signal.
+    // Hard-error here because this is a security control; silent-allow-all
+    // on misplacement is the worst-case failure mode (operator wrote an
+    // allowlist with intent to restrict; runtime treats the restriction
+    // as nonexistent). The doc shape is entry-level sibling to `class` /
+    // `config`; refuse to load when we detect the wrong placement.
+    if ((rawConfig as Record<string, unknown>)["allowed_tools"] !== undefined) {
+      errors.push(
+        `connectors.json: entry '${name}' has 'allowed_tools' inside the 'config:' block — that placement is silently ignored. ` +
+        `'allowed_tools' is a per-connector security policy, not connector-class config. Move it to the entry top-level (sibling to 'class' and 'config'):\n` +
+        `  "${name}": { "class": "...", "config": {...}, "allowed_tools": ["tool1", "tool2"] }\n` +
+        `Refused to load to prevent a silent allow-all bypass.`,
+      );
+      continue;
+    }
+
     // v0.4.1 env-block-as-scope: resolve `config.env` against process.env
     // FIRST, then merge into the substitution scope for the rest of the
     // config. Lets authors compose values like:

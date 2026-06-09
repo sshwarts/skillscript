@@ -294,8 +294,10 @@ Per-host MCP connector wiring. Each top-level key (other than `substrate`) defin
     "config": {
       "command": "npx",
       "args": ["mcp-remote", "https://example.youtrack.cloud/mcp"],
+      "framing": "newline",
       "env": { "AUTH_HEADER": "Bearer ${YOUTRACK_TOKEN}" }
-    }
+    },
+    "allowed_tools": ["list_issues", "get_issue", "create_comment"]
   },
 
   "github": {
@@ -310,7 +312,16 @@ Each entry needs:
 
 - **`class`** — a class from the closed-set registry. Today: `RemoteMcpConnector` (stdio-bridged remote MCP). Adopters can register custom classes via `registerConnectorClass()` from their bootstrap.
 - **`config`** — passed to the class's `fromConfig()` factory. Schema is class-specific.
-- **`allowed_tools`** (optional) — per-connector tool allowlist. `undefined` = allow all; `[]` = allow none; listed array = exactly those.
+- **`allowed_tools`** (optional) — per-connector tool allowlist at the entry top-level (sibling to `class` / `config`, NOT inside `config`). `undefined` = allow all; `[]` = allow none; listed array = exactly those. **Placing `allowed_tools` inside the `config:` block is a hard parse error** — the loader refuses to load to prevent a silent allow-all bypass (a security control quietly doing nothing on misplacement is the worst-case failure mode).
+
+#### `RemoteMcpConnector` config — stdio framing
+
+`RemoteMcpConnector` speaks JSON-RPC over the spawned child's stdio. Two framing conventions are supported via the `framing` config key:
+
+- **`"newline"`** — one JSON-RPC message per line, newline-delimited. **This is what `mcp-remote` (the npm package) and most spec-compliant MCP stdio servers use.** Recommended for almost all adopters.
+- **`"lsp"`** (legacy default) — `Content-Length: N\r\n\r\n<body>` per the LSP convention. Only set this if your specific MCP server explicitly uses LSP-style framing.
+
+With the wrong framing, the connector hangs to `init_timeout` because the child can't parse the request. **Set `framing` explicitly in your connector config to avoid the silent hang** — the v0.19.9 init-timeout error message now names framing as a likely cause, but the explicit setting is the durable fix.
 
 ### Credential discipline
 

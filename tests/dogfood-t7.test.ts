@@ -24,8 +24,8 @@ const REPO_ROOT = join(__dirname, "..");
 const PACKAGE_JSON = JSON.parse(readFileSync(join(REPO_ROOT, "package.json"), "utf8")) as Record<string, unknown>;
 
 describe("T7 — package.json polish", () => {
-  it("1. version is 0.19.8 (template-anywhere per Perry's 349a1d49 design — authors' instinct is compute-first-output-last. Pin 4 now applies UNIFORMLY: a column-0 `<name>:` line is a target only if followed by an indented op-block. Otherwise it's template text, regardless of position (top, bottom, or both). Multi-region templates (top AND bottom) raise a parse error — pick one location. 8 regression tests pin the path. Closes Perry's qwen-authorability finding: bottom-placed templates now parse cleanly instead of misparsing as malformed targets.)", () => {
-    expect(PACKAGE_JSON["version"]).toBe("0.19.8");
+  it("1. version is 0.19.9 (connectors.json SECURITY hotfix + scaffold polish per adopter 14609652. Finding 1: misplaced `allowed_tools` inside config: block silently allow-alled — security control quietly nonexistent. Now hard-errors with remediation. Finding 2: scaffold mcp-remote example omitted framing → silent init-timeout hang. Now sets framing: newline explicitly + init-timeout error names framing. Also: Perry's language-reference atoms re-rendered into docs/language-reference.md; connectors.json programmatic-bootstrap doc callout from earlier adopter finding.)", () => {
+    expect(PACKAGE_JSON["version"]).toBe("0.19.9");
   });
 
   it("2. main + types + bin + engines.node ≥ 22.5 declared", () => {

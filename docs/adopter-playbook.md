@@ -140,6 +140,8 @@ $ my_store.search query="customer feedback" region="eu-west" cluster="prod" -> C
 
 This skill body is locked to `my_store` — its specific kwargs (`region`, `cluster`) and response shape. To move to a different substrate, every call site has to be rewritten.
 
+**⚠ Programmatic `bootstrap()` adopters: `connectors.json` is NOT auto-loaded.** The CLI (`skillfile dashboard` / `serve`) discovers and loads `$SKILLSCRIPT_HOME/connectors.json` automatically. The programmatic path does NOT — `bootstrap()` only reads `connectors.json` when you pass `connectorsConfigPath`. Skip it and your `$ name.tool` calls fail at runtime with `unknown-connector` and no hint that the file simply wasn't read. See §"Programmatic bootstrap path" below for the explicit-wiring pattern. (Same CLI-auto-vs-programmatic-explicit asymmetry as `.env` and `SKILLSCRIPT_*` env vars — three instances of the same pattern now.)
+
 ### Picking — the tradeoff
 
 | Aspect | Case 1 (typed) | Case 2 (MCP) |
@@ -199,7 +201,7 @@ Create `skillscript.config.json` in your `$SKILLSCRIPT_HOME`:
 
 Two security knobs that adopters wiring real substrates should know about:
 
-- **Per-connector tool allowlists** — `allowed_tools` on each `connectors.json` MCP connector entry restricts which tools that connector can dispatch. Three-state (`undefined` = allow all, `[]` = allow none, listed = exactly those). Tier-1 `disallowed-tool` lint + runtime defense-in-depth refuse out-of-list dispatch. See `docs/configuration.md` §"Named MCP connector instances" for the JSON shape.
+- **Per-connector tool allowlists** — `allowed_tools` on each `connectors.json` MCP connector entry restricts which tools that connector can dispatch. Three-state (`undefined` = allow all, `[]` = allow none, listed = exactly those). Tier-1 `disallowed-tool` lint + runtime defense-in-depth refuse out-of-list dispatch. **`allowed_tools` belongs at the entry top-level**, sibling to `class` and `config` — NOT inside the `config` block. The loader hard-errors on misplacement (placing it inside `config:` would silently allow-all every tool — the worst-case failure mode for a security control). See `docs/configuration.md` §"Named MCP connector instances" for the JSON shape.
 - **Shell-execution discipline** — `shell(command="...")` runs structured-spawn by default (binary on PATH, whitespace-tokenized argv, no bash). `shell(command="...", unsafe=true)` opts into bash interpretation (pipes, `$VAR`, command substitution) and refuses to fire unless the runtime is configured with `enable_unsafe_shell = true` in `config.toml`. Lint flags every `unsafe=true` op tier-2 to keep audit posture visible. See `scaffold/config.toml` for the documented default + `help({topic:"lint-codes"})` for the `unsafe-shell-disabled` rule.
 
 If you have a custom JSON-instantiable `McpConnector` class, register it with `registerConnectorClass` before loading config:
@@ -289,12 +291,20 @@ Running the audit *after* the break is fine but adopter-unfriendly — operators
 
 ### Programmatic bootstrap path (`bootstrap()` adopters)
 
-The CLI path auto-loads `$SKILLSCRIPT_HOME/.env` and reads `SKILLSCRIPT_SHELL_ALLOWLIST` from `process.env`. The programmatic path (`bootstrap()` from your own embedder code) does NOT auto-load `.env` — that's intentionally CLI-only to keep `bootstrap()` decoupled from the dotenv convention and `SKILLSCRIPT_HOME`.
+**The CLI-auto-vs-programmatic-explicit asymmetry.** The CLI (`skillfile dashboard` / `serve`) does several discovery steps automatically — load `$SKILLSCRIPT_HOME/.env`, read `SKILLSCRIPT_*` env vars, load `$SKILLSCRIPT_HOME/connectors.json`. The programmatic path (`bootstrap()` from your own embedder code) does NOT do any of these automatically. Each surface needs explicit wiring on the programmatic path:
+
+| Surface | CLI path | Programmatic path |
+|---|---|---|
+| `.env` (env vars in a dotfile) | auto-loaded from `$SKILLSCRIPT_HOME/.env` | call `process.loadEnvFile()` yourself BEFORE `bootstrap()` |
+| `SKILLSCRIPT_*` env vars | read from `process.env` automatically | read automatically once env is loaded (v0.18.9+ env fallback) |
+| `connectors.json` (MCP wiring) | auto-discovered at `$SKILLSCRIPT_HOME/connectors.json` | pass `connectorsConfigPath: "/path/to/connectors.json"` to `bootstrap()` |
+
+Skip any of these and you get silent-empty surprises — a missing env var, an undeclared connector, etc. — with no hint that the file wasn't loaded. This is intentional: `bootstrap()` stays decoupled from the dotenv + `SKILLSCRIPT_HOME` convention so embedders can drive every input explicitly. The cost is doc-prominence — three surfaces, all silent-empty on omission, all noted here.
 
 For your shell allowlist to work on the programmatic path, ensure the env var is in `process.env` BEFORE calling `bootstrap()`. Two patterns:
 
 ```typescript
-// Pattern A — load .env yourself before bootstrap
+// Pattern A — load .env yourself + pass connectorsConfigPath
 import { join } from "node:path";
 import { bootstrap } from "skillscript-runtime";
 
@@ -303,14 +313,16 @@ try { process.loadEnvFile(join(home, ".env")); } catch {}  // Node 22+ built-in
 const { mcpServer, scheduler } = bootstrap({
   skillsDir: join(home, "skills"),
   traceDir: join(home, "traces"),
-  // shellAllowlist intentionally omitted → bootstrap reads env (v0.18.9+)
+  connectorsConfigPath: join(home, "connectors.json"),
+  // shellAllowlist intentionally omitted → bootstrap reads env
 });
 
-// Pattern B — pass shellAllowlist explicitly (env-independent)
+// Pattern B — fully explicit (env-independent, no .env, no connectors.json)
 const { mcpServer, scheduler } = bootstrap({
   skillsDir: join(home, "skills"),
   traceDir: join(home, "traces"),
   shellAllowlist: ["curl", "git", "jq"],
+  // No connectorsConfigPath — adopter constructs Registry by hand
 });
 ```
 

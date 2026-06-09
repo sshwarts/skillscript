@@ -49,13 +49,17 @@
 
   "_example_disabled_remote_mcp": {
     "comment": "Uncomment and adapt to wire any remote MCP server. The example shows the stdio-bridged shape used by `mcp-remote` and similar.",
+    "_comment_framing": "framing: 'newline' for mcp-remote and most MCP stdio servers (newline-delimited per the standard MCP stdio spec). Only use 'lsp' (the historical default — Content-Length-framed) if your specific MCP server explicitly uses LSP-style framing. With the wrong framing, the connector hangs to init_timeout with no clear 'wrong framing' signal — set this explicitly.",
+    "_comment_allowed_tools": "allowed_tools is a per-connector SECURITY policy and belongs at the ENTRY top-level (sibling to 'class' and 'config'). Placing it INSIDE 'config:' is now a hard parse error (refused to load) — pre-fix it silently allowed all tools, a security bypass on misplacement.",
     "class": "RemoteMcpConnector",
     "config": {
       "command": "npx",
       "args": ["mcp-remote", "https://example.com/mcp", "--header", "Authorization:${AUTH_HEADER}"],
+      "framing": "newline",
       "env": {
         "AUTH_HEADER": "Bearer ${YOUR_TOKEN_ENV_VAR}"
       }
-    }
+    },
+    "allowed_tools": ["list_issues", "get_issue", "create_comment"]
   }
 }

@@ -1,5 +1,104 @@
 # Changelog
 
+## 0.19.9 — 2026-06-09 — connectors.json SECURITY hotfix + scaffold polish + doc renders
+
+Closes adopter `14609652` — two silent-failure footguns on the
+declarative connectors.json path, one of them a security-control
+bypass.
+
+### Finding 1 (SECURITY) — `allowed_tools` misplaced inside `config:` silently allow-alls
+
+`allowed_tools` is a per-connector security policy parsed at the
+connector entry top-level (sibling to `class` / `config`). When an
+adopter placed it inside the `config:` block (the natural intuitive
+location — it's a per-connector restriction), the loader silently
+dropped it and the connector defaulted to allow-all. No lint flag, no
+runtime refusal, no warning. A tool the operator had EXCLUDED
+dispatched successfully to the remote MCP — security control quietly
+nonexistent.
+
+**Fix**: hard parse error on misplacement. The loader refuses to load
+the connector with a message that names the misplaced field and shows
+the correct shape inline:
+
+```
+connectors.json: entry 'youtrack' has 'allowed_tools' inside the 'config:'
+block — that placement is silently ignored. 'allowed_tools' is a
+per-connector security policy, not connector-class config. Move it to the
+entry top-level (sibling to 'class' and 'config'):
+  "youtrack": { "class": "...", "config": {...}, "allowed_tools": ["tool1", "tool2"] }
+Refused to load to prevent a silent allow-all bypass.
+```
+
+Hard-error (not warn) because a security control silently doing
+nothing is the worst-case failure mode. The operator wrote an
+allowlist with intent to restrict; the loader must refuse rather than
+allow-all when the intent is structurally clear but misplaced.
+
+### Finding 2 — RemoteMcpConfig framing default ≠ mcp-remote's wire format
+
+`RemoteMcpConfig.framing` defaults to `'lsp'` (Content-Length-framed).
+The `mcp-remote` npm package (and most spec-compliant MCP stdio
+servers) speak newline-delimited JSON-RPC. With the wrong framing the
+handshake silently hangs to init-timeout — no clear "wrong framing"
+signal. The scaffold's `_example_disabled_remote_mcp` (literally an
+`mcp-remote` example) omitted `framing` entirely, so a copy-paste
+adopter inherited the wrong default + silent hang.
+
+**Fix**:
+1. **Scaffold sets `framing: "newline"` explicitly** in the
+   mcp-remote example, with an inline comment naming the default's
+   historical bias and when to use `"lsp"`.
+2. **Init-timeout error message names framing** as a likely cause —
+   when `initialize` times out, the error now reports the framing in
+   use and points at the alternative as a common fix.
+3. Did NOT flip the default (kept `lsp`) to avoid a breaking change
+   for adopters who configured `lsp` implicitly. The explicit scaffold
+   + clearer error close the immediate footgun; a default-flip can
+   ship later with a deliberate audit.
+
+### Bonus — Perry's language-reference atoms rendered
+
+`docs/language-reference.md` re-rendered from Perry's AMP atom set
+(authoritative on the v0.19.0 trigger collapse + the v0.19.4-v0.19.8
+body-text-as-output template arc). Previously stale on both. +181 /
+-159 lines. No code change; doc-only.
+
+### Bonus — connectors.json programmatic-bootstrap callout
+
+Closes the earlier adopter doc-prominence finding (third instance of
+the CLI-auto-vs-programmatic-explicit pattern, alongside `.env` and
+`SKILLSCRIPT_*` env vars). Case 2 wiring now has a ⚠ callout flagging
+that programmatic `bootstrap()` adopters must pass
+`connectorsConfigPath` (CLI auto-discovers; programmatic does not).
+§"Programmatic bootstrap path" generalized to a 3-surface table.
+
+### What changed
+
+- `src/connectors/config.ts` — misplaced-`allowed_tools` hard-error guard
+- `src/connectors/mcp-remote.ts` — init-timeout error names framing
+- `scaffold/connectors.json` — sets `framing: "newline"`, demonstrates
+  correct `allowed_tools` placement at entry top-level
+- `docs/configuration.md` — RemoteMcpConnector framing section + clarified
+  `allowed_tools` placement rule
+- `docs/adopter-playbook.md` — connectors.json + framing callouts
+- `docs/language-reference.md` — re-rendered from Perry's atoms
+- `tests/v0.19.9-connectors-gotchas.test.ts` — 5 regression tests
+- `tests/v0.4.0.test.ts` — forward-compat test updated (allowed_tools
+  is no longer a generic "unknown field" — it's intentionally guarded)
+
+1888 total tests (+5 net new).
+
+### Migration
+
+No migration required for skills. Adopters running pre-v0.19.9
+connectors.json with `allowed_tools` correctly at the entry top-level:
+no change. Adopters with `allowed_tools` MISPLACED inside `config:`:
+the loader will now refuse with a clear message — move the field to
+the entry top-level to fix. (If the misplacement was silent allow-all
+that the operator intended as restriction, the security posture is
+now strictly tighter.)
+
 ## 0.19.8 — 2026-06-08 — Template-anywhere (closes Perry's 349a1d49 — bottom-placed templates now parse)
 
 Authors' instinct is **compute first, output last** — every language they

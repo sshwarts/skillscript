@@ -113,9 +113,14 @@ describe("v0.4.0 — loadConnectorsConfig (loader basics)", () => {
     expect(result.errors[0]).toMatch(/Environment variable.*not set/);
   });
 
-  it("permissive on unknown fields (v0.4.1 forward-compat)", () => {
-    // Future schemas (e.g. allowed_tools) shouldn't break v0.4.0's loader.
-    const path = tmpFile(JSON.stringify({ x: { class: "CallbackMcpConnector", config: { allowed_tools: ["search_issues"] } } }));
+  it("permissive on unknown fields (forward-compat for legitimate future schemas)", () => {
+    // Future schemas shouldn't break the loader on the permissive path.
+    // NOTE: v0.19.9 added an INTENTIONAL hard-error guard against
+    // `allowed_tools` inside `config:` (silent allow-all bypass — see
+    // adopter `14609652`). So future security-control fields may also
+    // get hard-error guards — this test covers genuinely-permissive
+    // forward-compat for non-security fields only.
+    const path = tmpFile(JSON.stringify({ x: { class: "CallbackMcpConnector", config: { future_schema_v2_thingy: ["search_issues"] } } }));
     const result = loadConnectorsConfig({ path });
     // Validation accepts the extra field (fails later on fromConfig as expected for v0.4.0 CallbackMcpConnector).
     expect(result.errors[0]).toMatch(/doesn't support configuration/);
