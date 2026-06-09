@@ -727,6 +727,139 @@ const UNKNOWN_CONNECTOR: LintRule = {
   },
 };
 
+// v0.19.10 — catches the `$ <connector> <tool>` foot-gun: author writes the
+// connector name + tool name space-separated (CLI muscle memory: `git status`),
+// but skillscript's bare form treats the FIRST token as the tool name → the
+// dispatch sends `name: "<connector>"` to the resolved server, which replies
+// "Tool with name 'X' not found" — pointing the author at the wrong layer
+// (looks like the connector is broken). Closes Perry's `650c5a9c` Finding 1.
+const CONNECTOR_AS_TOOL: LintRule = {
+  id: "connector-as-tool",
+  severity: "error",
+  description: "A bare `$ <connector> <tool>` op was written space-separated, but skillscript's bare-form dispatch uses the first token as the TOOL name. The connector name is being interpreted as a tool, which fails at the MCP server with a misdirecting error.",
+  remediation: "Two correct forms: `$ <connector>.<tool> args ...` (dotted; explicit connector.tool routing) OR `$ <tool> args ...` (bare tool; runtime resolves to the owning connector). Don't write `$ <connector> <tool>` space-separated.",
+  check: (ctx) => {
+    if (ctx.mcpConnectorNames === undefined) return [];
+    const known = new Set(ctx.mcpConnectorNames);
+    if (known.size === 0) return [];
+    const findings: LintFinding[] = [];
+    const reported = new Set<string>();
+    for (const [targetName, target] of ctx.parsed.targets) {
+      walkOps(target.ops, (op) => {
+        // Only bare-form `$` ops (no explicit `connector.tool` dot).
+        if (op.kind !== "$" || op.mcpConnector !== undefined) return;
+        const body = op.body.trimStart();
+        // First token = the would-be tool name (or kwarg target). Match
+        // `<token1> <token2>` where token1 is a connector name AND token2
+        // is a BARE identifier NOT followed by `=` (which would make it a
+        // kwarg key — the legit same-name shape `$ data_write content="..."`
+        // where `data_write` is both the connector and tool name).
+        // `\b` after the second identifier prevents the greedy quantifier
+        // from backtracking into a partial match: without `\b`, `content`
+        // followed by `=` makes the lookahead fail, and the engine backs off
+        // to `conten`/`conte`/... until the lookahead is satisfied (false
+        // positive on the legitimate same-name kwarg shape).
+        const m = /^([a-z_][a-z0-9_-]*)\s+([A-Za-z_][\w-]*)\b(?!\s*=)/.exec(body);
+        if (m === null) return;
+        const firstToken = m[1]!;
+        if (!known.has(firstToken)) return;
+        const secondToken = m[2]!;
+        const key = `${targetName}:${firstToken}`;
+        if (reported.has(key)) return;
+        reported.add(key);
+        findings.push({
+          rule: "connector-as-tool",
+          severity: "error",
+          message: `\`$ ${firstToken} ${secondToken} ...\` in target '${targetName}' — \`${firstToken}\` is a connector name, not a tool. Bare-form dispatch treats the first token as the tool name, so this sends \`name: "${firstToken}"\` to the server (which replies \"Tool '${firstToken}' not found\" — a misdirecting error). Two correct forms: \`$ ${firstToken}.${secondToken} ...\` (dotted; explicit connector.tool) OR \`$ ${secondToken} ...\` (bare tool; runtime resolves to owning connector).`,
+          block: targetName,
+          extras: { connector: firstToken, would_be_tool: secondToken },
+        });
+      });
+    }
+    return findings;
+  },
+};
+
+// v0.19.10 — tier-3 advisory closing Perry's `650c5a9c` Finding 2 partially.
+// Per-MCP-server result shape varies: some servers return JSON-as-text in
+// `content[0].text`, which the runtime's `unwrapToolResult` JSON.parses
+// cleanly. Others return prose-wrapped or multi-content responses that
+// fail to parse → the bound var is a string, not a structured object.
+// `${R|length}` then silently returns char-count of the string instead of
+// element-count of the (intended) array — silent-wrong, the worst class.
+//
+// Narrow to `${R|length}` specifically: it's the silent-wrong path.
+// `${R.field}` on a string raises UnresolvedVariableError (loud), so the
+// runtime tells the author already. `|length` is the trap.
+//
+// Skip the advisory when the skill already does `$ json_parse ${R}`
+// somewhere — the author already defended.
+const REMOTE_RESULT_NEEDS_PARSE: LintRule = {
+  id: "remote-result-needs-parse",
+  severity: "info",
+  description: "A `${R|length}` access on a value bound by a `$` dispatch. Per-MCP-server result shape varies: if the connector's server returns prose-wrapped or non-JSON text in `content[0].text`, the runtime's auto-parse falls back to the raw string and `|length` returns the string's char-count (NOT the intended array element-count). Silent-wrong is the trap.",
+  remediation: "If `${R|length}` returns suspicious counts (e.g., 1394 when you expected 5), add `$ json_parse ${R} -> P` after the dispatch and access via `${P|length}`. This advisory suppresses itself when the skill already does `$ json_parse ${R}` somewhere — your defensive parse is taken as intent.",
+  check: (ctx) => {
+    // Bindings from $ ops that aren't json_parse itself.
+    const dollarBindings = new Map<string, string>(); // bindVar → targetName
+    for (const [targetName, target] of ctx.parsed.targets) {
+      walkOps(target.ops, (op) => {
+        if (op.kind !== "$" || op.outputVar === undefined) return;
+        // Skip json_parse bindings — those produce parsed structure by design.
+        if (/^json_parse\b|\.json_parse\b/.test(op.body)) return;
+        dollarBindings.set(op.outputVar, targetName);
+      });
+    }
+    if (dollarBindings.size === 0) return [];
+
+    // Collect var names that the skill already passes through `json_parse`
+    // anywhere — author has defended; suppress the advisory for those.
+    const alreadyDefended = new Set<string>();
+    for (const target of ctx.parsed.targets.values()) {
+      walkOps(target.ops, (op) => {
+        if (op.kind !== "$") return;
+        const m = /^json_parse\s+\$[({]([A-Za-z_]\w*)/.exec(op.body);
+        if (m !== null) alreadyDefended.add(m[1]!);
+      });
+    }
+
+    const findings: LintFinding[] = [];
+    const reported = new Set<string>();
+    const lengthRe = /\$[({]([A-Za-z_]\w*)\|length\b/g;
+    for (const [targetName, target] of ctx.parsed.targets) {
+      const scan = (s: string): void => {
+        let m: RegExpExecArray | null;
+        lengthRe.lastIndex = 0;
+        while ((m = lengthRe.exec(s)) !== null) {
+          const refBase = m[1]!;
+          if (!dollarBindings.has(refBase)) continue;
+          if (alreadyDefended.has(refBase)) continue;
+          const key = `${targetName}:${refBase}`;
+          if (reported.has(key)) continue;
+          reported.add(key);
+          findings.push({
+            rule: "remote-result-needs-parse",
+            severity: "info",
+            message: `\`\${${refBase}|length}\` in target '${targetName}' takes the length of a value bound by a \`$\` dispatch. If the connector's MCP server returns prose-wrapped or non-JSON text, the runtime's auto-parse falls back to the raw string and \`|length\` returns the string's char-count instead of element-count — silent-wrong. If results look suspiciously large, add \`$ json_parse \${${refBase}} -> P\` after the dispatch and use \`\${P|length}\`.`,
+            block: targetName,
+            extras: { bind_var: refBase },
+          });
+        }
+      };
+      const visit = (op: SkillOp): void => {
+        if (op.body !== undefined) scan(op.body);
+        if (op.setValue !== undefined) scan(op.setValue);
+        if (op.foreachBody !== undefined) op.foreachBody.forEach(visit);
+        if (op.ifBranches !== undefined) op.ifBranches.forEach((b) => b.body.forEach(visit));
+        if (op.ifElseBody !== undefined) op.ifElseBody.forEach(visit);
+      };
+      target.ops.forEach(visit);
+      if (target.elseBlock !== undefined) target.elseBlock.forEach(visit);
+    }
+    return findings;
+  },
+};
+
 // v0.16.4 — `$ llm prompt="..." model="X"` where X matches neither any
 // registered LocalModel alias name NOR any `models_available` entry from
 // any registered LocalModel's `manifest()` payload. Tier-2 warning.
@@ -3150,6 +3283,7 @@ const RULES: LintRule[] = [
   UNKNOWN_SKILL_REFERENCE,
   UNKNOWN_TEMPLATE_REFERENCE,
   UNKNOWN_CONNECTOR,
+  CONNECTOR_AS_TOOL,
   UNKNOWN_CONNECTOR_CLASS,
   UNWIRED_PRIMARY_CONNECTOR,
   DISALLOWED_TOOL,
@@ -3202,6 +3336,7 @@ const RULES: LintRule[] = [
   ADDRESS_ROUTED_WAKE_INFO,
   BODY_TEMPLATE_DETECTED,
   EMIT_WITH_TEMPLATE,
+  REMOTE_RESULT_NEEDS_PARSE,
 ];
 
 /** Read-only view of the rule registry — for tooling that introspects v1 rules. */

@@ -231,7 +231,12 @@ const CORE_PATHS = [
 // would lose grep-ability. Per the signal-not-budget rule: clear code
 // wins. Complementary-channels semantic (template = canonical output,
 // emit = transcript) is the headline win on small-model authorability.
-const NARROW_MAX_LOC = 11250;
+// v0.19.10: narrow ceiling 11250 → 11400 for connector-as-tool tier-1 lint
+// + remote-result-needs-parse tier-3 advisory (Perry's `650c5a9c` Findings
+// 1 + 2). Both rules are self-contained + grep-able by id; compressing
+// would lose the per-rule clarity. Per the signal-not-budget rule: clear
+// code wins.
+const NARROW_MAX_LOC = 11400;
 const NARROW_MAX_FILES = 23;
 const BROAD_INFO_LOC = 9500;
 const BROAD_INFO_FILES = 28;

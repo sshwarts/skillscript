@@ -244,14 +244,14 @@ default: run
     expect(result.outputs.text).toBe("Bound: alpha, derived: beta.");
   });
 
-  it("preserves legacy emissions-array semantics when no template authored", async () => {
-    // Legacy: outputs.text for default text-kind with no template +
-    // no lastBoundVar falls to emissions.slice() — an ARRAY, not a
-    // joined string. v0.19.4 preserves this exactly to avoid breaking
-    // any existing consumer; template overrides this path only when
-    // a template is authored.
+  it("v0.19.10 emit-first semantic: emit-only skill → outputs.text is joined emissions string", async () => {
+    // v0.19.10 — closed Perry's `650c5a9c` Finding 3: an emit-bearing
+    // skill with no template now publishes joined emissions to
+    // outputs.text (consistent string shape across text/agent/template
+    // kinds). Pre-v0.19.10 the no-lastBoundVar path emitted an
+    // emissions.slice() ARRAY for text kind — surprising shape.
     const src = `# Skill: legacy
-# Vars: ()
+# Vars: (none)
 
 run:
     emit(text="line one")
@@ -261,7 +261,7 @@ default: run
     const parsed = parse(src);
     expect(parsed.outputTemplate).toBeNull();
     const result = await execute(parsed, {}, ["run"], minimalCtx());
-    expect(result.outputs.text).toEqual(["line one", "line two"]);
+    expect(result.outputs.text).toBe("line one\nline two");
   });
 });
 

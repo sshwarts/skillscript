@@ -24,8 +24,8 @@ const REPO_ROOT = join(__dirname, "..");
 const PACKAGE_JSON = JSON.parse(readFileSync(join(REPO_ROOT, "package.json"), "utf8")) as Record<string, unknown>;
 
 describe("T7 — package.json polish", () => {
-  it("1. version is 0.19.9 (connectors.json SECURITY hotfix + scaffold polish per adopter 14609652. Finding 1: misplaced `allowed_tools` inside config: block silently allow-alled — security control quietly nonexistent. Now hard-errors with remediation. Finding 2: scaffold mcp-remote example omitted framing → silent init-timeout hang. Now sets framing: newline explicitly + init-timeout error names framing. Also: Perry's language-reference atoms re-rendered into docs/language-reference.md; connectors.json programmatic-bootstrap doc callout from earlier adopter finding.)", () => {
-    expect(PACKAGE_JSON["version"]).toBe("0.19.9");
+  it("1. version is 0.19.10 (Perry's 650c5a9c dogfood findings 1+2+3. Finding 1 (HIGH): tier-1 connector-as-tool lint catches `$ <connector> <tool>` space-separated foot-gun at authoring time — pre-v0.19.10 the server replied misdirecting `Tool 'X' not found`. Finding 2 (MED): tier-3 remote-result-needs-parse advisory + doc on the |length-on-string char-count silent-wrong; suppressed when skill defensively json_parses. Finding 3 (LOW-MED): runtime now prefers emissions over lastBoundVar for text/file/none output kinds — emit-bearing skills no longer mask emissions with internal scratch. 10 regression tests.)", () => {
+    expect(PACKAGE_JSON["version"]).toBe("0.19.10");
   });
 
   it("2. main + types + bin + engines.node ≥ 22.5 declared", () => {
@@ -75,12 +75,12 @@ describe("T7 — distributed code surface", () => {
     expect(out.trim(), `found AMP identifiers: ${out}`).toBe("");
   });
 
-  it("7. narrow-core LOC ceiling holds (< 11250 / 23 files; ..., v0.7.0 → 7150, v0.7.1 → 7250, v0.7.2 → 7550, v0.8.0 → 8200, v0.9.4 → 8300, v0.9.6 → 8550, v0.9.8 → 8650, v0.10 → 9300, v0.13 → 9550, v0.14.1 → 9700, v0.15.0 → 9900, v0.16.x → 10400, v0.17.4 → 10500, v0.18.2 → 10600, v0.18.5 → 10800, v0.18.8 → 11100, v0.19.4 → 11250)", () => {
+  it("7. narrow-core LOC ceiling holds (< 11400 / 23 files; ..., v0.7.0 → 7150, v0.7.1 → 7250, v0.7.2 → 7550, v0.8.0 → 8200, v0.9.4 → 8300, v0.9.6 → 8550, v0.9.8 → 8650, v0.10 → 9300, v0.13 → 9550, v0.14.1 → 9700, v0.15.0 → 9900, v0.16.x → 10400, v0.17.4 → 10500, v0.18.2 → 10600, v0.18.5 → 10800, v0.18.8 → 11100, v0.19.4 → 11250, v0.19.10 → 11400)", () => {
     const out = execSync("node scripts/loc-ceiling.mjs", { cwd: REPO_ROOT, encoding: "utf8" });
     const match = /CORE\s+(\d+) LOC across (\d+) files/.exec(out);
     expect(match).not.toBeNull();
     const [, locStr, filesStr] = match!;
-    expect(Number(locStr)).toBeLessThan(11250);
+    expect(Number(locStr)).toBeLessThan(11400);
     expect(Number(filesStr)).toBeLessThan(23);
   });
 

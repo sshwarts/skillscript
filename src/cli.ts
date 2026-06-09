@@ -407,6 +407,12 @@ async function cmdRun(args: string[]): Promise<number> {
       inputs: opts.inputs,
       format: opts.format,
       skillStore: registry.getSkillStore(),
+      // v0.19.10 — thread the wired registry into compile so the lint
+      // preflight gets `mcpConnectorNames` populated. Without this,
+      // connector-aware lints (unknown-connector, connector-as-tool,
+      // remote-result-needs-parse) skip their checks from the CLI path
+      // and the foot-guns only surface as runtime errors.
+      registry,
     });
     const traceMode = opts.traceMode;
     const traceStore = traceMode !== undefined && traceMode !== "off"

@@ -35,29 +35,34 @@ async function runSkill(src: string): Promise<{ outputs: Record<string, unknown>
   return { outputs: result.outputs, emissions: result.emissions, errors: result.errors };
 }
 
-describe("v0.5.0 item 7 — outputs.text shape (programmatic surface default)", () => {
-  it("emits-only skill (no var bound) → outputs.text is emissions array", async () => {
+describe("v0.5.0 item 7 — outputs.text shape (v0.19.10 emit-first semantic)", () => {
+  // v0.19.10 — emit-first semantic. Per Perry's `650c5a9c` Finding 3: if
+  // the author explicitly writes `emit()`, emissions ARE the canonical
+  // output; `-> R` / `$set` bindings are internal scratch. Pre-v0.19.10
+  // lastBoundVar masked emissions — silent-wrong, fixed.
+
+  it("emits-only skill (no var bound) → outputs.text is joined emissions string", async () => {
     const src = `# Skill: t\n# Status: Approved\nrun:\n    emit(text="line one")\n    emit(text="line two")\n    emit(text="line three")\ndefault: run\n`;
     const result = await runSkill(src);
     expect(result.errors).toEqual([]);
-    expect(result.outputs.text).toEqual(["line one", "line two", "line three"]);
+    expect(result.outputs.text).toBe("line one\nline two\nline three");
   });
 
-  it("emits + $set bind → outputs.text is the bound value (structured)", async () => {
+  it("emits + $set bind → outputs.text is the joined emissions (NOT the bound scratch)", async () => {
     const src = `# Skill: t\n# Status: Approved\nrun:\n    emit(text="prelude")\n    $set RESULT = "structured"\n    emit(text="coda")\ndefault: run\n`;
     const result = await runSkill(src);
     expect(result.errors).toEqual([]);
-    // Last-bound var wins — outputs.text is "structured" (the var value),
-    // NOT the joined emissions. The R3 minion 3 surprise.
-    expect(result.outputs.text).toBe("structured");
-    // Emissions still collected separately for inspection.
+    // v0.19.10 — emit() entries are the canonical output; $set RESULT is
+    // internal scratch that no longer masks the emissions.
+    expect(result.outputs.text).toBe("prelude\ncoda");
     expect(result.emissions).toEqual(["prelude", "coda"]);
   });
 
-  it("multiple $set ops → outputs.text is the LAST bound var", async () => {
+  it("$set only (no emit) → outputs.text is the LAST bound var (lastBoundVar fallback intact)", async () => {
     const src = `# Skill: t\n# Status: Approved\nrun:\n    $set A = "first"\n    $set B = "second"\n    $set C = "third"\ndefault: run\n`;
     const result = await runSkill(src);
     expect(result.errors).toEqual([]);
+    // No emissions → falls to lastBoundVar (compute-and-return pattern).
     expect(result.outputs.text).toBe("third");
   });
 });
@@ -72,11 +77,14 @@ describe("v0.5.0 item 7 — outputs.text vs human-readable kinds", () => {
     expect(result.outputs.text).toBeUndefined();
   });
 
-  it("# Output: text + # Output: agent: same skill → both shapes coexist", async () => {
+  it("# Output: text + # Output: agent: same skill → both shapes coexist (v0.19.10 unified emit-first)", async () => {
     const src = `# Skill: t\n# Status: Approved\n# Output: text\n# Output: agent: assistant\nrun:\n    emit(text="prelude")\n    $set RESULT = "structured"\n    emit(text="coda")\ndefault: run\n`;
     const result = await runSkill(src);
     expect(result.errors).toEqual([]);
-    expect(result.outputs.text).toBe("structured");
+    // v0.19.10 — emissions over lastBoundVar for text kind too. Both
+    // delivery channels now consistently surface the emit() output;
+    // the silent-leak-into-text-via-lastBoundVar is closed.
+    expect(result.outputs.text).toBe("prelude\ncoda");
     expect(result.outputs["agent:assistant"]).toBe("prelude\ncoda");
   });
 });

@@ -529,6 +529,14 @@ export async function execute(
       outputs[key] = canonicalTemplate;
     } else if (TEXT_COERCED_OUTPUT_KINDS.has(decl.kind)) {
       outputs[key] = emissions.join("\n");
+    } else if (emissions.length > 0) {
+      // v0.19.10 — emissions over lastBoundVar for text/file/none kinds when
+      // emit() was called. Pre-v0.19.10 `lastBoundVar` masked emit()
+      // entries: a skill that emit()'d a brief AND bound `-> R` mid-flow
+      // (internal scratch) had outputs.text = R, hiding the brief. Closes
+      // Perry's `650c5a9c` Finding 3 — the author explicitly wrote
+      // `emit()`, so emissions ARE the intended output; `-> R` is scratch.
+      outputs[key] = emissions.join("\n");
     } else if (lastBoundVar !== null && vars.has(lastBoundVar)) {
       outputs[key] = vars.get(lastBoundVar);
     } else {

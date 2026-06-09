@@ -227,10 +227,16 @@ describe("v0.2.8 — $ execute_skill in-skill composition", () => {
     // chain (tool-call semantics — child errors don't auto-propagate as
     // parent-op errors). We verify the marker shows up anywhere in the
     // serialized result tree.
+    // v0.19.10 — explicit `# Returns: R` so the child execute_skill result
+    // propagates to final_vars (and thus appears in the serialized result
+    // tree). Pre-v0.19.10 the test leaned on the lastBoundVar leak into
+    // outputs.text (Perry's `650c5a9c` Finding 3) — that leak is now closed
+    // (emissions over lastBoundVar), so error-info propagation must flow
+    // through declared returns.
     await wired.skillStore.store("a",
-      "# Skill: a\n# Status: Approved\nm:\n    $ execute_skill skill_name=\"b\" -> R\n    emit(text=\"a-done\")\ndefault: m\n");
+      "# Skill: a\n# Status: Approved\n# Returns: R\nm:\n    $ execute_skill skill_name=\"b\" -> R\n    emit(text=\"a-done\")\ndefault: m\n");
     await wired.skillStore.store("b",
-      "# Skill: b\n# Status: Approved\nm:\n    $ execute_skill skill_name=\"a\" -> R\n    emit(text=\"b-done\")\ndefault: m\n");
+      "# Skill: b\n# Status: Approved\n# Returns: R\nm:\n    $ execute_skill skill_name=\"a\" -> R\n    emit(text=\"b-done\")\ndefault: m\n");
 
     const result = await callTool(wired.mcpServer, "execute_skill", { skill_name: "a" });
     // Serialize the entire result tree and grep for the recursion marker.

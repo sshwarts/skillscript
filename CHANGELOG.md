@@ -1,5 +1,107 @@
 # Changelog
 
+## 0.19.10 — 2026-06-09 — Three dogfood findings closed (Perry's 650c5a9c)
+
+Three real authorability frictions Perry hit while wiring `project-brief`
+end-to-end against `youtrack` (RemoteMcpConnector) + `amp`
+(HttpMcpConnector). All cold-author-relevant. Closed in severity order.
+
+### Finding 1 (HIGH) — `$ <connector> <tool>` foot-gun + misleading error
+
+`$ youtrack find_projects query="..."` (space-separated, CLI muscle
+memory shape) parses as a bare-form dispatch where the FIRST token is
+the tool name. Skillscript sent `name: "youtrack"` to the MCP server,
+which replied "Tool 'youtrack' not found" — the error sounds like the
+**connector is broken**, sending the author to debug `connectors.json`
+instead of their syntax.
+
+**Fix**: new tier-1 lint `connector-as-tool` catches the pattern at
+authoring time. When a `$` op's body's first token matches a known
+connector name AND a second bare identifier follows (not a kwarg key
+ending in `=`), the lint fires with explicit remediation:
+
+> `$ youtrack find_projects ...` — `youtrack` is a connector name, not
+> a tool. Bare-form dispatch treats the first token as the tool name,
+> so this sends `name: "youtrack"` to the server (which replies
+> "Tool 'youtrack' not found" — a misdirecting error). Two correct
+> forms: `$ youtrack.find_projects ...` (dotted; explicit
+> connector.tool) OR `$ find_projects ...` (bare tool; runtime
+> resolves to owning connector).
+
+The regex uses `\b` to prevent greedy backtracking onto partial matches
+of the legit same-name kwarg shape (`$ data_write content="..."` where
+`content=` is a kwarg, not a tool token).
+
+### Finding 2 (MED) — `${R|length}` silent-wrong char-count
+
+Per-MCP-server result shape varies. When `content[0].text` JSON-parses
+cleanly, the runtime returns a structured value (HttpMcpConnector +
+RemoteMcpConnector both use the same `unwrapToolResult` path). When the
+parse fails (prose-wrapped JSON, multi-content responses), the bound
+var lands as a string. `${R|length}` then silently returns the string's
+char-count instead of the intended element-count — Perry's "1394 open
+issues" surprise (real: 5).
+
+**Fix**: tier-3 advisory `remote-result-needs-parse`. Narrow scope:
+fires ONLY on `${R|length}` for `R` bound by `$` (the silent-wrong
+path), NOT on `${R.field}` (which loudly raises
+UnresolvedVariableError). Suppressed when the skill already does
+`$ json_parse ${R} -> P` somewhere — author has defended.
+
+Did NOT auto-parse aggressively: the root cause is server-specific
+(some servers return JSON-as-text, some prose-wrap, some multi-content);
+the runtime's existing JSON.parse path is correct for spec-clean
+servers. Auto-strip / multi-content extraction would be risky semantic
+changes pending more data on which servers do what.
+
+### Finding 3 (LOW-MED) — emissions over lastBoundVar (silent masking closed)
+
+Pre-v0.19.10, `outputs.text` for a no-template skill with both `emit()`
+AND `-> R` (or `$set R`) returned `lastBoundVar` (the internal scratch),
+NOT joined emissions. Perry hit this on `project-brief`: the emitted
+brief lived only in transcript; `outputs.text` returned the last `-> R`
+value (internal scratch from a mid-skill `json_parse` step).
+
+**Fix**: prefer emissions over lastBoundVar in `src/runtime.ts`. When
+the author writes `emit()`, emissions ARE the canonical output; `-> R`
+is internal scratch. Behavior change for text/file/none output kinds:
+
+```ts
+} else if (emissions.length > 0) {
+  outputs[key] = emissions.join("\n");  // v0.19.10 — emit-first
+} else if (lastBoundVar !== null && vars.has(lastBoundVar)) {
+  outputs[key] = vars.get(lastBoundVar);  // compute-and-return pattern
+}
+```
+
+Compute-and-return pattern (no emit, just `-> R`) preserved — falls to
+lastBoundVar when emissions is empty.
+
+### Migration
+
+- **Skills calling `$ <connector> <tool>` space-separated**: tier-1 lint
+  now blocks compile. Fix: rewrite as `$ connector.tool` or `$ tool`.
+- **Skills with `emit()` + `-> R` relying on outputs.text = R**: behavior
+  change. `outputs.text` is now joined emissions. If you need R, use
+  `# Returns: R` to export R as `final_vars.R`. Two pre-v0.19.10 tests
+  in `v0.5.0-outputs-shape.test.ts` codified the old (incorrect)
+  semantic and have been updated to assert the new behavior.
+
+### What changed
+
+- `src/lint.ts` — `connector-as-tool` (tier-1) + `remote-result-needs-parse` (tier-3)
+- `src/runtime.ts` — emissions over lastBoundVar in outputs.text path
+- `scripts/loc-ceiling.mjs` — narrow ceiling 11250 → 11400
+- `tests/v0.19.10-dogfood-findings.test.ts` — 10 regression tests
+- `tests/v0.5.0-outputs-shape.test.ts` — updated to assert emit-first semantic
+- `tests/v0.19.4-output-template.test.ts` — legacy-shape test updated to
+  v0.19.10 string shape
+- `tests/v0.2.8.test.ts` — recursion-depth-guard test now uses
+  `# Returns: R` for proper error propagation (was relying on the
+  closed lastBoundVar leak)
+
+1898 total tests (+10 net new).
+
 ## 0.19.9 — 2026-06-09 — connectors.json SECURITY hotfix + scaffold polish + doc renders
 
 Closes adopter `14609652` — two silent-failure footguns on the
