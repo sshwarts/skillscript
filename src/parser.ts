@@ -45,6 +45,21 @@ export interface SkillOp {
    * interpretation.
    */
   policy?: "unsafe";
+  /**
+   * v0.19.11 — `shell` ops only: explicit argv form. When set, the
+   * runtime spawns `argv[0]` with `argv.slice(1)` as arguments DIRECTLY
+   * — no tokenization, no quote-stripping, no shell. Each element is
+   * exactly one argv token; `${VAR}` substitution happens per element
+   * and the result does NOT get re-split, so an arg with spaces stays
+   * one arg. Strictly safer than `unsafe=true` (no shell process; no
+   * metacharacter interpretation; injection-surface zero).
+   *
+   * Mutually exclusive with `body` (command=) and with `policy=unsafe`.
+   * Closes Perry's `adc87d52` cold-author-safety finding — the safe
+   * path for args-with-spaces was previously obscure (file roundtrip
+   * trick); `argv` makes it discoverable + first-class.
+   */
+  argv?: string[];
   setName?: string;
   setValue?: string;
   /**
@@ -1844,11 +1859,63 @@ export function parse(source: string): ParsedSkill {
           continue;
         }
         if (fnName === "shell") {
-          const command = kwArgs["command"] ?? "";
+          const command = kwArgs["command"];
           const unsafe = kwArgs["unsafe"] === "true";
+          const argvRaw = kwArgs["argv"];
+          // v0.19.11 — argv mutex enforcement. argv form is strictly
+          // safer (no shell, no tokenization, no quote-stripping) and
+          // doesn't compose with the string forms.
+          if (argvRaw !== undefined && command !== undefined) {
+            result.parseErrors.push(
+              `\`shell(...)\` in target '${currentTarget.name}': \`argv=[...]\` and \`command="..."\` are mutually exclusive. Pick one form: argv for explicit-token-list dispatch (safer; no shell), command for whitespace-tokenized OR (with unsafe=true) bash.`,
+            );
+            continue;
+          }
+          if (argvRaw !== undefined && unsafe) {
+            result.parseErrors.push(
+              `\`shell(...)\` in target '${currentTarget.name}': \`argv=[...]\` does not compose with \`unsafe=true\`. argv form skips the shell entirely (execv-class spawn) so there's no bash to opt into. Drop \`unsafe=true\` when using argv.`,
+            );
+            continue;
+          }
+          if (argvRaw !== undefined) {
+            // Parse the argv literal as a JSON array. Authors write
+            // `argv=["bin", "arg with spaces", "${VAR}"]` — JSON shape so
+            // quoting is unambiguous + element boundaries are explicit.
+            let argv: string[];
+            try {
+              const parsed = JSON.parse(argvRaw) as unknown;
+              if (!Array.isArray(parsed) || !parsed.every((e) => typeof e === "string")) {
+                result.parseErrors.push(
+                  `\`shell(argv=...)\` in target '${currentTarget.name}': argv must be a JSON array of strings. Got: ${argvRaw}.`,
+                );
+                continue;
+              }
+              if (parsed.length === 0) {
+                result.parseErrors.push(
+                  `\`shell(argv=[])\` in target '${currentTarget.name}': argv must have at least one element (the binary).`,
+                );
+                continue;
+              }
+              argv = parsed;
+            } catch (err) {
+              result.parseErrors.push(
+                `\`shell(argv=...)\` in target '${currentTarget.name}': argv literal isn't valid JSON: ${(err as Error).message}. Shape: \`argv=["bin", "arg1", "arg2", ...]\` with each element JSON-quoted.`,
+              );
+              continue;
+            }
+            opBucket.push({
+              kind: "shell",
+              body: "",
+              argv,
+              ...(outputVar !== undefined ? { outputVar } : {}),
+              ...(fallback !== undefined ? { fallback } : {}),
+              ...(approved !== undefined ? { approved } : {}),
+            });
+            continue;
+          }
           opBucket.push({
             kind: "shell",
-            body: command,
+            body: command ?? "",
             ...(unsafe ? { policy: "unsafe" as const } : {}),
             ...(outputVar !== undefined ? { outputVar } : {}),
             ...(fallback !== undefined ? { fallback } : {}),

@@ -45,7 +45,7 @@ The four delivery channels are all first-class:
 | Class | Shape | Examples |
 |---|---|---|
 | **Mutation statements** | \`$verb VAR = value\` / \`$verb VAR <value>\` | \`$set NAME = "Scott"\`, \`$append LIST <item>\` |
-| **Runtime-intrinsic function-calls** | \`verb(kwarg=value, ...) [-> BINDING]\` | \`emit(text="...")\`, \`inline(skill="...")\`, \`execute_skill(name="...") -> R\`, \`shell(command="...") -> R\`, \`file_read(path="...") -> R\`, \`file_write(path="...", content="...")\`, \`notify(agent="...")\` |
+| **Runtime-intrinsic function-calls** | \`verb(kwarg=value, ...) [-> BINDING]\` | \`emit(text="...")\`, \`inline(skill="...")\`, \`execute_skill(name="...") -> R\`, \`shell(command="...") -> R\` / \`shell(argv=[...]) -> R\`, \`file_read(path="...") -> R\`, \`file_write(path="...", content="...")\`, \`notify(agent="...")\` |
 | **External MCP dispatch** | \`$ <connector> kwarg=value, ... [-> BINDING]\` | \`$ youtrack_search query="..." -> R\`, \`$ llm prompt="..." -> R\`, \`$ data_read mode=fts query="..." -> R\` |
 
 The \`$\` prefix marks **state-affecting ops** (mutation OR external dispatch). Function-call shape marks **language-intrinsic ops the runtime knows directly**.
@@ -259,16 +259,23 @@ notify(agent="reviewer", connectors=["slack"]) -> A
 notify(agent="ops", message="911", event_type="ticket-911", correlation_id="\${INCIDENT_ID}")
 \`\`\`
 
-### \`shell(command="...", unsafe=true) [-> R]\` — local subprocess
+### \`shell(command="...", unsafe=true) [-> R]\` / \`shell(argv=[...]) [-> R]\` — local subprocess
 
-Default mode: structural spawn — one binary, no shell metacharacters, no pipes/redirects. \`unsafe=true\` opts into full bash; tier-2 lint warns.
+Three forms:
+
+1. **\`shell(command="...")\`** — structural spawn. The command string is whitespace-tokenized and quote-stripped, then one binary is spawned with the resulting tokens. No shell metacharacters, no pipes, no redirects. Quotes around each token ARE respected during tokenization (so \\\`"hello world"\\\` stays one token), but **quotes around a \\\`\${VAR}\\\` substitution do NOT reliably protect spaces in the substituted value** — they're fragile when the value contains quote characters or other tokenizer-special content. Use the argv form below when an arg may contain whitespace.
+
+2. **\`shell(argv=["bin", "arg1", "\${VAR}", ...])\`** — explicit argv form. Each list element is exactly one argv token; no tokenization, no quote-stripping, no shell. \\\`\${VAR}\\\` substitutes per element and the result does NOT get re-split, so an arg with spaces stays one arg. Strictly safer than \`unsafe=true\` (no shell process; no metacharacter interpretation; injection-surface zero). **The right tool when an arg may contain whitespace, JSON payloads, or any dynamic content.**
+
+3. **\`shell(command="...", unsafe=true)\`** — full bash interpretation. Tier-2 lint warns. Required for pipes, redirects, shell built-ins. Refused unless \`enable_unsafe_shell = true\` in runtime config.
 
 \`\`\`
-shell(command="git status --porcelain") -> STATUS
-shell(command="echo hi && date +%Y", unsafe=true) -> OUT
+shell(command="git status --porcelain") -> STATUS                              # structural; safe for simple args
+shell(argv=["say", "-v", "\${VOICE}", "-f", "\${PATH}"]) -> OUT                # argv; safe for args-with-spaces
+shell(command="echo hi && date +%Y", unsafe=true) -> OUT                       # unsafe; for real shell features
 \`\`\`
 
-**Argv quoting:** structural-spawn tokenizes the command on whitespace then strips quotes around each token. To pass quoted args (e.g., JSON payloads, strings with spaces), either set \`unsafe=true\` and let bash quote-handle, OR write the payload to a file via \`file_write\` and read it back inside the structurally-spawned command (e.g., \`shell(command="cat /tmp/payload.json | jq .field") -> R\` under \`unsafe=true\`). The structural mode is deliberately conservative.
+**Quote trap:** the structural \`command=\` tokenizer respects quotes during the *original* whitespace split — so \\\`'hello world'\\\` IS one token. But after \\\`\${VAR}\\\` substitution, if VAR contained quote characters (\\\`Jamie's\\\`) the quote-matching can drift. Pattern \\\`'\${VAR}'\\\` looks safe and works for simple values, but tier-2 lint \`shell-quoted-var-in-command\` flags it because the safer answer is \`argv=[...]\`. The mutex rule: \`argv=\` does not compose with \`command=\` or \`unsafe=true\` (it's an execv-class spawn — no shell to opt into).
 
 **Container FS isolation:** shell() runs inside the runtime's container/sandbox. Writes to \`/tmp/x\` from \`shell(command="touch /tmp/x")\` land in the RUNTIME's \`/tmp/x\`, not on the author's host. Same isolation as \`file_read\` / \`file_write\` — cross-namespace work needs a known shared volume.
 

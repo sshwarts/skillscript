@@ -24,8 +24,8 @@ const REPO_ROOT = join(__dirname, "..");
 const PACKAGE_JSON = JSON.parse(readFileSync(join(REPO_ROOT, "package.json"), "utf8")) as Record<string, unknown>;
 
 describe("T7 — package.json polish", () => {
-  it("1. version is 0.19.10 (Perry's 650c5a9c dogfood findings 1+2+3. Finding 1 (HIGH): tier-1 connector-as-tool lint catches `$ <connector> <tool>` space-separated foot-gun at authoring time — pre-v0.19.10 the server replied misdirecting `Tool 'X' not found`. Finding 2 (MED): tier-3 remote-result-needs-parse advisory + doc on the |length-on-string char-count silent-wrong; suppressed when skill defensively json_parses. Finding 3 (LOW-MED): runtime now prefers emissions over lastBoundVar for text/file/none output kinds — emit-bearing skills no longer mask emissions with internal scratch. 10 regression tests.)", () => {
-    expect(PACKAGE_JSON["version"]).toBe("0.19.10");
+  it("1. version is 0.19.11 (Perry's adc87d52 cold-author-safety finding: shell(argv=[...]) explicit token-list dispatch — strictly safer than unsafe=true. Closes the inverted-safety-gradient where the discoverable path (unsafe=true) had injection surface while the safe path (file-roundtrip) was an obscure trick. argv form: each element is exactly one argv token, no tokenization, no quote-stripping, no shell. ${VAR} substitutes per element; spaces preserved. Mutex with command=/unsafe=. New tier-2 lint `shell-quoted-var-in-command` catches the foot-gun pattern. 15 regression tests.)", () => {
+    expect(PACKAGE_JSON["version"]).toBe("0.19.11");
   });
 
   it("2. main + types + bin + engines.node ≥ 22.5 declared", () => {

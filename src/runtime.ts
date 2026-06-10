@@ -821,6 +821,40 @@ async function execOpInner(
       return { lastBoundVar: null, lastValue: undefined };
     }
     case "shell": {
+      // v0.19.11 — argv form. Explicit token list; no tokenization, no
+      // quote-stripping, no shell. Each element gets per-element
+      // substitution and goes directly to spawn(argv[0], argv.slice(1)).
+      // Closes Perry's `adc87d52` cold-author-safety finding.
+      if (op.argv !== undefined) {
+        const substArgv = op.argv.map((el) => substituteRuntime(el, vars));
+        const shellTimeoutMs = resolveOpTimeoutMs(undefined, skillTimeoutSec, absoluteTimeoutMs, vars);
+        if (ctx.mechanical === true) {
+          const preview = substArgv.join(" ");
+          emissions.push(`Would run shell argv: ${preview} (mechanical: true preview).`);
+          const flatKey = `${targetName}.output`;
+          const placeholder = `[mechanical: would run argv ${preview.slice(0, 40)}${preview.length > 40 ? "..." : ""}]`;
+          vars.set(flatKey, placeholder);
+          if (op.outputVar !== undefined) vars.set(op.outputVar, placeholder);
+          return {
+            lastBoundVar: op.outputVar ?? flatKey,
+            lastValue: placeholder,
+          };
+        }
+        const [bin, ...args] = substArgv;
+        // v0.18.8 binary-scope gate. argv[0] IS the binary by construction;
+        // the allowlist applies identically to argv mode and command= mode.
+        if (!isBinaryAllowed(bin!, ctx.shellAllowlist)) {
+          throw new ShellBinaryNotAllowedError(bin!, ctx.shellAllowlist, targetName);
+        }
+        const stdoutArgv = await execShellCommand(bin!, args, shellTimeoutMs);
+        const flatKeyArgv = `${targetName}.output`;
+        vars.set(flatKeyArgv, stdoutArgv);
+        if (op.outputVar !== undefined) vars.set(op.outputVar, stdoutArgv);
+        return {
+          lastBoundVar: op.outputVar ?? flatKeyArgv,
+          lastValue: stdoutArgv,
+        };
+      }
       const body = op.policy === "unsafe"
         ? substituteRuntimeUnsafe(op.body, vars)
         : substituteRuntime(op.body, vars);

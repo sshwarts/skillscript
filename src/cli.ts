@@ -14,6 +14,7 @@ import { fileURLToPath } from "node:url";
 import { RUNTIME_VERSION as VERSION } from "./version.js";
 import { compile } from "./compile.js";
 import { execute } from "./runtime.js";
+import { resolveRuntimeConfigFromEnv } from "./runtime-env-resolver.js";
 import { lint, formatLintResult } from "./lint.js";
 import { audit, formatAuditResult } from "./audit.js";
 import type { ProvenanceBlock } from "./provenance.js";
@@ -418,11 +419,23 @@ async function cmdRun(args: string[]): Promise<number> {
     const traceStore = traceMode !== undefined && traceMode !== "off"
       ? new FilesystemTraceStore(TRACE_DIR)
       : undefined;
+    // v0.19.11 — thread runtime env (SKILLSCRIPT_SHELL_ALLOWLIST,
+    // SKILLSCRIPT_ENABLE_UNSAFE_SHELL) into the execute ctx. Pre-v0.19.11
+    // CLI execute didn't read these envs, so `shell()` ops hit the
+    // default-deny allowlist gate even when the env was set — the
+    // confused-state Perry surfaced when probing `argv` (the env shows
+    // up in `bootstrap()` adopters via resolveRuntimeConfigFromEnv, but
+    // CLI execute had a separate code path that skipped it). Same
+    // CLI-auto-vs-programmatic-explicit class as the v0.19.1 env-resolver
+    // structural fix (memory 9d969eb1) — apply the unified resolver here too.
+    const envConfig = resolveRuntimeConfigFromEnv();
     const result = await execute(compiled.parsed, compiled.resolvedVariables, compiled.targetOrder, {
       registry,
       ...(opts.mechanical ? { mechanical: true } : {}),
       ...(traceMode !== undefined ? { trace: { mode: traceMode } } : {}),
       ...(traceStore !== undefined ? { traceStore } : {}),
+      ...(envConfig.shellAllowlist !== undefined ? { shellAllowlist: envConfig.shellAllowlist } : {}),
+      ...(envConfig.enableUnsafeShell !== undefined ? { enableUnsafeShell: envConfig.enableUnsafeShell } : {}),
     });
     // v0.19.4 — complementary-channels output. Template-bearing skills
     // own canonical output via `outputs.text` (rendered string); legacy

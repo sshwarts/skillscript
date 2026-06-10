@@ -1,5 +1,97 @@
 # Changelog
 
+## 0.19.11 — 2026-06-10 — `shell(argv=[...])` — cold-author-safe arg passing (closes Perry's adc87d52)
+
+Perry's qwen2.5:7b authorability probe surfaced an inverted safety
+gradient in `shell()`. The discoverable path for passing args with
+spaces was `unsafe=true` (full bash, injection surface, tier-2 lint).
+The safe path was an obscure file-roundtrip trick. The cold author
+reaches for the unsafe surface, and silent-wrong runtime feedback
+(e.g., `say` joining stripped tokens to sound ~right) reinforces it.
+
+For a system whose v1.0 gate IS cold-author-safe-success, that's
+backwards.
+
+### The fix — new `argv=[...]` form
+
+`shell(argv=["bin", "arg1", "${VAR}", ...]) [-> R]` — each list
+element is exactly one argv token; no tokenization, no quote-stripping,
+no shell. `${VAR}` substitutes per element and the result does NOT get
+re-split, so an arg with spaces stays one arg. Strictly safer than
+`unsafe=true`:
+
+- No shell process spawned (execv-class semantics)
+- No metacharacter interpretation (no `;` / `|` / `$()` / etc.)
+- No quote-handling ambiguity (there are no quotes)
+- Injection-surface zero — adversarial input becomes a literal argv
+  element, can't escape
+
+```
+shell(command="git status --porcelain") -> STATUS                              # structural; safe for simple args
+shell(argv=["say", "-v", "${VOICE}", "-f", "${PATH}"]) -> OUT                  # argv; safe for args-with-spaces
+shell(command="echo hi && date +%Y", unsafe=true) -> OUT                       # unsafe; for real shell features
+```
+
+### Mutex rules (parse-time errors)
+
+- `shell(argv=[...], command="...")` → parse error. Pick one form.
+- `shell(argv=[...], unsafe=true)` → parse error. argv is execv-class;
+  there's no bash to opt into.
+
+### Binary allowlist intact
+
+`argv[0]` is the binary by construction. The v0.18.8 shell-binary
+allowlist applies identically to `argv` mode and `command=` mode.
+
+### New tier-2 lint — `shell-quoted-var-in-command`
+
+Catches the cold-author foot-gun pattern at authoring time:
+`shell(command="echo '${VAR}'")`. Pre-v0.19.11 this passed lint clean
+because the structural tokenizer DOES respect quotes during the
+original whitespace split — but after `${VAR}` substitution, quotes
+inside the substituted value can drift the tokenizer (e.g., `Jamie's`
+breaks). The lint message points at the argv alternative as the safer
+shape.
+
+Suppressed on argv mode (the safe path) and on unsafe mode (bash
+handles quoting). Doesn't fire on literal-quoted args without `${VAR}`
+inside (e.g., `'hello world'` is fine).
+
+### Help text updated
+
+The `shell()` topic in `help({topic: "ops"})` now describes all three
+forms — structural `command=`, explicit `argv=`, full-shell `unsafe=`
+— with the quote-trap warning and inline guidance on which form to use
+when.
+
+### What changed
+
+- `src/parser.ts` — accepts `argv=[...]` JSON-array kwarg on `shell()`;
+  mutex enforcement against `command=` and `unsafe=true`.
+- `src/runtime.ts` — argv path spawns `argv[0]` with `argv.slice(1)`
+  directly after per-element substitution. Shell binary allowlist
+  applied to argv[0]. Mechanical-mode preview supported.
+- `src/lint.ts` — `shell-quoted-var-in-command` (tier-2).
+- `src/cli.ts` — `cmdRun` (skillfile execute) now reads
+  `SKILLSCRIPT_SHELL_ALLOWLIST` + `SKILLSCRIPT_ENABLE_UNSAFE_SHELL` via
+  the existing `resolveRuntimeConfigFromEnv` and threads them into the
+  execute ctx. Pre-v0.19.11 CLI execute had a separate code path that
+  skipped env wiring — same CLI-auto-vs-programmatic-explicit class as
+  the v0.19.1 env-resolver fix (memory `9d969eb1`).
+- `src/help-content.ts` — `shell()` op text rewritten for three-form
+  surface + quote-trap warning.
+- `tests/v0.19.11-shell-argv.test.ts` — 15 regression tests covering
+  parser/mutex/malformed/runtime/allowlist/lint paths.
+
+1913 total tests (+15 net new).
+
+### Migration
+
+No migration required. Existing `shell(command=...)` ops work
+unchanged. The lint warning fires on the `'${VAR}'` / `"${VAR}"`
+patterns inside structural commands — author chooses to rewrite as
+`argv=[...]` (recommended) or dismiss (when values are known-simple).
+
 ## 0.19.10 — 2026-06-09 — Three dogfood findings closed (Perry's 650c5a9c)
 
 Three real authorability frictions Perry hit while wiring `project-brief`

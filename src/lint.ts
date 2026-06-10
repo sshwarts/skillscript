@@ -1603,6 +1603,50 @@ const DEPRECATED_QUESTION: LintRule = {
   },
 };
 
+// v0.19.11 — closes Perry's `adc87d52` cold-author-safety finding. The
+// foot-gun: author writes `shell(command="echo '${VAR}'")` thinking the
+// quotes protect spaces in the substituted value. Works for simple
+// values, fragile when VAR contains quotes or other tokenizer-special
+// chars. Cold-author qwen reached for this pattern confidently (and it
+// COMPILES LINT-CLEAN pre-v0.19.11). The safe path is the new `argv=[...]`
+// form: explicit token boundaries, per-element substitution, no shell.
+const SHELL_QUOTED_VAR_IN_COMMAND: LintRule = {
+  id: "shell-quoted-var-in-command",
+  severity: "warning",
+  description: "A `shell(command=\"... '${VAR}' ...\")` op has a `${VAR}` (or `$(VAR)`) substitution wrapped in single or double quotes inside the structural-spawn command body. The quotes-around-substitution pattern is fragile: it works for simple values but breaks when the substituted value contains quote characters itself (the structural tokenizer gets confused).",
+  remediation: "Use the explicit argv form: `shell(argv=[\"<binary>\", \"<arg1>\", \"${VAR}\", ...]) ` — each element is exactly one argv token, no tokenization, no quoting, no shell. Substitution happens per element and the result does NOT get re-split. Strictly safer than `unsafe=true` and matches author intent for args-with-spaces.",
+  check: (ctx) => {
+    const findings: LintFinding[] = [];
+    // Match `'${X}'` or `'$(X)'` or `"${X}"` or `"$(X)"` — quoted var
+    // substitution inside the body string. The inner ref captures both
+    // canonical `${}` and legacy `$()` shapes.
+    const QUOTED_VAR_RE = /(['"])\$[({][A-Za-z_]\w*(?:\.\w+|\|[a-z_]+)*[)}]\1/g;
+    for (const [targetName, target] of ctx.parsed.targets) {
+      const reported = new Set<string>();
+      walkOps(target.ops, (op) => {
+        // Only structural-mode shell ops with `command=` (string body).
+        // unsafe-mode is bash; argv mode has no body.
+        if (op.kind !== "shell" || op.policy === "unsafe" || op.argv !== undefined) return;
+        let m: RegExpExecArray | null;
+        QUOTED_VAR_RE.lastIndex = 0;
+        while ((m = QUOTED_VAR_RE.exec(op.body)) !== null) {
+          const ref = m[0];
+          if (reported.has(ref)) continue;
+          reported.add(ref);
+          findings.push({
+            rule: "shell-quoted-var-in-command",
+            severity: "warning",
+            message: `\`${ref}\` in \`shell(command=...)\` of target '${targetName}': quotes around the substitution don't reliably protect spaces in the substituted value (the structural tokenizer respects quotes literally — works for simple values, fragile when the value contains quote characters). Use \`shell(argv=[...]) \` for explicit-token-list dispatch — each element is one argv token, no tokenization, no quoting, no shell.`,
+            block: targetName,
+            extras: { quoted_ref: ref },
+          });
+        }
+      });
+    }
+    return findings;
+  },
+};
+
 const UNSAFE_SHELL_AMBIGUOUS_SUBST: LintRule = {
   id: "unsafe-shell-ambiguous-subst",
   severity: "warning",
@@ -3303,6 +3347,7 @@ const RULES: LintRule[] = [
   DEPRECATED_SUBSTITUTION_SHAPE,
   UNSAFE_SHELL_AMBIGUOUS_SUBST,
   UNSAFE_SHELL_UNESCAPED_SUBST,
+  SHELL_QUOTED_VAR_IN_COMMAND,
   UNSAFE_SHELL_OP,
   UNSAFE_SHELL_DISABLED,
   SHELL_BINARY_NOT_ALLOWED,
