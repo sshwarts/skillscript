@@ -821,6 +821,31 @@ async function execOpInner(
       return { lastBoundVar: null, lastValue: undefined };
     }
     case "shell": {
+      // v0.19.12 — shell op now honors `(fallback: "...")` op-trailer
+      // (closes Perry's `9d8ff1b1`). Pre-fix the trailer was silently
+      // no-oped on shell — file_read's precedent (catch throw → bind
+      // fallback + record) is the right pattern. Apply uniformly: argv
+      // form, command= form, and unsafe form all share the same
+      // try/catch + empty-result coverage. Fallback triggers on:
+      // (a) any throw during execution, (b) empty-string stdout after
+      // trim — matching the $-dispatch op-trailer semantics.
+      const shellFallback = op.fallback;
+      const recordShellFallback = (value: string, reason: string): {
+        lastBoundVar: string;
+        lastValue: string;
+      } => {
+        const flatKey = `${targetName}.output`;
+        vars.set(flatKey, value);
+        if (op.outputVar !== undefined) vars.set(op.outputVar, value);
+        fallbacks.push({
+          target: targetName,
+          opKind: "shell",
+          value,
+          reason,
+        });
+        return { lastBoundVar: op.outputVar ?? flatKey, lastValue: value };
+      };
+
       // v0.19.11 — argv form. Explicit token list; no tokenization, no
       // quote-stripping, no shell. Each element gets per-element
       // substitution and goes directly to spawn(argv[0], argv.slice(1)).
@@ -841,12 +866,24 @@ async function execOpInner(
           };
         }
         const [bin, ...args] = substArgv;
-        // v0.18.8 binary-scope gate. argv[0] IS the binary by construction;
-        // the allowlist applies identically to argv mode and command= mode.
-        if (!isBinaryAllowed(bin!, ctx.shellAllowlist)) {
-          throw new ShellBinaryNotAllowedError(bin!, ctx.shellAllowlist, targetName);
+        let stdoutArgv: string;
+        try {
+          // v0.18.8 binary-scope gate. argv[0] IS the binary by construction;
+          // the allowlist applies identically to argv mode and command= mode.
+          if (!isBinaryAllowed(bin!, ctx.shellAllowlist)) {
+            throw new ShellBinaryNotAllowedError(bin!, ctx.shellAllowlist, targetName);
+          }
+          stdoutArgv = await execShellCommand(bin!, args, shellTimeoutMs);
+        } catch (err) {
+          if (shellFallback !== undefined) {
+            return recordShellFallback(shellFallback, `shell argv failed: ${messageOf(err)}`);
+          }
+          throw err;
         }
-        const stdoutArgv = await execShellCommand(bin!, args, shellTimeoutMs);
+        // Empty-stdout fallback (matches $-op trailer empty-result semantic).
+        if (shellFallback !== undefined && stdoutArgv.trim() === "") {
+          return recordShellFallback(shellFallback, "shell argv produced empty stdout");
+        }
         const flatKeyArgv = `${targetName}.output`;
         vars.set(flatKeyArgv, stdoutArgv);
         if (op.outputVar !== undefined) vars.set(op.outputVar, stdoutArgv);
@@ -872,39 +909,50 @@ async function execOpInner(
         };
       }
       let stdout: string;
-      if (op.policy === "unsafe") {
-        if (ctx.enableUnsafeShell !== true) {
-          throw new UnsafeShellDisabledError(body, targetName);
+      try {
+        if (op.policy === "unsafe") {
+          if (ctx.enableUnsafeShell !== true) {
+            throw new UnsafeShellDisabledError(body, targetName);
+          }
+          // v0.18.8 — binary-scope gate (independent axis from
+          // ENABLE_UNSAFE_SHELL). Unsafe path invokes `bash -c <body>`;
+          // the literal first token IS `bash`. All-or-nothing: bash on
+          // allowlist → unsafe runs anything; bash off → unsafe refused.
+          // Per Perry's reframe (thread `7aab6f3f`): NO parse-based
+          // enumeration of body binaries — it's unsound against agent-
+          // author threat model. Sound binary-scope on unsafe is OS-level.
+          if (!isBinaryAllowed("bash", ctx.shellAllowlist)) {
+            throw new ShellBinaryNotAllowedError("bash", ctx.shellAllowlist, targetName);
+          }
+          stdout = await execShellCommand("bash", ["-c", body], shellTimeoutMs);
+        } else {
+          const tokens = tokenizeShellArgs(body);
+          if (tokens.length === 0) {
+            throw new OpError(
+              `Empty \`shell(...)\` op body in target '${targetName}'.`,
+              "shell",
+              "Provide a non-empty `command=\"...\"` kwarg.",
+              targetName,
+            );
+          }
+          const [bin, ...args] = tokens;
+          // v0.18.8 — binary-scope gate. Safe-path grammar guarantees
+          // one binary + no metacharacters, so the first token IS the
+          // binary. Default-deny when allowlist unset (BREAKING).
+          if (!isBinaryAllowed(bin!, ctx.shellAllowlist)) {
+            throw new ShellBinaryNotAllowedError(bin!, ctx.shellAllowlist, targetName);
+          }
+          stdout = await execShellCommand(bin!, args, shellTimeoutMs);
         }
-        // v0.18.8 — binary-scope gate (independent axis from
-        // ENABLE_UNSAFE_SHELL). Unsafe path invokes `bash -c <body>`;
-        // the literal first token IS `bash`. All-or-nothing: bash on
-        // allowlist → unsafe runs anything; bash off → unsafe refused.
-        // Per Perry's reframe (thread `7aab6f3f`): NO parse-based
-        // enumeration of body binaries — it's unsound against agent-
-        // author threat model. Sound binary-scope on unsafe is OS-level.
-        if (!isBinaryAllowed("bash", ctx.shellAllowlist)) {
-          throw new ShellBinaryNotAllowedError("bash", ctx.shellAllowlist, targetName);
+      } catch (err) {
+        if (shellFallback !== undefined) {
+          return recordShellFallback(shellFallback, `shell failed: ${messageOf(err)}`);
         }
-        stdout = await execShellCommand("bash", ["-c", body], shellTimeoutMs);
-      } else {
-        const tokens = tokenizeShellArgs(body);
-        if (tokens.length === 0) {
-          throw new OpError(
-            `Empty \`shell(...)\` op body in target '${targetName}'.`,
-            "shell",
-            "Provide a non-empty `command=\"...\"` kwarg.",
-            targetName,
-          );
-        }
-        const [bin, ...args] = tokens;
-        // v0.18.8 — binary-scope gate. Safe-path grammar guarantees
-        // one binary + no metacharacters, so the first token IS the
-        // binary. Default-deny when allowlist unset (BREAKING).
-        if (!isBinaryAllowed(bin!, ctx.shellAllowlist)) {
-          throw new ShellBinaryNotAllowedError(bin!, ctx.shellAllowlist, targetName);
-        }
-        stdout = await execShellCommand(bin!, args, shellTimeoutMs);
+        throw err;
+      }
+      // Empty-stdout fallback (matches $-op trailer empty-result semantic).
+      if (shellFallback !== undefined && stdout.trim() === "") {
+        return recordShellFallback(shellFallback, "shell produced empty stdout");
       }
       const flatKey = `${targetName}.output`;
       vars.set(flatKey, stdout);
@@ -1809,6 +1857,11 @@ export function substituteRuntime(text: string, vars: Map<string, unknown>): str
   // v0.5.0 item 4: `|fallback:"X"` filter accepts a colon-arg; consumes
   // an undefined upstream ref by substituting X. Positional — comes into
   // effect at the position it appears in the chain.
+  // v0.19.12 (Perry `9d8ff1b1`): aligned with $-op trailer fallback —
+  // fires on empty-string-after-trim OR empty-array OR null/undefined.
+  // Pre-v0.19.12 the filter fired ONLY on undefined; empty-string passed
+  // through (the silent-blank case Perry hit with `gh pr list` writing
+  // nothing to stdout). Now: same semantic across both fallback surfaces.
   return text.replace(
     // v0.7.0: alternation accepts both `$(REF|chain)` (legacy) and `${REF|chain}`
     // (canonical). Capture groups 1+2 = paren form, 3+4 = brace form.
@@ -1821,7 +1874,14 @@ export function substituteRuntime(text: string, vars: Map<string, unknown>): str
 
       for (const spec of specs) {
         if (spec.name === "fallback") {
-          if (value === undefined) value = spec.arg ?? "";
+          // v0.19.12 — empty-aware. Matches the $-op trailer's
+          // emptiness predicate (closes Perry's `9d8ff1b1`).
+          const isEmptyString = typeof value === "string" && value.trim() === "";
+          const isEmptyArray = Array.isArray(value) && value.length === 0;
+          const isNullish = value === null || value === undefined;
+          if (isNullish || isEmptyString || isEmptyArray) {
+            value = spec.arg ?? "";
+          }
           continue;
         }
         if (value === undefined) {

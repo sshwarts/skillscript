@@ -1114,18 +1114,32 @@ export class McpServer {
     }
     if (want("agentConnectors")) out["agentConnectors"] = reg ? await Promise.all(reg.listAgentConnectors().map((e) => describeEntry(e))) : [];
     if (want("shellExecution")) {
-      // The runtime has no fixed command allowlist — `shell(command=...)` ops
-      // are structurally sandboxed via direct spawn (no shell expansion). Bash
-      // is only invoked when `shell(command=..., unsafe=true)` is used AND
-      // `enableUnsafeShell` is true. This surface reports that mode so cold
-      // agents can author accordingly instead of guessing at a list that
-      // doesn't exist. Legacy `@ <cmd>` / `@ unsafe <body>` parse to the same
-      // AST node via the v0.7.1+ source-form collapse (lint surfaces them
-      // as deprecated-symbol-op) — runtime semantics are identical.
+      // v0.19.12 — accurate allowlist reporting (closes Perry's
+      // `7395b8af` discovery-surface bug). Pre-v0.19.12 this surface
+      // claimed "any binary on PATH may be invoked" — false since
+      // v0.18.8 shipped the default-deny allowlist. The discovery
+      // surface must reflect the enforced boundary, not contradict it.
+      const allowlist = this.deps.shellAllowlist;
       out["shellExecution"] = {
         mode: "structural-spawn",
         unsafe_enabled: this.deps.enableUnsafeShell === true,
-        description: "Safe `shell(command=\"...\")` ops spawn the binary directly without bash; any binary on PATH may be invoked. `shell(command=\"...\", unsafe=true)` ops require `enableUnsafeShell: true` on the runtime and are lint-flagged tier-2 every appearance. Legacy `@ <cmd>` / `@ unsafe <body>` symbol forms parse to the same AST and run identically (lint surfaces them as deprecated-symbol-op).",
+        allowlist: allowlist === undefined
+          ? "(unset — default-deny; no shell ops will run)"
+          : allowlist,
+        description:
+          "Safe `shell(command=\"...\")` ops spawn the binary directly without bash. " +
+          "Binary execution is gated by an operator-owned allowlist (v0.18.8 default-deny): " +
+          "`shellAllowlist` is reported above as the current set of permitted binaries (or " +
+          "\"(unset — default-deny)\" when no allowlist is wired, in which case ALL shell " +
+          "ops are refused with ShellBinaryNotAllowedError). Configure via " +
+          "`SKILLSCRIPT_SHELL_ALLOWLIST` env (comma-separated), `shellAllowlist` field in " +
+          "skillscript.config.json, or `bootstrap({shellAllowlist: [...]})` programmatically. " +
+          "`shell(command=\"...\", unsafe=true)` ops additionally require `enableUnsafeShell: true` " +
+          "(reported above), and bash itself must be on the allowlist (binary-scope is " +
+          "independent of unsafe-vs-safe). `shell(argv=[...]) [-> R]` (v0.19.11) is the " +
+          "argv form for args-with-spaces — same allowlist gate applies to `argv[0]`. " +
+          "Legacy `@ <cmd>` / `@ unsafe <body>` symbol forms parse to the same AST " +
+          "(lint surfaces them as deprecated-symbol-op).",
       };
     }
     return out;

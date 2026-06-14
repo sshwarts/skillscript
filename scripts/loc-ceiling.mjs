@@ -236,7 +236,13 @@ const CORE_PATHS = [
 // 1 + 2). Both rules are self-contained + grep-able by id; compressing
 // would lose the per-rule clarity. Per the signal-not-budget rule: clear
 // code wins.
-const NARROW_MAX_LOC = 11400;
+// v0.19.12: nudged narrow ceiling 11400 → 11500 for shell-op fallback
+// handling (Perry's `9d8ff1b1` — try/catch + empty-stdout coverage on
+// both argv + command= paths, recordShellFallback helper) and the
+// runtime_capabilities.shellExecution accurate-reporting rewrite
+// (Perry's `7395b8af` discovery-surface bug). Surface-correctness fixes
+// where new code is structural (try/catch wrappers + small helper closure).
+const NARROW_MAX_LOC = 11500;
 const NARROW_MAX_FILES = 23;
 const BROAD_INFO_LOC = 9500;
 const BROAD_INFO_FILES = 28;

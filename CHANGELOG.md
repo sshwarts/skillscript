@@ -1,5 +1,85 @@
 # Changelog
 
+## 0.19.12 — 2026-06-14 — runtime_capabilities accuracy + unified fallback semantics (closes Perry's 7395b8af)
+
+Perry built `pr-review-prep` (a body-template skill calling
+`gh pr list`) and hit two real bugs in succession.
+
+### Finding 1 (HIGH) — `runtime_capabilities.shellExecution` was lying
+
+The surface claimed *"any binary on PATH may be invoked"* — written
+pre-v0.18.8 and never updated when the default-deny shell allowlist
+shipped. Discovery surface contradicted enforcement. Perry twice gave
+Scott wrong operator guidance based on reading the false claim.
+
+**Fix**: `shellExecution` now reports the actual `allowlist` (array
+when wired, `"(unset — default-deny; no shell ops will run)"`
+otherwise) + a description that explains the allowlist-gated reality
+and the three wiring paths (`SKILLSCRIPT_SHELL_ALLOWLIST` env,
+`shellAllowlist` field in `skillscript.config.json`, programmatic
+`bootstrap({shellAllowlist: [...]})`).
+
+### Finding 2a — `|fallback:` template filter wasn't empty-aware
+
+`${PRS|fallback:"No current PRs."}` did NOT fire when PRS bound to
+empty string (the canonical `gh pr list` no-results case writes
+nothing to stdout). Pre-fix the filter fired only on `undefined`.
+
+**Fix**: aligned with the `$`-op trailer semantic — fires on
+empty-string-after-trim OR empty-array OR null/undefined. One
+emptiness predicate across both fallback surfaces.
+
+### Finding 2b — `(fallback:)` op-trailer was silently no-oped on `shell()`
+
+`file_read` honors `(fallback:)` on throw (catch error → bind
+fallback + record). `shell()` didn't — the trailer parsed but the
+runtime ignored it. Perry's "the runtime-intrinsic op-trailer isn't
+expected to fire" framing was actually a missing implementation; the
+file_read precedent shows it should work.
+
+**Fix**: `shell()` now honors `(fallback: "value")` on throw OR empty
+stdout, uniformly across all three forms (`command=`, `argv=`,
+`unsafe=true`). Wrapped via a shared `recordShellFallback` helper
+that pushes a `fallbacks[]` record (matches file_read's pattern).
+
+### Bonus — closes the buried-root-error case
+
+Pre-fix, when shell threw + a template referenced the unbound var,
+the surface error read as `UnresolvedVariableError` on the template;
+the root `ShellBinaryNotAllowedError` was buried in `errors[0]`. With
+F2b shipped, the canonical case dissolves: shell op catches its error
+via the fallback path, binds the fallback value, template renders
+cleanly. No buried error.
+
+### What changed
+
+- `src/mcp-server.ts:1116` — `shellExecution` reports `allowlist` field
+  + accurate description; drops the false "any binary on PATH" claim.
+- `src/runtime.ts:1822` — `|fallback:` filter empty-aware semantic.
+- `src/runtime.ts shell case` — try/catch + empty-stdout coverage on
+  argv + command= paths; `recordShellFallback` helper closure pushes
+  fallback records to `fallbacks[]`.
+- `src/help-content.ts` — `shell()` op description includes the
+  unified fallback semantic + cross-link to the `|fallback:` filter.
+- `tests/v0.19.12-shell-runtime-capabilities-fallback.test.ts` — 11
+  regression tests across all three findings (runtime_capabilities
+  accuracy with/without allowlist; filter empty-aware on
+  undefined/empty/whitespace/non-empty; shell op fallback on throw +
+  empty stdout in argv + command= forms; Perry's canonical
+  gh-empty-stdout scenario).
+- `scripts/loc-ceiling.mjs` — narrow ceiling 11400 → 11500.
+
+1924 total tests (+11 net new).
+
+### Migration
+
+No migration required. The filter change is empty-aware-additive
+(values that previously rendered as empty now render as the fallback
+arg). The shell op-trailer change is additive (skills with no
+fallback continue to throw exactly as before; skills with fallback
+now have it honored). The runtime_capabilities change is read-only
+surface accuracy.
+
 ## 0.19.11 — 2026-06-10 — `shell(argv=[...])` — cold-author-safe arg passing (closes Perry's adc87d52)
 
 Perry's qwen2.5:7b authorability probe surfaced an inverted safety

@@ -24,8 +24,8 @@ const REPO_ROOT = join(__dirname, "..");
 const PACKAGE_JSON = JSON.parse(readFileSync(join(REPO_ROOT, "package.json"), "utf8")) as Record<string, unknown>;
 
 describe("T7 — package.json polish", () => {
-  it("1. version is 0.19.11 (Perry's adc87d52 cold-author-safety finding: shell(argv=[...]) explicit token-list dispatch — strictly safer than unsafe=true. Closes the inverted-safety-gradient where the discoverable path (unsafe=true) had injection surface while the safe path (file-roundtrip) was an obscure trick. argv form: each element is exactly one argv token, no tokenization, no quote-stripping, no shell. ${VAR} substitutes per element; spaces preserved. Mutex with command=/unsafe=. New tier-2 lint `shell-quoted-var-in-command` catches the foot-gun pattern. 15 regression tests.)", () => {
-    expect(PACKAGE_JSON["version"]).toBe("0.19.11");
+  it("1. version is 0.19.12 (Perry's 7395b8af thread — two findings. (1) runtime_capabilities.shellExecution was stale: claimed `any binary on PATH` but v0.18.8 default-deny allowlist was actually enforced. Now reports actual allowlist + accurate description. (2) `|fallback:` template filter fired only on undefined; empty string passed through. Now empty-aware (matches $-op trailer: empty-string-after-trim / empty-array / null/undefined). (3) `(fallback:)` op-trailer silently no-oped on shell() — now honored on throw OR empty stdout, matching file_read precedent. 11 regression tests; closes the canonical `gh pr list` empty-stdout silent-blank case.)", () => {
+    expect(PACKAGE_JSON["version"]).toBe("0.19.12");
   });
 
   it("2. main + types + bin + engines.node ≥ 22.5 declared", () => {
@@ -75,12 +75,12 @@ describe("T7 — distributed code surface", () => {
     expect(out.trim(), `found AMP identifiers: ${out}`).toBe("");
   });
 
-  it("7. narrow-core LOC ceiling holds (< 11400 / 23 files; ..., v0.7.0 → 7150, v0.7.1 → 7250, v0.7.2 → 7550, v0.8.0 → 8200, v0.9.4 → 8300, v0.9.6 → 8550, v0.9.8 → 8650, v0.10 → 9300, v0.13 → 9550, v0.14.1 → 9700, v0.15.0 → 9900, v0.16.x → 10400, v0.17.4 → 10500, v0.18.2 → 10600, v0.18.5 → 10800, v0.18.8 → 11100, v0.19.4 → 11250, v0.19.10 → 11400)", () => {
+  it("7. narrow-core LOC ceiling holds (< 11500 / 23 files; ..., v0.7.0 → 7150, v0.7.1 → 7250, v0.7.2 → 7550, v0.8.0 → 8200, v0.9.4 → 8300, v0.9.6 → 8550, v0.9.8 → 8650, v0.10 → 9300, v0.13 → 9550, v0.14.1 → 9700, v0.15.0 → 9900, v0.16.x → 10400, v0.17.4 → 10500, v0.18.2 → 10600, v0.18.5 → 10800, v0.18.8 → 11100, v0.19.4 → 11250, v0.19.10 → 11400, v0.19.12 → 11500)", () => {
     const out = execSync("node scripts/loc-ceiling.mjs", { cwd: REPO_ROOT, encoding: "utf8" });
     const match = /CORE\s+(\d+) LOC across (\d+) files/.exec(out);
     expect(match).not.toBeNull();
     const [, locStr, filesStr] = match!;
-    expect(Number(locStr)).toBeLessThan(11400);
+    expect(Number(locStr)).toBeLessThan(11500);
     expect(Number(filesStr)).toBeLessThan(23);
   });
 

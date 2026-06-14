@@ -279,6 +279,8 @@ shell(command="echo hi && date +%Y", unsafe=true) -> OUT                       #
 
 **Container FS isolation:** shell() runs inside the runtime's container/sandbox. Writes to \`/tmp/x\` from \`shell(command="touch /tmp/x")\` land in the RUNTIME's \`/tmp/x\`, not on the author's host. Same isolation as \`file_read\` / \`file_write\` — cross-namespace work needs a known shared volume.
 
+**Fallback trailer:** all three forms (\`command=\`, \`argv=\`, \`unsafe=true\`) accept \`(fallback: "value")\` after the \`-> R\` binding. The fallback fires when (a) the shell op throws (binary not on allowlist, spawn failure, timeout), or (b) the binary runs cleanly but produces empty stdout after trim. Matches the \`$\`-dispatch op-trailer semantics. Example: \`shell(argv=["gh","pr","list"]) -> PRS (fallback: "No current PRs.")\` — when the repo has no open PRs and \`gh\` writes nothing to stdout, PRS binds to the fallback cleanly instead of leaving downstream \`\${PRS}\` references as UnresolvedVariableError. The \`|fallback:\` template filter has the same empty-aware semantic — both fire on empty-string-after-trim / empty-array / null/undefined.
+
 ### \`file_read(path="...") -> R\` — read file contents
 
 Reads via Node \`fs.readFile\`. Substitutes \`\${VAR}\` in the path. Optional \`(fallback: "...")\` trailer binds when read fails. **Container note:** when the runtime is sandboxed (Docker, container deployment), the runtime's filesystem is namespace-isolated from the author's host — \`/tmp/x\` in the skill maps to the runtime's \`/tmp/x\`, not the host's. Use absolute paths under a known shared volume for cross-namespace work.
