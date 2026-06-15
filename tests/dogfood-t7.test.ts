@@ -24,8 +24,8 @@ const REPO_ROOT = join(__dirname, "..");
 const PACKAGE_JSON = JSON.parse(readFileSync(join(REPO_ROOT, "package.json"), "utf8")) as Record<string, unknown>;
 
 describe("T7 — package.json polish", () => {
-  it("1. version is 0.19.12 (Perry's 7395b8af thread — two findings. (1) runtime_capabilities.shellExecution was stale: claimed `any binary on PATH` but v0.18.8 default-deny allowlist was actually enforced. Now reports actual allowlist + accurate description. (2) `|fallback:` template filter fired only on undefined; empty string passed through. Now empty-aware (matches $-op trailer: empty-string-after-trim / empty-array / null/undefined). (3) `(fallback:)` op-trailer silently no-oped on shell() — now honored on throw OR empty stdout, matching file_read precedent. 11 regression tests; closes the canonical `gh pr list` empty-stdout silent-blank case.)", () => {
-    expect(PACKAGE_JSON["version"]).toBe("0.19.12");
+  it("1. version is 0.19.13 (pre-v1.0 frontmatter rot cleanup: removed `# Connectors:` (doc-only-no-code) and `# Use when:` (code-only-no-consumers) — both shipped as discipline-only-contract surfaces with no enforcement. Parser hook + AST field for `# Use when:` removed; `# Connectors:` scrubbed from language-ref atoms with zero code change since it was never wired. Also documented the 2-level `# Output: agent: <target>` resolution chain (explicit literal + compile-time `${VAR}` substitution against resolved inputs) in both `docs/language-reference.md` (new Output target resolution subsection) and `src/help-content.ts` (new subsection in the frontmatter help topic) — closes the atom-only-spec gap ahead of v1.0 surface freeze.)", () => {
+    expect(PACKAGE_JSON["version"]).toBe("0.19.13");
   });
 
   it("2. main + types + bin + engines.node ≥ 22.5 declared", () => {

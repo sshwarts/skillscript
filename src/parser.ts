@@ -214,7 +214,6 @@ export interface ParsedSkill {
    * capability `# Requires:` clauses are authored.
    */
   requiredCapabilities: string[];
-  useWhen: string | null;
   targets: Map<string, SkillTarget>;
   entryTarget: string | null;
   onError: string | null;
@@ -1084,7 +1083,6 @@ export function parse(source: string): ParsedSkill {
     returns: [],
     requires: [],
     requiredCapabilities: [],
-    useWhen: null,
     targets: new Map(),
     entryTarget: null,
     entryTargetExplicit: false,
@@ -1346,8 +1344,6 @@ export function parse(source: string): ParsedSkill {
           }
           result.returns = names;
         }
-      } else if (key === "use when") {
-        result.useWhen = value;
       } else if (key === "onerror") {
         result.onError = value === "" ? null : value;
       } else if (key === "triggers") {

@@ -1,5 +1,50 @@
 # Changelog
 
+## 0.19.13 — 2026-06-15 — pre-v1.0 frontmatter rot cleanup + agent_id resolution chain documented
+
+### Removed (pre-v1.0 surface freeze cleanup)
+
+Two frontmatter headers that shipped as discipline-only-contract
+surfaces with no enforcement or downstream consumers — removed
+to keep the v1.0 frozen surface honest.
+
+- `# Connectors:` — documented in language-ref atoms but never
+  parsed, linted, or read anywhere in the runtime. Doc surface
+  claimed per-skill connector selection; implementation had zero
+  lines of code matching the claim. Removed from doc atoms; no
+  code change needed since nothing referenced the header.
+- `# Use when:` — inverse rot: parsed and stored on the AST
+  (`ParsedSkill.useWhen`) but with zero downstream readers (no
+  `skill_list` surface, no lint, no dashboard render). Parser hook
+  and AST field removed; existing skills using the header (if any)
+  now silently ignore the line, same as any unrecognized
+  `# Foo:` key.
+
+Both were the same shape — surfaces named without wiring — and
+the v1.0 surface-freeze commit means every documented header must
+be backed by actual behavior. Pre-v1.0 + zero adopter usage =
+clean removal, no migration tooling needed.
+
+### Documented — agent_id 2-level resolution chain
+
+`# Output: agent: <target>` and `# Output: template: <target>`
+have always resolved through a 2-level chain (explicit literal
++ compile-time `${VAR}` substitution against the resolved inputs
+map), but the spec lived only in language-ref atoms — no MD
+documentation, no `help()` topic coverage. Skill authors writing
+`# Output: agent: ${TEAM}` had to discover the behavior by
+trial-and-error or by reading `compile.ts`.
+
+Now documented in:
+- `docs/language-reference.md` — new "Output target resolution"
+  subsection in the output section (right after Multiple output
+  targets).
+- `src/help-content.ts` — new "Output target resolution"
+  subsection in the `help(topic: "frontmatter")` reference.
+
+No code change; pure documentation completion of the existing
+v0.19.12 surface ahead of the v1.0 freeze.
+
 ## 0.19.12 — 2026-06-14 — runtime_capabilities accuracy + unified fallback semantics (closes Perry's 7395b8af)
 
 Perry built `pr-review-prep` (a body-template skill calling

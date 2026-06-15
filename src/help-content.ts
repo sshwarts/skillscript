@@ -466,6 +466,15 @@ Skill files open with \`# Key: value\` headers. Order isn't significant.
 
 (\`# Event-type:\` fires \`unused-augmenting-header\` lint warning if set on a Headless skill — one with no \`agent:\` or \`template:\` output declaration.)
 
+## Output target resolution
+
+For the \`agent:\` and \`template:\` kinds, the runtime resolves the target agent_id via a **2-level chain** (first match wins):
+
+1. **Explicit name** — \`# Output: agent: oncall\` delivers to agent_id \`oncall\`.
+2. **\`\${VAR}\` compile-time substitution** — \`# Output: agent: \${RECIPIENT}\` resolves against the resolved inputs map (\`# Vars:\` defaults, \`# Requires:\` cascade, caller-supplied \`inputs\`) at compile time. Only compile-time inputs resolve here — a runtime-bound ref (an op's \`-> VAR\` output, an ambient ref) passes through verbatim and fails at delivery if still unresolved.
+
+There is **no** invocation-context inheritance and **no** runtime \`default_agent_id\` fallback: a skill must name its target explicitly or pass it as an input var.
+
 ## Capabilities + retrieval
 
 - \`# Requires: <namespace>:<key> -> VAR (fallback: "value")\` — declares external input requirements. \`user-var:\` or \`system-var:\` namespaces. Cascades resolve at compile.
