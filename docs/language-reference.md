@@ -379,7 +379,7 @@ Closed list of language-intrinsic ops the runtime knows directly. Each is a func
 | `notify` | `notify(agent="...", message="...", [event_type=...], [correlation_id=...]) -> ACK` | optional | Mid-skill agent alert; synchronous send via configured AgentConnector. |
 | `inline` | `inline(skill="<data-skill-name>")` | none | Compile-time inline of an Approved `# Type: data` skill. Resolves at compile, records `content_hash` in provenance. |
 | `execute_skill` | `execute_skill(skill_name="...", inputs={...}) -> R` | optional | Composition primitive. Runtime-resolved. See Composition section. |
-| `shell` | `shell(command="...") -> R` / `shell(command="...", unsafe=true) -> R` | optional | Sandboxed shell exec (default) or full-shell exec (`unsafe=true`, gated by `runtime.enable_unsafe_shell`). stdout binds. |
+| `shell` | `shell(command="...") -> R` / `shell(argv=[...]) -> R` / `shell(command="...", unsafe=true) -> R` | optional | Structural spawn (default), explicit-argv spawn (`argv=[...]`, no tokenizer), or full-shell exec (`unsafe=true`, gated by `runtime.enable_unsafe_shell`). Binary gated by the operator allowlist (see below). stdout binds. |
 | `file_read` | `file_read(path="...") -> R` | required | Read a file at `path`; binds string contents. |
 | `file_write` | `file_write(path="...", content="...")` | none | Write `content` to `path`. `mkdir -p` semantics for parent directories. Mutation-classified. |
 
@@ -431,18 +431,25 @@ Synchronous alert to a named agent via wired AgentConnector(s). **Contrast with 
 
 Returns ACK `{agent, dispatched: [{connector, ok, error?}]}` — fire-and-forget callers ignore the binding; check-delivery callers inspect ACK.
 
-### `shell` — sandboxed or unsafe shell exec
+### `shell` — structural, explicit-argv, or unsafe exec
 
-**Sandboxed default:**
+Three forms.
+
+**1. `shell(command="...")` — structural spawn (default).** The command string is whitespace-tokenized and quote-stripped, then one binary is spawned with the resulting tokens. No shell, no metacharacters, no pipes/redirects. The tokenizer is **quote-aware**: quotes are respected during the whitespace split, so a literal `'hello world'` stays one token (the surrounding quotes are then stripped). stdout binds; non-zero exit → op-error routed through `else:` / `# OnError:`.
 
 ```
 shell(command="curl -s 'wttr.in/${LOCATION|url}?format=j1'") -> RAW
 shell(command="git status") -> STATUS
 ```
 
-Structured-spawn sandbox: one binary per call, args parsed structurally, no shell metacharacter interpretation. The structural constraints ARE the security model. stdout binds; non-zero exit → op-error routed through `else:` / `# OnError:`.
+**2. `shell(argv=["bin","arg1","${VAR}",...])` — explicit-argv spawn.** Each list element is exactly one argv token; `${VAR}` substitutes per element and the result is **not re-split**, so an arg containing whitespace, quote characters, JSON, or any dynamic content stays one intact arg. No tokenizer, no quote-matching, no shell — strictly safer than `unsafe=true` (injection-surface zero). This is the right form whenever an arg may contain dynamic or whitespace-bearing content. **Mutex:** `argv=` does not compose with `command=` or `unsafe=true` — it's an execv-class spawn, there is no shell to opt into.
 
-**Unsafe mode:**
+```
+shell(argv=["say","-v","${VOICE}","-f","${PATH}"]) -> OUT
+shell(argv=["jq","-c","${FILTER}","/tmp/data.json"]) -> RESULT
+```
+
+**3. `shell(command="...", unsafe=true)` — full bash.** Required for pipes, redirects, shell built-ins.
 
 ```
 shell(command="for i in $(seq 1 10); do echo $i; done", unsafe=true) -> R
@@ -452,10 +459,25 @@ shell(command="curl -s example.com | jq '.field' > /tmp/out", unsafe=true)
 - Lint flags every `unsafe=true` call as tier-2.
 - Runtime refuses with `UnsafeShellDisabledError` unless deployment sets `runtime.enable_unsafe_shell = true` (default `false`). Compile-time `unsafe-shell-disabled` tier-1 catches at authoring.
 - Audit-visible at every fire.
+- Bash's `$(command)` and arithmetic `$((expr))` pass through to bash without escape because skillscript's substitution is braced (`${VAR}`).
 
-Bash's `$(command)` and arithmetic `$((expr))` pass through to bash without escape because skillscript's substitution is braced (`${VAR}`).
+**TWO security gates, not one — structural shape AND a binary allowlist.** The structural constraint (above) governs *how* a command runs (no shell/metacharacters on the safe path). It is HALF the model. The other half is an **operator-owned binary allowlist (default-deny)** governing *which* binary may run at all:
+
+- Every shell op's `argv[0]` (or the first token of `command=`) is checked against the allowlist; a non-allowlisted binary is refused with `ShellBinaryNotAllowedError`, regardless of safe-vs-`unsafe`.
+- **Default is deny-all** — if no allowlist is wired, *every* shell op is refused.
+- Configure via `SKILLSCRIPT_SHELL_ALLOWLIST` env (comma-separated), the `shellAllowlist` field in `skillscript.config.json`, or `bootstrap({ shellAllowlist: [...] })`. The runtime must **restart** to pick up changes. `skillfile shell-audit` scans the corpus and prints the binary union ready to paste.
+- For `unsafe=true`, `bash` itself must be on the allowlist (binary-scope is independent of unsafe-vs-safe).
+- The current allowlist is reported by `runtime_capabilities.shellExecution.allowlist`.
+- **This is an operator boundary the skill author cannot escape** — not via `unsafe`, not via any in-skill mechanism. It scopes *which binary*, not *what the binary does*: allowlisting a powerful authenticated CLI (e.g. `gh`) grants its whole surface, so wrap powerful binaries to least-privilege (a read-only wrapper script on the allowlist instead of the raw binary) before allowlisting.
+
+**All three forms honor the universal op-level kwargs below**, including `(fallback:)` — the fallback fires on op throw OR empty stdout.
 
 **Pipes need unsafe; sandboxed multi-call + temp file is the unsafe-free alternative.** A pipe (`curl ... | jq ...`) is a shell metacharacter and requires `unsafe=true`. To compute-in-tools without unsafe, split into sequential sandboxed calls sharing a temp file: `shell(command="curl -s -o /tmp/x.json ...")` then `shell(command="jq -c '<filter>' /tmp/x.json") -> R`. Sequential sandboxed calls share the runtime's filesystem within an execution. Caveat: a fixed temp path races under concurrent invocation (no built-in uniquifier short of a `mktemp` call) — for a large fetched intermediate, keeping it in an execution-scoped var + filtering exports via `# Returns:` is usually cleaner than either shell form.
+
+**The `'${VAR}'` quote trap — works in test, breaks on edge input.** Because the structural tokenizer is quote-aware, `shell(command="say -v Jamie '${TEXT}'")` DOES pass a simple multi-word value as one argument — it works for `TEXT="Perry here now"`. That is the trap: it's fragile on the *content* of the substituted value. If `TEXT` contains a quote character (`Jamie's turn`) the quote-matching drifts and the arg breaks — and it fails silently, only on certain inputs, after the pattern already "worked" in testing. Tier-2 lint `shell-quoted-var-in-command` flags the `'${VAR}'`-in-`command=` pattern for exactly this reason and points at `argv=[...]`. Three safe ways to pass an arg that may contain whitespace or quote characters:
+- **`shell(argv=[...])` (preferred):** explicit-token list (form 2 above) — no tokenizer touches the value; the safest because there is no shell and no quote-matching at all.
+- **File-roundtrip:** `file_write(path="/tmp/x.txt", content="${TEXT}")` then `shell(command="say -f /tmp/x.txt")` — the binary reads the value off disk via its own file-input flag; no tokenizer involved. Good when the binary has a file-input mode.
+- **`unsafe=true` + `${TEXT|shell}`:** bash quoting via the POSIX-escape filter; tier-2 lint flags it; injection surface remains if `TEXT` is untrusted.
 
 ### `file_read` / `file_write` — file I/O
 
@@ -546,7 +568,7 @@ Typed-contract ops (`data_*`, `skill_*`, `json_parse`, `llm`) auto-wire from the
 
 ### Universal op-level kwargs
 
-Four surfaces apply to every `$` dispatch regardless of tool. The runtime intercepts these before forwarding the remaining kwargs to the connector.
+Four surfaces apply to every `$` dispatch and to `shell()` (notably `(fallback:)`), regardless of tool. The runtime intercepts these before forwarding the remaining kwargs to the connector.
 
 **`timeout=N`** — Per-op timeout in **seconds**. Integer literal or `${VAR}` ref. Resolution chain (most-specific wins):
 
@@ -566,13 +588,14 @@ $ amp.amp_olsen_task task_type="scan" timeout=120 -> DISPATCH
 $ data_write content="${REPORT}" tags=["oncall"] approved="morning roundup" -> ACK
 ```
 
-**`(fallback: "value")` trailer** — Fires on dispatch throw OR empty bound value (empty string after trim, empty array, null/undefined). Coerce-on-bind: the fallback value binds to the output var transparently, downstream targets need no conditional. Permissive value parsing — bare identifiers, quoted strings, bracketed array literals all accepted.
+**`(fallback: "value")` trailer** — Fires on dispatch throw OR empty bound value (empty string after trim, empty array, null/undefined). Honored on `$` dispatch and on `shell()` (fires on shell op throw or empty stdout). Coerce-on-bind: the fallback value binds to the output var transparently, downstream targets need no conditional. Permissive value parsing — bare identifiers, quoted strings, bracketed array literals all accepted. A fired fallback is recorded in `result.fallbacks[]`.
 
 Note: an envelope object like `{items: []}` is a non-empty object and does NOT trigger the fallback even though its contained array is empty. To handle envelope-empty downstream, test the contained collection (`if ${R.items|length} == "0":`) or apply a filter (`${R.items|fallback:[]}`).
 
 ```
 $ llm prompt="Classify: ${INPUT}" -> VERDICT (fallback: "unknown")
 $ amp.amp_query_memories query="${TOPIC}" -> RESULTS (fallback: [])
+shell(argv=["gh","pr","list","--repo","acme/foo"]) -> PRS (fallback: "No open PRs")
 $ ticketing.search query="..." -> ISSUES (fallback: "search-unavailable")
 ```
 
@@ -657,7 +680,7 @@ Tool args are unconstrained `key=value` pairs — the connector forwards them to
 
 See the adopter playbook for the substrate config reference + the full Case 2 tradeoff.
 
-**Discovery surface.** `runtime_capabilities` (MCP tool) exposes the registered substrate state. Every entry across all four substrate slots (SkillStore / DataStore / LocalModel / McpConnector) carries its instance `manifest()` payload alongside the static features. Three observable states per entry: working `manifest:{...}`, runtime failure `manifest:null, manifest_error:"..."`, structural absence `manifest:null, manifest_unsupported:true` (AgentConnector only — the contract has no `manifest()` method). The bridge `wraps` convention re-exposes the underlying substrate's full manifest, so adopters reading the discovery surface see the full bound state without traversing multiple entries.
+**Discovery surface.** `runtime_capabilities` (MCP tool) exposes the registered substrate state. Every entry across all four substrate slots (SkillStore / DataStore / LocalModel / McpConnector) carries its instance `manifest()` payload alongside the static features. Three observable states per entry: working `manifest:{...}`, runtime failure `manifest:null, manifest_error:"..."`, structural absence `manifest:null, manifest_unsupported:true` (AgentConnector only — the contract has no `manifest()` method). The bridge `wraps` convention re-exposes the underlying substrate's full manifest, so adopters reading the discovery surface see the full bound state without traversing multiple entries. The `shellExecution` entry reports the operator shell allowlist + mode.
 
 Connector entries also surface `features` declarations (`supports_identity_propagation`, `supports_streaming_responses`, `supports_batch`). Capability flags that span multiple layers — `supports_identity_propagation` requires both the connector's ctx-honoring AND the substrate's per-identity scope honoring — gate via `RuntimeCapabilitiesConformance` auto-coverage: declaring a feature flag true requires the adopter to wire both Level-1 (substrate-independent: ctx reaches transport) and Level-2 (substrate-coupled: distinct identities yield distinct observable scopes) probes via `flagProbes`. Missing probes fail the gate before runtime accepts the flag as true. This is the structural close that prevents the discipline-only-contract pattern (capability claim without honoring impl) from recurring at the capability-flag surface.
 
@@ -667,7 +690,7 @@ Connector entries also surface `features` declarations (`supports_identity_propa
 
 ## Per-op gating
 
-Mutation ops require an authorization signal. The signal is per-op, not a mode binary.
+Two independent authorization layers govern a shell op: **(0) the binary allowlist** — can this binary run at all (operator-owned, default-deny; see the shell section above; refusal is `ShellBinaryNotAllowedError`) — and **(1) the mutation gate** below. The allowlist is checked first and the author cannot bypass it. Beyond shell, mutation ops require an authorization signal. The signal is per-op, not a mode binary.
 
 **Mutation-classified ops:**
 - `file_write(...)` (runtime-intrinsic)
@@ -678,7 +701,7 @@ Mutation ops require an authorization signal. The signal is per-op, not a mode b
 
 **Read-only ops (always allowed, no authorization needed):**
 - `file_read`, `emit`, `notify`, `inline`, `execute_skill`
-- `shell(command=...)` with read-only verb
+- `shell(command=...)` with read-only verb (still subject to the binary allowlist)
 - `$ <connector>.<tool>` against tools declared `mutating: false` (or unspecified, default false for query-shaped tools)
 - `$set`, `$append`
 
@@ -718,7 +741,7 @@ deliver:
 | Runtime-intrinsic | `notify` | `notify(agent="...", [message=...], [event_type=...], [correlation_id=...]) -> ACK` | optional |
 | Runtime-intrinsic | `inline` | `inline(skill="<name>")` | none (compile-time) |
 | Runtime-intrinsic | `execute_skill` | `execute_skill(skill_name="...", inputs={...}) -> R` | optional |
-| Runtime-intrinsic | `shell` | `shell(command="...", [unsafe=true], [approved="..."]) -> R` | optional |
+| Runtime-intrinsic | `shell` | `shell(command="...", [unsafe=true], [approved="..."]) [-> R] [(fallback: "...")]` or `shell(argv=[...], [approved="..."]) [-> R] [(fallback: "...")]` (mutually exclusive forms; binary allowlist applies to both) | optional |
 | Runtime-intrinsic | `file_read` | `file_read(path="...") -> R` | required |
 | Runtime-intrinsic | `file_write` | `file_write(path="...", content="...", [approved="..."])` | none |
 | External MCP — substrate-specific | `$ <connector>.<tool>` | `$ <connector>.<tool> kwarg=value, ... [timeout=N] [approved="..."] [-> R] [(fallback: "...")]` | optional |
@@ -863,7 +886,7 @@ Pipe filters apply transforms to resolved variables before substitution. Syntax:
 | `trim` | Whitespace trim | `${VERDICT|trim}` for `"urgent\n"` | `urgent` |
 | `length` | Count of items (array) or characters (string) | `${ITEMS|length}` for `["a","b","c"]` | `3` |
 | `contains:"X"` | Boolean: type-aware substring / element membership | `${MSG|contains:"urgent"}` for `"Yes, urgent"` | `true` |
-| `fallback:"X"` | Coalesce on missing/undefined ref | `${VAR.missing|fallback:"-"}` | `-` |
+| `fallback:"X"` | Coalesce on missing/undefined/empty ref | `${VAR.missing|fallback:"-"}` | `-` |
 | `isodate` | Epoch seconds → ISO-8601 timestamp | `${EPOCH|isodate}` for `1779660000` | `2026-05-24T22:00:00.000Z` |
 
 ### `length` semantics
@@ -915,16 +938,17 @@ Empty-string match: `${VAR|contains:""}` returns `true` if VAR is bound. Documen
 
 ### `fallback:"X"` semantics
 
-Coalesce-on-missing. Emits the literal string `X` when the ref resolves to missing/null/undefined. Strict-by-default semantics preserved everywhere else; `|fallback:` is the explicit opt-out at the call site.
+Coalesce-on-empty-or-missing. Emits the literal string `X` when the ref resolves to missing/null/undefined OR to an empty string. Strict-by-default semantics preserved everywhere else; `|fallback:` is the explicit opt-out at the call site.
 
 ```
 emit:
-    emit(text="present: ${PRESENT|fallback:\"missing\"}")        # → "hello"  (PRESENT is bound)
-    emit(text="missing: ${NOT_DECLARED|fallback:\"-\"}")          # → "-"      (NOT_DECLARED isn't)
+    emit(text="present: ${PRESENT|fallback:\"missing\"}")        # → "hello"  (PRESENT is bound and non-empty)
+    emit(text="missing: ${NOT_DECLARED|fallback:\"-\"}")          # → "-"      (NOT_DECLARED isn't declared)
+    emit(text="empty:   ${BOUND_EMPTY|fallback:\"-\"}")           # → "-"      (bound to "")
     emit(text="nested:  ${ISSUE.customFields.Assignee|fallback:\"unassigned\"}")
 ```
 
-**Why filter-shape, not ref-level `(fallback:)`.** Op-level `(fallback: ...)` exists on `$` dispatch for **error recovery** (dispatch happened, failed). Ref-level `|fallback:` is **coalesce** (lookup found nothing). They rhyme but are adjacent concepts. The filter-chain attachment keeps composition clean (`${VAR|json_parse|fallback:"-"}` works as a chain step) and the vocabulary alignment with op-level `(fallback:)` lets cold authors learn "fallback" as the universal concept while the syntax disambiguates the attachment site.
+**Why filter-shape, not ref-level `(fallback:)`.** Op-level `(fallback: ...)` exists on `$` dispatch and `shell()` for **error/empty recovery** (the op ran, then failed or returned empty). Ref-level `|fallback:` is **coalesce** (the lookup itself found nothing — missing, null, or empty). They rhyme but are adjacent concepts. The filter-chain attachment keeps composition clean (`${VAR|json_parse|fallback:"-"}` works as a chain step) and the vocabulary alignment with op-level `(fallback:)` lets cold authors learn "fallback" as the universal concept while the syntax disambiguates the attachment site.
 
 **Closes the missing-field strict-error trap**: `${ISSUE.customFields.Assignee}` against an object without that key threw `UnresolvedVariableError` and aborted whole-render. The filter is the per-ref opt-out.
 
@@ -1595,16 +1619,17 @@ Nested `# OnError:` is *not* supported. If `# OnError: degraded-skill` fires and
 
 ## Layer 3: Op-level fallback values
 
-Inline fallback declared on the op line. Used when the call fails or returns empty. Supported on `$` (MCP dispatch) ops with coerce-on-bind semantics.
+Inline fallback declared on the op line. Used when the call fails or returns empty. Supported on `$` (MCP dispatch) ops and on `shell()` with coerce-on-bind semantics. For `shell()` the fallback fires on op throw OR empty stdout (e.g. `gh pr list` against a repo with no open PRs binds the fallback string).
 
 ```
 weather:
     $ data_read mode=fts query="weather ${LOCATION}" limit=1 -> CURRENT (fallback: "weather unavailable")
     $ llm prompt="Summarize: ${CURRENT}" -> SUMMARY (fallback: "summary unavailable")
     $ slack.post channel=${CHANNEL} text=${SUMMARY} (fallback: "post failed silently") -> ACK
+    shell(argv=["gh","pr","list","--repo","acme/foo"]) -> PRS (fallback: "No open PRs")
 ```
 
-Same pattern as the `# Requires:` cascade's `(fallback: ...)` syntax — consistent across compile-time (`# Requires:`) and runtime (`$` dispatch).
+Same pattern as the `# Requires:` cascade's `(fallback: ...)` syntax — consistent across compile-time (`# Requires:`) and runtime (`$` dispatch and `shell()`).
 
 **Fallback value parsing.** Permissive: bare identifiers, quoted strings, and bracketed array literals all accepted. Matches the `# Requires:` cascade convention.
 
@@ -1632,7 +1657,7 @@ Open spec question: should `${ERROR}` be ambient inside `else:` blocks (same sha
 
 Same idea at every scope:
 - Compile-time: `# Requires: ... (fallback: value)`
-- Runtime op: `$ dispatch ... (fallback: value)`
+- Runtime op: `$ dispatch ... (fallback: value)` and `shell(...) ... (fallback: value)`
 - Runtime target: `else:` block
 - Whole skill: `# OnError:` header
 
@@ -1640,7 +1665,7 @@ Authors composing complex skills use these in combination — op-level for trans
 
 ## Connection to runtime observability
 
-Per-op error contract is what makes cascading fallbacks work. When `$` returns `isError: true`, the executor throws via `makeOpError` rather than binding the error text to the output var. The throw routes through `else:` / `# OnError:` machinery and surfaces in `result.errors[]` for the scheduler to log. Without this discipline, op-level failures wouldn't propagate to the fallback layers and silent-fail would be the default.
+Per-op error contract is what makes cascading fallbacks work. When `$` returns `isError: true`, the executor throws via `makeOpError` rather than binding the error text to the output var. The throw routes through `else:` / `# OnError:` machinery and surfaces in `result.errors[]` for the scheduler to log. Without this discipline, op-level failures wouldn't propagate to the fallback layers and silent-fail would be the default. Op-level `(fallback:)` is distinct: it intercepts the throw/empty-result at the op and binds the fallback value rather than propagating — a fired fallback is recorded in `result.fallbacks[]`, not `result.errors[]`.
 
 ## Composition — skills calling skills
 
@@ -2208,5 +2233,5 @@ Hung dispatches hang the skill without explicit timeout configuration. Lean: ski
 
 ---
 
-*Rendered from `skillscript/skillscript-language-reference` — 2026-06-08 17:41 EDT*  
+*Rendered from `skillscript/skillscript-language-reference` — 2026-06-15 12:22 EDT*  
 *Source of truth: AMP (`amp_render_document("skillscript/skillscript-language-reference")`)*

@@ -1,7 +1,7 @@
 # Skill: service-health-watch
-# Status: Approved v1:628c8c69
+# Status: Approved v1:5378fb77
 # Autonomous: true
-# Description: Every 5 minutes check named service endpoints — if latency or status degrades, write a signal record and alert
+# Description: Every 5 minutes check named service endpoints — if latency or status degrades, write a signal record and alert. Requires `curl` on the operator's shell allowlist (default-deny: a non-allowlisted binary is refused).
 # Vars: SERVICES=[auth-api, ledger-api, search-api], LATENCY_BUDGET_MS=400
 # Triggers: cron: */5 * * * *
 # Output: none

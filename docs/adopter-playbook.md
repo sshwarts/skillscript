@@ -232,9 +232,9 @@ SKILLSCRIPT_HOME=/path/to/adopter skillfile dashboard --config /path/to/adopter/
 
 Each instance reads its own config; ports/paths/db files don't collide.
 
-## Shell binary allowlist (v0.18.8 — BREAKING)
+## Shell binary allowlist
 
-**v0.18.8 introduces a default-deny operator allowlist for binaries reachable via `shell(...)` ops.** Per the Scott + Perry decision (memory `7aab6f3f`): skill authors are agents, agents are a weak trust anchor (hallucination, prompt-injection, no human-in-loop at scale), and operator-side scoping converts "a human reviews every skill" from discipline into an enforced constraint at the language level.
+**The runtime enforces a default-deny operator allowlist for binaries reachable via `shell(...)` ops.** Skill authors are agents, agents are a weak trust anchor (hallucination, prompt-injection, no human-in-loop at scale), and operator-side scoping converts "a human reviews every skill" from discipline into an enforced constraint at the language level.
 
 ### The behavior
 
@@ -242,25 +242,41 @@ Two **independent** operator axes — do not conflate:
 
 | Axis | Operator switch | Controls |
 |---|---|---|
-| **Binary scope** | `SKILLSCRIPT_SHELL_ALLOWLIST` (v0.18.8 new) | Which binaries `shell(...)` can invoke |
-| **Syntax scope** | `SKILLSCRIPT_ENABLE_UNSAFE_SHELL` (existing) | Whether bash interpretation (pipes / `$VAR` / `$(...)`) is permitted |
+| **Binary scope** | `SKILLSCRIPT_SHELL_ALLOWLIST` | Which binaries `shell(...)` can invoke |
+| **Syntax scope** | `SKILLSCRIPT_ENABLE_UNSAFE_SHELL` | Whether bash interpretation (pipes / `$VAR` / `$(...)`) is permitted |
 
 Behavior matrix:
 
 | Skill op | Binary on allowlist | Binary off allowlist |
 |---|---|---|
-| `shell(command="X ...")` (safe) | runs | refused with `ShellBinaryNotAllowedError` |
+| `shell(command="X ...")` (structural) | runs | refused with `ShellBinaryNotAllowedError` |
+| `shell(argv=["X", ...])` (explicit token list) | runs | refused with `ShellBinaryNotAllowedError` |
 | `shell(command="X ...", unsafe=true)` with `enableUnsafeShell=true` | runs (if `bash` on allowlist) | refused (off-list `bash` blocks ALL unsafe shell) |
 | `shell(command="X ...", unsafe=true)` with `enableUnsafeShell=false` | refused with `UnsafeShellDisabledError` (syntax axis fires first) | — |
 
 **Off-allowlist is final.** The skill author has no in-skill mechanism to escape it — not the `unsafe` keyword, not `# Autonomous: true`, not `approved="reason"`. Binary scope is an operator boundary the author cannot talk past.
 
-### Pre-upgrade migration — run this BEFORE you upgrade
+### Three call shapes — `command=`, `argv=`, `unsafe=true`
 
-The default-deny posture means existing skills using `shell()` will refuse to run on first dispatch after upgrade. **Sequence the migration as a discovery step, not a recovery step:**
+Three ways to invoke a binary. Each picks a different point on the safety/expressiveness curve:
+
+| Form | When to reach for it |
+|---|---|
+| `shell(command="curl -s https://example.com/${ID}") -> R` | Simple commands, no spaces or quote-special chars in substituted values. The string is whitespace-tokenized + quote-stripped; structural spawn (no shell). |
+| `shell(argv=["say", "-v", "${VOICE}", "-f", "${PATH}"]) -> R` | **Args with spaces, JSON payloads, dynamic strings.** Each list element is exactly one argv token; substitution per element doesn't re-tokenize. Strictly safer than `unsafe=true` — no shell process, no metacharacter interpretation, injection-surface zero. The right tool when a `${VAR}` may contain whitespace. |
+| `shell(command="echo hi && date", unsafe=true) -> R` | Pipes, redirects, shell built-ins, command-substitution. Requires `enableUnsafeShell: true` at the runtime; lint flags every appearance (tier-2 `unsafe-shell-op`). |
+
+`argv=` is mutually exclusive with `command=` and with `unsafe=true` (parse errors on either combination — argv is execv-class, there's no shell to opt into). The same allowlist gate applies to `argv[0]`.
+
+### Quote-trap lint (`shell-quoted-var-in-command`)
+
+The pattern `shell(command="echo '${VAR}'")` looks safe — quotes around the substitution — but the structural tokenizer respects quotes during the *original* whitespace split, then strips them. After substitution, if VAR contains quote characters (`Jamie's`) the matching can drift. Tier-2 lint `shell-quoted-var-in-command` fires on this pattern and points at the `argv=` form as the safer answer. Works fine for known-simple values; the lint exists because the failure mode is silent-wrong, not loud-error.
+
+### Discovering your corpus's binaries
+
+The default-deny posture means a freshly-installed runtime with no allowlist wired refuses every `shell()` call. Use `skillfile shell-audit` to enumerate the binaries your skill corpus invokes:
 
 ```bash
-# 1. Run while still on v0.18.7 (or any prior version) — pre-upgrade discovery
 skillfile shell-audit
 
 # Sample output:
@@ -279,15 +295,9 @@ skillfile shell-audit
 #   Note: 'bash' is on the list because at least one skill uses
 #   shell(..., unsafe=true). To permit unsafe shell, ALSO set
 #   SKILLSCRIPT_ENABLE_UNSAFE_SHELL=true.
-
-# 2. Paste into your $SKILLSCRIPT_HOME/.env, review/narrow as desired
-
-# 3. NOW upgrade to v0.18.8 — skills find the allowlist already
-#    populated, no surprise refusals
-pnpm install skillscript-runtime@^0.18.8
 ```
 
-Running the audit *after* the break is fine but adopter-unfriendly — operators discover problems through runtime errors instead of explicit decisions. The CLI tool exists precisely to make pre-upgrade the canonical path.
+Paste into your `$SKILLSCRIPT_HOME/.env` (review/narrow as desired). The audit is the canonical path — running it lets you make explicit policy decisions instead of discovering refusals through runtime errors.
 
 ### Programmatic bootstrap path (`bootstrap()` adopters)
 
@@ -296,7 +306,7 @@ Running the audit *after* the break is fine but adopter-unfriendly — operators
 | Surface | CLI path | Programmatic path |
 |---|---|---|
 | `.env` (env vars in a dotfile) | auto-loaded from `$SKILLSCRIPT_HOME/.env` | call `process.loadEnvFile()` yourself BEFORE `bootstrap()` |
-| `SKILLSCRIPT_*` env vars | read from `process.env` automatically | read automatically once env is loaded (v0.18.9+ env fallback) |
+| `SKILLSCRIPT_*` env vars | read from `process.env` automatically | read automatically once env is loaded (`bootstrap()` env-fallback) |
 | `connectors.json` (MCP wiring) | auto-discovered at `$SKILLSCRIPT_HOME/connectors.json` | pass `connectorsConfigPath: "/path/to/connectors.json"` to `bootstrap()` |
 
 Skip any of these and you get silent-empty surprises — a missing env var, an undeclared connector, etc. — with no hint that the file wasn't loaded. This is intentional: `bootstrap()` stays decoupled from the dotenv + `SKILLSCRIPT_HOME` convention so embedders can drive every input explicitly. The cost is doc-prominence — three surfaces, all silent-empty on omission, all noted here.
@@ -326,7 +336,7 @@ const { mcpServer, scheduler } = bootstrap({
 });
 ```
 
-**`bootstrap()` env fallback semantics (v0.18.9+)**: when `opts.shellAllowlist === undefined`, the runtime reads `SKILLSCRIPT_SHELL_ALLOWLIST` from `process.env` (comma-separated, trimmed). When `opts.shellAllowlist` is supplied — including the explicit `[]` deny-all — the option is authoritative and **env does NOT widen it**. This is security-load-bearing: an adopter passing `shellAllowlist: []` to assert lockdown gets lockdown regardless of ambient env.
+**`bootstrap()` env fallback semantics**: when `opts.shellAllowlist === undefined`, the runtime reads `SKILLSCRIPT_SHELL_ALLOWLIST` from `process.env` (comma-separated, trimmed). When `opts.shellAllowlist` is supplied — including the explicit `[]` deny-all — the option is authoritative and **env does NOT widen it**. This is security-load-bearing: an adopter passing `shellAllowlist: []` to assert lockdown gets lockdown regardless of ambient env.
 
 | `opts.shellAllowlist` | `SKILLSCRIPT_SHELL_ALLOWLIST` env | Effective allowlist |
 |---|---|---|
@@ -356,13 +366,13 @@ Argument-level policy (host allowlists, URL pattern matching) and OS-level egres
 - `execve`/`seccomp` filters (kernel-level allowed-binary set)
 - Container with curated `/usr/bin` (immutable distroless image)
 
-Per Perry's reframe (memory `7aab6f3f`): parse-based binary enumeration of `bash -c <body>` would be unsound — `e=curl; $e ...`, `$(printf cur)l ...`, `eval`, `xargs`, var-built command names all defeat it. Against agent-author threat models, false confidence is worse than no enforcement.
+Parse-based binary enumeration of `bash -c <body>` would be unsound — `e=curl; $e ...`, `$(printf cur)l ...`, `eval`, `xargs`, var-built command names all defeat it. Against agent-author threat models, false confidence is worse than no enforcement.
 
-### Dashboard observability (v0.18.9)
+### Dashboard observability
 
 The dashboard SPA at `http://<host>:<port>` exposes two security-focused surfaces for the observe→promote loop:
 
-**Security view (`#security` route).** Cross-skill list of blocked shell attempts — `{skill, target, binary, body, timestamp}` per refused call. Aggregated by binary so you can see at a glance "what did skills try to invoke that I haven't allowlisted." Backed by the new `blocked_shell_attempts` MCP tool, which filters trace records by `blocked_reason: "binary-not-allowed"`. Pre-v0.18.9 runtimes don't expose this tool; the view degrades cleanly to an "upgrade to v0.18.9+" note.
+**Security view (`#security` route).** Cross-skill list of blocked shell attempts — `{skill, target, binary, body, timestamp}` per refused call. Aggregated by binary so you can see at a glance "what did skills try to invoke that I haven't allowlisted." Backed by the `blocked_shell_attempts` MCP tool, which filters trace records by `blocked_reason: "binary-not-allowed"`. Runtimes without the tool exposed degrade cleanly to an "unavailable" note.
 
 **Skill detail view — security signals + source highlighting.** Each skill's detail page (clicking a skill name from `#skills`) shows:
 - A **"Security signals"** panel at the top: aggregated counts of shell ops + binaries used, unsafe-shell count, `# Autonomous: true`, per-op `approved="..."` authorizations, mutation ops (`$ skill_write` / `$ data_write` / `file_write`), wake-class `@session` deliveries, cron triggers.
@@ -370,7 +380,7 @@ The dashboard SPA at `http://<host>:<port>` exposes two security-focused surface
 
 The two surfaces compose: summary panel tells you WHAT to look for; highlights tell you WHERE to look.
 
-### Future direction (NOT shipped in v0.18.8)
+### Future direction
 
 Per-skill capability declaration: skills declare what shell binaries they need in their frontmatter:
 
@@ -382,16 +392,16 @@ Per-skill capability declaration: skills declare what shell binaries they need i
 
 The operator policy validates `declared ∩ allowlist` — each skill's shell footprint becomes self-documenting and auditable. Slated for a future ring once the chokepoint + observability surfaces ship.
 
-## Trigger model (v0.19.0 — BREAKING)
+## Trigger model
 
-**v0.19.0 collapses the trigger surface to two primitives.** Per the Scott + Perry decision (memory `ceaf4579`):
+**The trigger surface is two primitives.**
 
 | Primitive | Purpose |
 |---|---|
 | `cron` | Time-based fires (unchanged) |
 | `event` | Generic external-signal fires via HTTP POST to `/event` |
 
-The previous sources (`session`, `agent-event`, `file-watch`, `sensor`) are **removed**. They were either parse-only stubs that never fired or substrate-coupled concepts that belong outside the runtime. Anything external becomes an adapter that POSTs to `/event` — including what would have been a session/agent-event/file-watch/sensor trigger. The `DeliveryMeta.origin.trigger_kind` receiver enum also drops `"session"` in lockstep (pre-v1.0 cleanup; the value was never functionally emitted).
+Concepts that look like triggers but aren't — session lifecycle, agent events, file-watch, sensors — are **adapter responsibilities**: external code POSTs `/event` when relevant. Keeps the runtime substrate-neutral; the trigger surface stays tight. The `DeliveryMeta.origin.trigger_kind` receiver enum exposes only `"cron" | "event" | "webhook" | "agent" | "cli" | "dashboard" | "inline"`.
 
 ### The `event` primitive
 
@@ -418,7 +428,7 @@ Authorization: Bearer <token>   # if SKILLSCRIPT_EVENT_INGRESS_AUTH_TOKEN set
 
 {
   "event_name": "prox",
-  "params": { "ROOM": "kitchen", "USER": "scott" }
+  "params": { "ROOM": "kitchen", "USER": "alice" }
 }
 ```
 
@@ -443,8 +453,6 @@ The `run_id` is the runtime's `trace_id` — adopters paste it into the dashboar
 **Param validation is strict v1**: every declared param must be present; no unknown params accepted. No defaults; no type coercion. JSON already carries types, and a type mismatch fails inside the consuming op with a real error. Defaults + types may land in v2 if real adopter need surfaces.
 
 ### `# Autonomous: true` for event/cron skills doing mutations
-
-This is **not** a v0.19.0 regression — it's the pre-existing v0.14.x mutation gate. But it surfaces more visibly with event-fired skills, so worth calling out explicitly in this section.
 
 Skills fired by cron OR event have **no interactive author** to confirm mutation ops. The runtime's mutation gate (`$ data_write` / `$ skill_write` / `file_write` / mutating MCP tools) requires explicit authorization in non-interactive contexts. Three authorization paths exist:
 
@@ -498,7 +506,7 @@ SKILLSCRIPT_EVENT_INGRESS_ENABLED=true
 SKILLSCRIPT_EVENT_INGRESS_AUTH_TOKEN=<token>
 ```
 
-When `eventIngressEnabled=true`, the route mounts on the same HTTP server as the dashboard/RPC (no second port). Default bind is `127.0.0.1` (localhost-only) — adopters wanting `0.0.0.0` external reach pass `--host 0.0.0.0` explicitly. Per Perry's framing: "enforce the DMZ assumption by the bind, not by hope."
+When `eventIngressEnabled=true`, the route mounts on the same HTTP server as the dashboard/RPC (no second port). Default bind is `127.0.0.1` (localhost-only) — adopters wanting `0.0.0.0` external reach pass `--host 0.0.0.0` explicitly. The DMZ assumption is enforced by the bind, not by hope.
 
 ### Durability honesty
 
@@ -506,20 +514,20 @@ When `eventIngressEnabled=true`, the route mounts on the same HTTP server as the
 
 Durable / at-least-once delivery is a v2 if real adopter need surfaces. Don't oversell the 200 contract; build durable queueing on top yourself if you need it now.
 
-### Migration from removed sources
+### Bridging external sources
 
-If you have pre-v0.19.0 skills with `# Triggers: session: start` / `agent-event: X` / `file-watch: /path` / `sensor: X` declarations:
+Anything that isn't time-based is an external adapter that POSTs to `/event`:
 
-- **session start/end** → boot/shutdown lifecycle moved to the substrate (NanoClaw / your harness). If you need a runtime skill to fire at session-start, your harness POSTs to `/event` after boot.
-- **agent-event** → external bridge (your agent fires `POST /event` when relevant).
-- **file-watch** → external watcher script (inotify / chokidar / fswatch) POSTs to `/event`. The "how to call /event" pattern lives in the language reference call-example; the file-watching itself is standard OS plumbing — you own that script.
-- **sensor** → same pattern as file-watch; sensor adapter POSTs to `/event`.
+- **Session start/end** — your harness POSTs `/event` after boot or before shutdown if you want a skill to fire at session boundaries.
+- **Agent events** — your agent emits `POST /event` when the event of interest occurs.
+- **File-watch** — an external watcher script (`inotify` / `chokidar` / `fswatch`) POSTs to `/event` on changes. The file-watching itself is standard OS plumbing — you own that script.
+- **Sensors** — same pattern as file-watch; the sensor adapter POSTs to `/event`.
 
-Skills declaring removed sources fail to parse on v0.19.0 (tier-1 parse error). Run `skillfile lint` against your corpus pre-upgrade to find them.
+Skills declaring unsupported `# Triggers:` sources fail to parse with a tier-1 parse error. `skillfile lint` against your corpus surfaces them.
 
 ## Output template — body text IS the output
 
-A skill's body text — the prose between the frontmatter and the first target — is its declarative output template. The runtime interpolates `${VAR}` references against final vars and publishes the rendered string as the skill's canonical output (`outputs.text` or the agent/template/file payload, depending on `# Output:` kind). No `emit()` ceremony required for the common case.
+A skill's body text — prose lines that don't sit inside a target — is its declarative output template. The runtime interpolates `${VAR}` references against final vars and publishes the rendered string as the skill's canonical output (`outputs.text` or the agent/template/file payload, depending on `# Output:` kind). No `emit()` ceremony required for the common case. The template may appear **anywhere a target doesn't** — at the top, at the bottom, or split between targets — so authors can put output where their language instincts suggest (most write the output line *after* the compute that fills it in).
 
 ### The shape
 
@@ -550,7 +558,7 @@ Two independent output channels:
 
 When a skill defines both a template AND `emit(text=...)` calls, the template owns canonical output; `emit()` populates transcript only. This is intentional — emit is the debugging / reasoning channel. The `emit-with-template` advisory lint surfaces this to confirm intent.
 
-If you want emit to keep being your canonical output (the pre-v0.19.4 shape), don't write a body template. Emit-only skills work exactly as before.
+If you want emit to be your canonical output, don't write a body template. Emit-only skills route emissions to the canonical output channel.
 
 ### Output kinds
 
@@ -585,12 +593,59 @@ report: needs: fetch_issues
 
 The legacy `report: fetch_issues` shape (deps after colon, no `needs:` keyword) is still parsed as a target when an indented op-block follows on the next line, but `needs:` is the recommended form for new skills.
 
+### One template region per skill
+
+A skill may carry template prose in one region. Splitting it into two — some prose above the targets AND some below — raises a tier-1 parse error: "skill has body template content in two places (before targets AND after targets). Pick one location." Picking is loud over silent-concat; the author chooses where the template lives, the runtime doesn't guess.
+
 ### Lints to know
 
 - **`unset-template-var`** (tier-1) — every `${VAR}` in the template must resolve to a `# Vars:` / `# Requires:` input, an ambient ref (`NOW`, `USER`, ...), or a `$set` / `->` binding somewhere in the skill body. Tier-1 because an unbound ref renders empty silently.
 - **`template-looks-like-target`** (tier-2) — bare `<word>:` alone in the template region, no following op-block. Ambiguous shape — author may have meant a target.
+- **`connector-as-tool`** (tier-1) — `$ <connector> <tool>` space-separated catches the muscle-memory foot-gun (CLI-style `git status`). Bare-form dispatch treats the first token as the tool name, sending `name: "<connector>"` to the MCP server, which replies with a misdirecting "Tool '<connector>' not found." The two correct shapes are `$ <connector>.<tool> args` (dotted) or `$ <tool> args` (bare-tool; runtime resolves).
+- **`remote-result-needs-parse`** (tier-3) — `${R|length}` on an `R` bound by `$` dispatch. Per-MCP-server result shapes vary: if the server returns prose-wrapped or non-JSON text, the value binds as a STRING and `|length` returns the string's char-count instead of element-count. Add `$ json_parse ${R} -> P` after the dispatch and use `${P|length}`. Suppressed when the skill already does `$ json_parse ${R}` somewhere — your defensive parse is taken as intent.
 - **`body-template-detected`** (tier-3) — non-blank, non-`#` lines in the body region, no `${...}` interpolations, no text-consuming `# Output:` declaration. Suggests "I wrote prose; it became template by accident." Prefix with `#` to mark as comments, or add an interpolation / `# Output:` to confirm intent.
 - **`emit-with-template`** (tier-3) — skill has both a template AND `emit(text=...)` calls. Confirms the channel-shift is intentional.
+
+## Fallback semantics — `(fallback: ...)` op-trailer and `|fallback:` filter
+
+Two surfaces, **one emptiness predicate**. Both fire when the upstream value is any of:
+
+- empty string after `trim()`
+- empty array (`[]`)
+- `null` / `undefined`
+
+### Op-trailer — `(fallback: "value")`
+
+Trails the `-> R` binding on `$` dispatch ops, `shell(...)`, `file_read(...)`. Binds the fallback value to `R` when the op throws OR produces an empty result.
+
+```
+$ ticketing.search query="open" -> ISSUES (fallback: [])
+
+shell(argv=["gh", "pr", "list", "--repo", "owner/repo"]) -> PRS (fallback: "No current PRs.")
+
+file_read(path="/var/reports/today.md") -> REPORT (fallback: "no report")
+```
+
+When the fallback fires, the runtime pushes a record onto `result.fallbacks[]` so callers can distinguish "real value" from "fallback substituted." The original error message rides on the fallback record's `reason` field; the op completes cleanly.
+
+### Filter — `${VAR|fallback:"value"}`
+
+Substitution-time fallback inside a template or kwarg. Same emptiness predicate; binds to the filter argument when the upstream value is empty.
+
+```
+Open PRs: ${PRS|fallback:"none today"}.
+
+$ llm prompt="Triage this: ${INPUT|fallback:'(no input — skip)'}" -> JUDGMENT
+```
+
+The filter is positional in chains: `${RAW|trim|fallback:"-"}` applies trim first, then fallback if the trim left an empty string.
+
+### When to use which
+
+- **Op-trailer** for *binding-time* protection — the variable lands populated regardless of the op's outcome. Downstream consumers (other ops, template renders) don't need to know whether the value is real or fallback.
+- **Filter** for *substitution-time* defaulting — the variable may legitimately be empty/unset, you just want a placeholder at the render site.
+
+Most "no current results" patterns want the op-trailer (the variable becomes the canonical record of what happened). The filter is for "if the optional input wasn't supplied, show a placeholder" cases.
 
 ## Wiring the AgentConnector
 
@@ -660,9 +715,9 @@ The canonical bundled example is `examples/connectors/HttpWebhookAgentConnector/
 
 Three patterns to copy when forking it for your substrate:
 
-**Pattern 1 — `agent@session` opaque composite.** Every messaging substrate needs either bare-identity OR specific-live-session addressing. The contract keeps `agent_id` opaque; sessions ride as `"perry@kitchen-terminal"` or via `WakeOpts.session_id`. Substrates that care decompose; substrates that don't ignore.
+**Pattern 1 — `agent@session` opaque composite.** Every messaging substrate needs either bare-identity OR specific-live-session addressing. The contract keeps `agent_id` opaque; sessions ride as `"<agent>@<session>"` (e.g. `"alice@laptop-tab-3"`) or via `WakeOpts.session_id`. Substrates that care decompose; substrates that don't ignore.
 
-As of v0.18.5, the runtime address-routes skill-author surfaces (`notify()` + `# Output: agent:` / `template:`) on `@session` presence: bare → your `deliver()`, composite → your `wake()`. You receive whichever method the runtime decided; your job is to honor what arrives. For `wake()`, expect the FULL composite (`"perry@kitchen-terminal"`) — decompose to route to the right session:
+The runtime address-routes skill-author surfaces (`notify()` + `# Output: agent:` / `template:`) on `@session` presence: bare → your `deliver()`, composite → your `wake()`. You receive whichever method the runtime decided; your job is to honor what arrives. For `wake()`, expect the FULL composite (`"<agent>@<session>"`) — decompose to route to the right session:
 
 ```typescript
 async wake(agent_id: string, opts?: WakeOpts): Promise<WakeReceipt> {
@@ -693,9 +748,9 @@ async wake(agent_id: string, _opts?: WakeOpts): Promise<WakeReceipt> {
 
 Callers reading `WakeReceipt.woken` distinguish "the substrate woke them" from "the substrate stored the payload for later" without needing per-substrate knowledge.
 
-**Pattern 3 — session echo on receipts.** When your substrate routes to a specific session, echo it back on `DeliveryReceipt.session_id` / `WakeReceipt.session_id`. Dashboards rendering "delivered to perry@kitchen-terminal" rather than just "delivered to perry" depend on this.
+**Pattern 3 — session echo on receipts.** When your substrate routes to a specific session, echo it back on `DeliveryReceipt.session_id` / `WakeReceipt.session_id`. Dashboards rendering "delivered to alice@laptop-tab-3" rather than just "delivered to alice" depend on this.
 
-**Pattern 4 — read `meta.origin.caller_agent_id` to attribute, not for scope.** The `DeliveryMeta` envelope your `deliver()` receives carries `origin.caller_agent_id` = the *authenticated caller* who fired the dispatch (not the skill's owner — those are separate semantics; see [Connector Contract Reference](connector-contract-reference.md) §field semantics). Use it for *attribution* — rendering "from cc" on the receiving end, audit logs, accountability — not for authorization scoping. Outbound substrate scoping should derive from the *skill owner* (which the runtime applies at the connector layer via `ctx.agentId`, not via the envelope). If `caller_agent_id` is undefined on a delivery you receive, it means the chain originated from a non-human trigger (cron / event / scheduler) — your substrate should attribute it as "system-fired" or similar, not assume an identity.
+**Pattern 4 — read `meta.origin.caller_agent_id` to attribute, not for scope.** The `DeliveryMeta` envelope your `deliver()` receives carries `origin.caller_agent_id` = the *authenticated caller* who fired the dispatch (not the skill's owner — those are separate semantics; see [Connector Contract Reference](connector-contract-reference.md) §field semantics). Use it for *attribution* — rendering "from <caller>" on the receiving end, audit logs, accountability — not for authorization scoping. Outbound substrate scoping should derive from the *skill owner* (which the runtime applies at the connector layer via `ctx.agentId`, not via the envelope). If `caller_agent_id` is undefined on a delivery you receive, it means the chain originated from a non-human trigger (cron / event / scheduler) — your substrate should attribute it as "system-fired" or similar, not assume an identity.
 
 **Pattern 5 — surface non-fatal notes via `DeliveryReceipt.warnings`.** When your substrate needs to signal something non-fatal about a delivery — "stripped @session because verb is deliver", "rate-limit hint", "fan-out: delivered to 3 sessions" — return them as `warnings: string[]` on the receipt instead of writing to stderr. The runtime echoes warnings onto `AgentDeliveryReceiptRecord.receipt.warnings`, where the dashboard can render them and observability tools can scrape them. Stderr noise gets lost; receipt warnings are structured + caller-visible.
 
@@ -722,7 +777,7 @@ How `author` is captured depends on how the skill gets written:
 
 Adopters whose `SkillStore` is backed by an addressable substrate (e.g., a memory store) can author skills by writing the substrate record directly — without going through the MCP `skill_write` handler. This captures `SkillMeta.author` from the substrate's own writer-identity (whatever the direct-write API authenticates as).
 
-**Gotcha:** direct-write must declare `# Status: Draft`, not `# Status: Approved`. The runtime's hash-token tamper gate (v0.9.0) rejects skills with `# Status: Approved` that lack a `vN:<token>` stamp; the stamp is computed by the runtime's `update_status` flow, not by the substrate. To publish:
+**Gotcha:** direct-write must declare `# Status: Draft`, not `# Status: Approved`. The runtime's hash-token tamper gate rejects skills with `# Status: Approved` that lack a `vN:<token>` stamp; the stamp is computed by the runtime's `update_status` flow, not by the substrate. To publish:
 
 1. Write the skill with `# Status: Draft` via your substrate's direct-write API.
 2. Call `skill_status({name, new_state: "Approved"})` via MCP (or the dashboard's Approve button). This stamps the token and preserves the captured author.
@@ -731,9 +786,9 @@ Write-Approved-without-stamp will fail at execute time with `ApprovalRejectedErr
 
 ## Identity propagation — for multi-agent hosts
 
-**Skip this section** if your runtime serves one agent (CLI tools, single-user dashboards, hobby deployments). The existing v0.16.8 default — `SkillMeta.author` captured from the SkillStore's writer identity — already attributes authorship correctly when there's only one writer.
+**Skip this section** if your runtime serves one agent (CLI tools, single-user dashboards, hobby deployments). The default — `SkillMeta.author` captured from the SkillStore's writer identity — already attributes authorship correctly when there's only one writer.
 
-This section is for adopters whose runtime is fronted by an MCP host that bridges multiple authenticated agents into one transport (e.g., a NanoClaw-style multi-agent gateway, or a multi-tenant SaaS where agents share a runtime pool).
+This section is for adopters whose runtime is fronted by an MCP host that bridges multiple authenticated agents into one transport (e.g., a multi-agent gateway, or a multi-tenant SaaS where agents share a runtime pool).
 
 ### The gap MCP doesn't close on its own
 
@@ -753,7 +808,7 @@ When you configure `dashboard.mcpCallerIdentityHeader`, the runtime reads that h
 }
 ```
 
-Multi-agent host (NanoClaw, custom MCP gateway, etc.) is responsible for setting the header on every outbound request:
+Multi-agent host (custom MCP gateway, etc.) is responsible for setting the header on every outbound request:
 
 ```http
 POST /rpc HTTP/1.1

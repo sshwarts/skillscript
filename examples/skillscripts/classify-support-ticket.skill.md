@@ -1,5 +1,5 @@
 # Skill: classify-support-ticket
-# Status: Approved v1:670a94cf
+# Status: Approved v1:ae27d3f9
 # Autonomous: true
 # Description: Read an incoming support ticket and route it: severity-1 tickets get paged to ops-channel, billing tickets get tagged for finance review, everything else gets a draft reply queued for human review
 # Vars: TICKET_TEXT, TICKET_ID
@@ -14,13 +14,13 @@ severity_check:
 
 route:
     needs: severity_check
-    if ${CATEGORY|trim} == "sev-1":
+    if ${CATEGORY|contains:"sev-1"}:
         emit(text="PAGE: sev-1 ticket ${TICKET_ID} - ${TICKET_TEXT}")
         $ data_write content="sev-1 ticket ${TICKET_ID}: ${TICKET_TEXT}" tags=["support","sev-1","page"]
-    elif ${IS_SEV1|trim} == "yes":
+    elif ${IS_SEV1|contains:"yes"}:
         emit(text="PAGE: classifier said ${CATEGORY|trim} but severity-check flagged this as sev-1: ${TICKET_ID}")
         $ data_write content="sev-1 escalation ${TICKET_ID}: category=${CATEGORY|trim} but severity-check=yes" tags=["support","sev-1","disagreement"]
-    elif ${CATEGORY|trim} == "billing":
+    elif ${CATEGORY|contains:"billing"}:
         $set TAG_FOR = "finance"
         emit(text="Tagged for ${TAG_FOR} review: ${TICKET_ID}")
         $ data_write content="billing ticket ${TICKET_ID}: ${TICKET_TEXT}" tags=["support","billing"]
