@@ -24,8 +24,8 @@ const REPO_ROOT = join(__dirname, "..");
 const PACKAGE_JSON = JSON.parse(readFileSync(join(REPO_ROOT, "package.json"), "utf8")) as Record<string, unknown>;
 
 describe("T7 — package.json polish", () => {
-  it("1. version is 0.19.14 (docs hotfix on top of v0.19.13: full re-render of docs/language-reference.md via amp_render_document, restoring a pre-existing ~17KB gap where the entire ## Connectors section — five connector types, agent_id resolution, PortableMemory shape, field-access tier rules, per-call identity overrides — was present in the atom-side document anchor (50fcecc8) but never landed in the MD. v0.19.13's hand-splice for `# Output: agent: <target>` resolution also closed with a now-dangling pointer to that missing section. Workflow lesson: language-ref re-renders must run amp_render_document and overwrite the MD wholesale, not hand-splice deltas — hand-splice preserves drift, full render keeps MD == atoms.)", () => {
-    expect(PACKAGE_JSON["version"]).toBe("0.19.14");
+  it("1. version is 0.19.15 (v1.0 runtime-semantics test battery — closes Perry's f6b479f5 #2 ask. 58 execute-and-assert tests across 5 lanes: (a) filter runtime (length array vs string, trim, json, fallback empty-aware, contains, url, shell, isodate); (b) numeric coercion + if/elif/else dispatch + TypeMismatchError; (c) event-trigger e2e via Scheduler.fireEvent + EventNotFoundError + strict v1 param validation; (d) composition runtime — execute_skill, # Returns: filter, R.final_vars.X reach, recursion-depth guard at default limit 10, forward-reference resolution; (e) frozen-surface regression catalog — all 5 output kinds, Level-2 \\${VAR} agent target substitution, body-template Pin 4, 3 shell call shapes, (fallback:) op-trailer. Single command: pnpm vitest run v1.0 — runs all 5 lanes in ~200ms. Backs the v0.19.12 frozen surface so v1.0 can't drift without a red test.)", () => {
+    expect(PACKAGE_JSON["version"]).toBe("0.19.15");
   });
 
   it("2. main + types + bin + engines.node ≥ 22.5 declared", () => {

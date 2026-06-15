@@ -1,5 +1,40 @@
 # Changelog
 
+## 0.19.15 — 2026-06-15 — v1.0 runtime-semantics test battery (freeze-guard ring)
+
+Closes Perry's `f6b479f5` #2 ask. Existing 1924-test suite is heavy on
+parse/compile/lint coverage but light on execute-and-assert-output for
+the v0.19.12 frozen-surface primitives — without execution-test backing,
+the v1.0 surface freeze holds in docs but not in code.
+
+This release adds 58 execute-and-assert tests across five new lanes:
+
+- **Lane (a)** — `tests/v1.0-runtime-semantics.test.ts` (26 tests): all
+  eight filters in `KNOWN_FILTERS` — `|length` (array vs string vs
+  object), `|trim`, `|json`, `|fallback:` empty-aware predicate,
+  `|contains:`, `|url`, `|shell`, `|isodate`.
+- **Lane (b)** — `tests/v1.0-numeric-coercion.test.ts` (9 tests):
+  `Number()`-coerced `<`/`>`/`<=`/`>=` comparisons (not lexicographic),
+  `if`/`elif`/`else` chain dispatch, `TypeMismatchError` surface.
+- **Lane (c)** — `tests/v1.0-event-trigger-e2e.test.ts` (6 tests):
+  `Scheduler.fireEvent` happy path, `EventNotFoundError`, strict v1
+  param validation (missing + extra), case-insensitive lookup,
+  per-fire run_id distinctness.
+- **Lane (d)** — `tests/v1.0-composition-runtime.test.ts` (5 tests):
+  `$ execute_skill` end-to-end, `# Returns:` filter, `${R.final_vars.X}`
+  reach, recursion-depth guard (default limit 10), forward-reference
+  resolution.
+- **Lane (e)** — `tests/v1.0-output-kinds.test.ts` (12 tests): all five
+  output kinds (text/none/agent/template/file), Level-2 `${VAR}` agent
+  target substitution, body-text-as-output template (Pin 4) with var
+  interpolation + template-vs-emit channel split, three shell call
+  shapes (`command=` / `argv=[...]` / `unsafe=true`), `(fallback:)`
+  op-trailer fire on empty-stdout + no-fire on success.
+
+Single-command invocation: `pnpm vitest run v1.0` runs all five lanes
+in 200ms. Total: 58 tests, 100% pass on first run after the standard
+fixture iteration — no runtime changes needed for the freeze to hold.
+
 ## 0.19.14 — 2026-06-15 — docs: full language-reference re-render (restores missing Connectors section)
 
 Discovered while re-rendering after v0.19.13: `docs/language-reference.md`
