@@ -1495,6 +1495,290 @@ The receiving agent reads `event_type` for routing ("911 — surface now" vs "ro
 
 If `# Output: agent: <name>` fires and the wired AgentConnector throws, delivery routes through `else:` / `# OnError:`; the failure is recorded on `agent_delivery_receipts[]` for the scheduler to log.
 
+## Connectors — substrate routing, the five connector types, agent_id resolution
+
+The substrate-routing ops (`$ connector.tool`, `$ data_read`, `$ llm`) and the agent-bound `# Output:` kinds (`agent:`, `template:`) don't call any specific backend directly. They route through thin connector interfaces. Skill source persistence follows the same pattern via a dedicated contract. This is the programmable surface through which authors compose information topology per skill and per moment. Skills are portable across substrates because the language doesn't bake substrate identity into the source.
+
+## Five connector types
+
+### MemoryStore
+
+Routes `$ data_read` retrieval ops. Interface: `MemoryStore.query(filters) → PortableMemory[]`.
+
+Implementations vary by deployment — a knowledge-substrate-backed store, a SQLite-backed store, a vector-DB-backed store, an in-memory test store. All conform to the `MemoryStore.query` contract and return `PortableMemory[]`.
+
+### LocalModel
+
+Routes `$ llm` local-model ops. Interface: `LocalModel.run(prompt, opts) → string`.
+
+Default impl wraps a local-model HTTP service (e.g., Ollama). Constructor takes `{ model: string }` (required) — no class-level implicit default. Multiple instances by name in the registry; each backed by a distinct model tag.
+
+### McpConnector
+
+Routes `$ connector.tool` MCP-tool ops. Interface: `McpConnector.call(toolName, args, ctxOverrides?) → unknown`.
+
+Implementations include adapters wrapping in-process tool dispatch (when the runtime is embedded in a host that already has MCP tools) and HTTP-based MCP clients (when calling out to remote MCP servers). All conform to the `McpConnector.call` contract.
+
+**Bare-name dispatch.** `$ TOOL` (no connector prefix) routes through the `primary` McpConnector entry in the registry. If no `primary` is wired, the runtime throws `ConnectorNotFoundError` at runtime AND fires tier-1 `unwired-primary-connector` lint at compile time. The remediation diagnostic includes both fix paths: add `primary` to connectors.json, or qualify the op as `$ named.TOOL`. Failing loud is the correct mode for autonomous-pattern skills — a silent stub would let an autonomous skill appear to succeed while doing nothing.
+
+### AgentConnector
+
+Routes the agent-bound `# Output:` kinds — `agent:` (Augmenting) and `template:` (Template) per the skill-kind taxonomy in Section 1. Interface:
+
+```typescript
+interface AgentConnector {
+  list_agents(): Promise<AgentDescriptor[]>;
+  deliver(agent_id: string, payload: DeliveryPayload): Promise<DeliveryReceipt>;
+  wake(agent_id: string, opts?: WakeOpts): Promise<WakeReceipt>;
+  agent_status?(agent_id: string): Promise<AgentStatus>;
+}
+
+type DeliveryPayload =
+  | { kind: "augment"; content: string; format?: "text" | "markdown"; source_skill?: string; triggered_by?: TriggerProvenance; delivery_context?: string; templates?: string[] }
+  | { kind: "template"; prompt: string; source_skill?: string; triggered_by?: TriggerProvenance; delivery_context?: string; templates?: string[] };
+
+type TriggerProvenance = {
+  source: "cron" | "session" | "event" | "agent-event" | "file-watch" | "sensor" | "manual";
+  name: string;            // e.g. "0 8 * * *", "session:start", "manual"
+  fired_at_ms: number;     // unix ms timestamp
+};
+
+type DeliveryReceipt = { delivered_at: number; delivery_id?: string };
+
+type WakeOpts = {
+  context?: string;
+  when?: "immediate" | number;
+};
+
+type WakeReceipt = { woken_at: number; session_id?: string };
+
+type AgentDescriptor = {
+  agent_id: string;
+  agent_name?: string;
+  capabilities?: ("deliver" | "wake" | "augment" | "template")[];
+};
+
+type AgentStatus = "active" | "idle" | "asleep" | "unknown";
+```
+
+The `agent:` Output kind produces a `DeliveryPayload` of kind `augment`; `template:` produces one of kind `template`.
+
+Two primary verbs (`deliver` + `wake`), one mandatory discovery method (`list_agents`), one optional status method. The contract is substrate-neutral; adopters wire any delivery mechanism behind it:
+
+| Substrate | `deliver` impl | `wake` impl |
+|---|---|---|
+| tmux session | `tmux send-keys` to a pane | `tmux send-keys` with wake prompt |
+| webhook | POST to `/augment` or `/template` endpoint | POST to `/wake` endpoint |
+| memory store | write a memory record with delivery tag | write addressed memory + push notification |
+| file-watch | write to `<path>/augment-<id>.txt` | write to `<path>/wake-<id>.txt` |
+| chat thread | post to monitored thread | post + @mention |
+| IPC named pipe | write to delivery pipe | write to wake pipe |
+
+Default impl `NoOpAgentConnector` logs warnings and resolves; lets the runtime ship without an agent-delivery substrate wired. Adopter impls run the bundled `AgentConnectorConformance` suite to verify their substrate wiring.
+
+#### DeliveryPayload provenance fields
+
+Every `deliver` call carries optional provenance the receiving agent uses to disambiguate the source and context of the delivery:
+
+- `source_skill?: string` — name of the skill that produced this delivery. Lets the receiver attribute the content to a specific authored skill, distinguishing "this is from the stock-monitor skill" from "this is from the news-brief skill."
+- `triggered_by?: TriggerProvenance` — why the skill fired. Receiver disambiguates cron tick (autonomous), session-start (lifecycle), event-driven (external signal), manual (user-requested), etc. Carries the trigger source + name + unix-ms timestamp.
+- `delivery_context?: string` — prose explanation of why the agent is being notified and what to do with the content. Populated from the `# Delivery-context:` header (see Section 7).
+- `templates?: string[]` — list of Template-kind skill names the receiver can fetch as follow-on actions. Populated from the `# Templates:` header (see Section 7).
+
+The runtime threads these from `ExecuteContext.triggerCtx` (set at dispatch) and `ParsedSkill.deliveryContext` / `ParsedSkill.templates` (set at parse) through to the `deliver` call site.
+
+#### `agent_id` resolution
+
+When `# Output: agent:` or `# Output: template:` fires, the runtime resolves the target agent_id via a 2-level chain (first match wins):
+
+1. **Explicit name in the `# Output:` line** — `# Output: agent: perry` dispatches to agent_id `perry`.
+2. **`${VAR}` compile-time substitution** — `# Output: agent: ${RECIPIENT}` resolves against the resolved inputs map (`# Vars:` defaults + `# Requires:` cascade + caller-supplied `inputs`) at compile time. Caveat: only compile-time inputs resolve here — runtime-bound refs (a target's output var, ambient refs) pass through verbatim and fail at delivery if still unresolved.
+
+Invocation-context inheritance and a runtime-config `default_agent_id` fallback are NOT implemented: `# Output: agent:` does not auto-inherit the caller's identity, and there is no default-agent fallback. A skill must name its target explicitly or pass it as an input var.
+
+#### Output-kind classification in the runtime
+
+The runtime's `TEXT_COERCED_OUTPUT_KINDS` set classifies output kinds by payload shape (text vs structured), not by semantic destination. Membership controls payload coercion; it doesn't bake destination identity into the runtime.
+
+### SkillStore
+
+Routes skill source persistence. Interface:
+
+```typescript
+interface SkillStore {
+  get(name: string): Promise<SkillRecord | null>;
+  write(name: string, body: string): Promise<void>;
+  list(): Promise<SkillDescriptor[]>;
+  delete(name: string): Promise<void>;
+}
+```
+
+Bundled impls: `FilesystemSkillStore` reads and writes `.skill.md` source plus `.skill` compiled output and `.skill.provenance.json` sidecar in a configured directory; the standard for file-backed deployments. Substrate-specific impls live in adopter packages (memory-backed stores live in the substrate's adapter repo).
+
+Skill records are infrastructure, not knowledge atoms — adopter impls should treat skills as first-class long-lived records, not as candidates for substrate-level garbage collection.
+
+## Capabilities discovery
+
+All connector types expose `capabilities()` for runtime discovery. Consumers:
+1. `# Requires:` matching against the registered set
+2. Dynamic queries via `listMemoryStores()` / `listLocalModels()` / `listMcpConnectors()` / `listAgentConnectors()` to pick a connector for the moment
+3. Authoring tools that surface the registered set
+
+## Multi-instance by design
+
+Multiple instances of the same connector type are the *normal case*, not the exception.
+
+```
+{
+  primary: MemoryStoreImplA,
+  project: SqliteProjectStore,
+  scratch: InMemoryStore
+}
+```
+
+```
+{
+  default: OllamaLocalModel({model: "gemma2:9b"}),
+  gemma2:  OllamaLocalModel({model: "gemma2:9b"}),
+  qwen:    OllamaLocalModel({model: "qwen2.5:7b"})
+}
+```
+
+```
+{
+  primary: PrimaryMcpConnector,
+  personal: HttpMcpConnector,
+  project: HttpMcpConnector
+}
+```
+
+Per-skill resolution against named connectors is first-class; an unnamed lookup returns the configured default. Multiple keys pointing at the same underlying instance configuration are allowed and useful — see the `default`/`gemma2` alias below.
+
+## Model selection — choosing among LocalModel instances
+
+The LocalModel registry holds multiple instances by design. Skill authors choose which to dispatch to via `$ llm model="<name>"`. Two layers of indirection are involved, and the distinction matters for both authoring and adopter configuration:
+
+1. **Skillscript name → registered instance.** `$ llm model="qwen"` references the instance keyed `qwen` in the registry. The registry resolves to the configured connector implementation.
+2. **Registered instance → underlying model.** Each `OllamaLocalModel` is constructed with the actual model tag (e.g. `qwen2.5:7b`). The skill never sees the tag directly.
+
+### Example instance names
+
+| Name | Underlying model | Notes |
+| --- | --- | --- |
+| `default` | `gemma2:9b` | Resolved when `model=` is omitted; alias of `gemma2` |
+| `gemma2` | `gemma2:9b` | Explicit name; matches the convention below |
+| `qwen` | `qwen2.5:7b` | Interactive, latency-sensitive |
+
+`default` and `gemma2` can point at the same `OllamaLocalModel` configuration. The alias exists so skill syntax can match a tier convention ("use gemma2 for batch") rather than the back-compat name (`default`). Skills that write `model="default"` work unchanged; prefer the explicit name.
+
+### Convention: model tier by use case
+
+- **Small classification-class model** (e.g., `gemma2`) for *batch and scan work* — atomization, large-batch classification, anything async or background-scheduled.
+- **Longer-context dispatch-class model** (e.g., `qwen`) for *interactive verdicts in skills* — single-shot decisions inside an active dispatch where latency matters and queue contention with batch work would block forward progress.
+
+When in doubt: small model if the call is asynchronous from a user/agent's perspective, larger model if a downstream op depends on the response.
+
+### Contention property
+
+Any skill that calls `$ llm` shares the underlying local-model service with every other process on the deployment that dispatches to the same model. Most local-model services serialize per-model dispatch. A skill that fires asynchronous batch work via `$` (e.g. invoking a batch-classification tool that dispatches N calls to model X) and then immediately calls `$ llm model="X"` will race itself — the synchronous call queues behind the dispatched batch.
+
+The runtime does not promise concurrency-safe model dispatch. Skill authors and operators own model-tier allocation. The canonical mitigation: use distinct models for the synchronous and asynchronous paths (a smaller model for interactive verdicts, a larger model for batch).
+
+### Adopter deployments
+
+Adopters override the bundled set via `connectors.json`:
+
+```jsonc
+{
+  "localModels": {
+    "default": { "type": "OllamaLocalModel", "model": "llama3.2:3b" },
+    "fast":    { "type": "OllamaLocalModel", "model": "phi3:mini" }
+  }
+}
+```
+
+Adopters with no local models register no LocalModel instances. Skills with `$ llm` ops fail at dispatch with `LocalModel '<name>' not registered`. A `# Requires:` capability declaration promotes this to a compile-time fail-fast — a skill that requires LocalModel won't compile if none is configured. Substrate-blind skills (no `$ llm` ops) work unchanged.
+
+## Configuration: substrate selection vs operator config
+
+Two distinct concerns, often conflated. Keep them separate.
+
+**Substrate-class selection** — *which* connector implementation fills each slot. Configured via `connectors.json` `substrate.<slot>` entries, or programmatically via `bootstrap()` options. This is what makes a skill portable: the slot is named in config, never in the skill source. Connectors are runtime-resolved — the compiler stays pure read+transform, and compiled artifacts are generic, so any runtime can dispatch them through whatever substrates it has wired.
+
+**Operator-runtime config** — the per-knob runtime settings: `SKILLSCRIPT_*` env vars, `skillscript.config.json`, and `bootstrap()` options. These tune runtime behavior; they do not select substrate classes.
+
+Precedence (first wins): explicit `bootstrap()` option > env var > config file > bundled default.
+
+Per-deployment naming lives in config, not the contract. A given deployment registers concrete instances under whatever names make sense locally; skill authors reference those names.
+
+The `connectors.json` loader handles literal + `${ENV_VAR}` credential resolution, file-discovery via `$SKILLSCRIPT_HOME`, and a class registry recognizing the bundled connector classes (including `CallbackMcpConnector` and `RemoteMcpConnector`). The per-connector `allowed_tools` field constrains dispatch surface for safe defaults — a cold-author skill against the connector can only invoke allowlisted tools. See ERD §3 + §4 for the full credential-discipline contract.
+
+## Per-call identity overrides (McpConnector)
+
+A skill running under one identity can dispatch against a personal MCP server under a different identity without needing connector-internal state. The merge order at dispatch (top wins):
+
+1. **Registry-configured per-connector identity** — set in `connectors.json` (`identity: { agentId: "<id>", isAdmin: false }`) at connector instantiation. Locks an identity to a connector.
+2. **Per-call `ctxOverrides`** — threaded by the runtime per the security boundary contract. A skill running as agent X passes `{ agentId: "X", isAdmin: false }` into every `$` op.
+3. **(no intrinsic identity)** — adapter forwards whatever the merge produces.
+
+Configured identity is a *partial merge* — unmentioned keys (e.g., `isAdmin`) flow through from the per-call ctx. Lets a connector lock `agentId` without clobbering the runtime's admin-drop discipline. Default connectors should configure no intrinsic identity, so `ctxOverrides` always wins — preserving the runtime's authority-flow guarantees intact.
+
+## Portable shapes
+
+```typescript
+interface PortableMemory {
+  // Core fields — mandatory on every connector return.
+  id: string;
+  summary: string;
+  detail?: string;
+  score?: number;
+
+  // Curated substrate subset — concept-portable, value-substrate-specific.
+  // Top-level access via $(MEMORY.field). Connectors populate when the
+  // concept applies. MUST NOT also be duplicated into metadata.
+  thread_status?: string;
+  pinned?: boolean;
+  confidence?: number;
+  domain_tags?: string[];
+  payload_type?: string;
+  knowledge_type?: string;
+  recipients?: string[];
+  expires_at?: number;
+  created_at?: number;
+  agent_id?: string;
+  vault?: string;
+
+  // Substrate-specific bag. Accessed via $(MEMORY.metadata.X).
+  metadata?: Record<string, unknown>;
+}
+
+interface QueryFilters {
+  query: string;
+  limit: number;
+  mode: "fts" | "semantic" | "rerank" | string;
+  [key: string]: unknown;
+}
+
+interface McpDispatchCtx {
+  agentId?: string;
+  isAdmin?: boolean;
+}
+```
+
+## Field access semantics
+
+`$(MEMORY.field)` resolves in tiers:
+1. Core fields (id, summary, detail, score)
+2. Curated substrate subset (thread_status, pinned, etc.)
+3. `metadata.X` for everything else
+4. Ambient passthrough as literal `$(MEMORY.field)` if unresolved
+
+**Connector duplication is a contract violation.** If a field is in the curated subset, the connector populates it at top-level only — `metadata.<same_name>` MUST be absent. Otherwise `$(M.thread_status)` and `$(M.metadata.thread_status)` can return different values (silent data divergence). Connectors enforce.
+
+## Why connector abstraction matters
+
+Hard-coupling skills to specific substrates would make information-flow decisions infrastructural rather than skill-authored, defeating the point of skills as the agent's programming language. The connector layer is what lets the same skill body run against substrate A today and run against substrate B tomorrow without rewriting.
+
 ## Lifecycle and status — # Status: header, six canonical states, compile + runtime enforcement
 
 Skillscripts carry an explicit lifecycle state via the `# Status:` header. The compiler and runtime enforce status — a Disabled skillscript cannot fire under any path, regardless of who invokes it.
@@ -2242,5 +2526,5 @@ Hung dispatches hang the skill without explicit timeout configuration. Lean: ski
 
 ---
 
-*Rendered from `skillscript/skillscript-language-reference` — 2026-06-15 12:22 EDT*  
+*Rendered from `skillscript/skillscript-language-reference` — 2026-06-15 18:44 EDT*  
 *Source of truth: AMP (`amp_render_document("skillscript/skillscript-language-reference")`)*

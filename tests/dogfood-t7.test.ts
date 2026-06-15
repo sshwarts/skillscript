@@ -24,8 +24,8 @@ const REPO_ROOT = join(__dirname, "..");
 const PACKAGE_JSON = JSON.parse(readFileSync(join(REPO_ROOT, "package.json"), "utf8")) as Record<string, unknown>;
 
 describe("T7 — package.json polish", () => {
-  it("1. version is 0.19.13 (pre-v1.0 frontmatter rot cleanup: removed `# Connectors:` (doc-only-no-code) and `# Use when:` (code-only-no-consumers) — both shipped as discipline-only-contract surfaces with no enforcement. Parser hook + AST field for `# Use when:` removed; `# Connectors:` scrubbed from language-ref atoms with zero code change since it was never wired. Also documented the 2-level `# Output: agent: <target>` resolution chain (explicit literal + compile-time `${VAR}` substitution against resolved inputs) in both `docs/language-reference.md` (new Output target resolution subsection) and `src/help-content.ts` (new subsection in the frontmatter help topic) — closes the atom-only-spec gap ahead of v1.0 surface freeze.)", () => {
-    expect(PACKAGE_JSON["version"]).toBe("0.19.13");
+  it("1. version is 0.19.14 (docs hotfix on top of v0.19.13: full re-render of docs/language-reference.md via amp_render_document, restoring a pre-existing ~17KB gap where the entire ## Connectors section — five connector types, agent_id resolution, PortableMemory shape, field-access tier rules, per-call identity overrides — was present in the atom-side document anchor (50fcecc8) but never landed in the MD. v0.19.13's hand-splice for `# Output: agent: <target>` resolution also closed with a now-dangling pointer to that missing section. Workflow lesson: language-ref re-renders must run amp_render_document and overwrite the MD wholesale, not hand-splice deltas — hand-splice preserves drift, full render keeps MD == atoms.)", () => {
+    expect(PACKAGE_JSON["version"]).toBe("0.19.14");
   });
 
   it("2. main + types + bin + engines.node ≥ 22.5 declared", () => {

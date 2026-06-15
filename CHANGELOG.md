@@ -1,5 +1,26 @@
 # Changelog
 
+## 0.19.14 — 2026-06-15 — docs: full language-reference re-render (restores missing Connectors section)
+
+Discovered while re-rendering after v0.19.13: `docs/language-reference.md`
+had a pre-existing gap — the entire `## Connectors` section (~17KB,
+covering the five connector types, agent_id resolution, PortableMemory
+shape, field-access tier rules, and per-call identity overrides) was
+present in the authoritative atom-side document anchor (`50fcecc8`,
+`skillscript-language-reference`) but never made it into the checked-in
+MD. The gap predated v0.19.13 — likely introduced when someone hand-edited
+the MD without running `amp_render_document` afterward.
+
+v0.19.13's "Output target resolution" splice also closed with a pointer
+to *"the Connectors section (AgentConnector) for the full delivery
+contract"* — a dangling cross-reference when that section wasn't in the
+MD. This release lands the proper full render and resolves both issues.
+
+Workflow lesson captured: re-rendering the language reference means
+running `amp_render_document({slug: "skillscript/skillscript-language-reference"})`
+and overwriting the MD wholesale, NOT hand-splicing the delta. Hand-splicing
+preserves drift; full render is the only path that keeps the MD == atoms.
+
 ## 0.19.13 — 2026-06-15 — pre-v1.0 frontmatter rot cleanup + agent_id resolution chain documented
 
 ### Removed (pre-v1.0 surface freeze cleanup)
