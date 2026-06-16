@@ -1,6 +1,7 @@
 ---
 title: SqliteSkillStore
 description: "Worked example of SkillStore against a SQLite database — schema, semantics, forking checklist."
+mode: wide
 ---
 
 Worked example of `SkillStore` against a SQLite database. Copy this directory into your codebase, customize per your storage needs, register with skillscript-runtime's `Registry`. This README is written for the agent implementing your adopter's connector — including the human reviewing the PR.

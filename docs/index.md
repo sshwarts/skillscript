@@ -1,6 +1,7 @@
 ---
 title: Skillscript
 description: "A language for agents to write themselves in."
+mode: wide
 ---
 
 ## The problem

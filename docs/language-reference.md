@@ -1,93 +1,13 @@
 ---
 title: Language Reference
 description: "Canonical spec — syntax, ops, semantics. Frontmatter, ops, filters, conditionals, triggers, output kinds, composition, error handling."
+mode: wide
 ---
 
 Canonical language reference for skillscript. Audience: skill authors (human + agent). Specifies what is valid syntax, what behavior to expect at compile + runtime, and what is currently pending implementation.
 
 Implementation state is cross-referenced to commit hashes; pending items mark v2/v3 work.
 
-
-## Not yet implemented, but planned
-
-These are features designed or anticipated but not yet implemented in the current build. Authors should not use these forms; they will not compile.
-
-## Control flow
-
-- **`while CONDITION:` loops** — today's iteration is `foreach IDENT in EXPR:` only. While loops are planned for ad-hoc orchestration patterns ("loop until response contains 'done'").
-- **Arithmetic in `$set`** — today accepts literals + `${VAR}` interpolation; no `+ - * /` operators. Planned alongside `while` for turn counters and orchestration bookkeeping.
-
-## Pipe filter extensions
-
-- **Array aggregation primitives** — `|max`, `|min`, `|sum`, `|reduce` over arrays. Today the language tops out at "shape one record" — aggregating across an array requires `foreach` accumulator ceremony. Planned as a design question: is `foreach` the deliberate ceiling for aggregation, or do we add primitives?
-
-## Triggers — note
-
-Trigger sources are `cron` + `event` only (see the Triggers section). There is no separate `agent-event:` / `file-watch:` / `sensor:` trigger source — anything that isn't time-based is an external adapter that POSTs to the `/event` ingress. So there's nothing pending here on the trigger axis; the entry remains only to point readers who expect those sources at the adapter-POST pattern.
-
-## Synchronous agent exchange
-
-- **`exchange()` runtime-intrinsic op** — synchronous send + wait pattern for multi-agent conferences. Awaits adopter-substrate queue impl + AgentConnector contract grow.
-
-## Tests
-
-- **`# Tests:` block** with `given:` / `expect:` assertions — author-authored test cases. Will land when adopter signal demands test infrastructure.
-
-## Output kinds
-
-- **`# Output: file: <path>`** — file-output routing parses but no router exists today.
-- **`# Output: card:`** — depends on a substrate-side card render surface; not implemented.
-
-## Persistent state with declared scope
-
-```
-$set NAME = value scope=skill-local
-$set NAME = value scope=agent-global
-$set NAME = value scope=session
-```
-
-Scopes: skill-local (persists across fires of this skill, not visible to other skills), agent-global (visible to all skills of the same agent), session (alive for the duration of the current session, cleared at session end). Backed by a configured data-records connector.
-
-## Sensors as a read-channel category
-
-> `sensor:` is not a trigger source — to fire a skill on a sensor signal, a sensor adapter POSTs to `/event` (see Triggers). The concept below is the separate *read-channel* idea — continuous values an agent reads, distinct from triggering — which remains a future possibility if demand surfaces.
-
-Distinct from triggers. Sensors are continuous channels the agent reads but doesn't emit on. Planned syntax:
-
-```
-# Sensors: presence, screen-state, voice-prosody
-```
-
-Ambient refs `$(SENSOR.presence)`, `$(SENSOR.voice-prosody.affect)` for read access. Privacy-gating discipline determines when a sensor is readable.
-
-## Time as first-class primitives
-
-Currently `$(NOW)` (wall-clock). Planned relative-time primitives:
-
-```
-$(SECONDS_SINCE_LAST_USER_MESSAGE)
-$(MINUTES_SINCE_SESSION_START)
-$(SECONDS_SINCE_LAST_FIRE_OF.<skill-name>)
-```
-
-Most "right time" reasoning is relative, not wall-clock.
-
-## Other planned
-
-- **Absence-as-trigger** — `# Triggers: idle: 5m` fire-on-quiet primitive (would be a new trigger source beyond `cron`|`event`, or an adapter that POSTs on a timer)
-- **Time-windowed aggregation** — filter-like primitives across firings (e.g., "user has shown frustration in 3 of 5 recent turns")
-- **Debounce / rate-limit / coalesce** — declarative queueing policy headers
-- **Suppression as valid output** — explicit "fire-and-suppress" (different from `# Output: none`)
-- **Cross-skill pub-sub** — `# Publishes: signal.X` / `# Subscribes: signal.Y` decoupling
-- **Confidence/threshold gating** — `# RequiresConfidence: classifier >= 0.8` / `# RequiresThreshold:`
-- **Invocation-control axis** — `# Invocable-By: user | agent | trigger` (sensitive ops shouldn't leak across invocation boundaries)
-- **Channel/locality awareness** — `$(CHANNEL_TYPE)`, `$(CHANNEL_PRIVACY)` ambient refs for routing decisions
-- **Introspection primitives** — `$(PROMPT_CONTEXT.size)`, `$(SKILLS_FIRED_RECENTLY.last-1h)`, `$(SELF.confidence-trend)`
-- **Capability declarations** — `# Requires-Capabilities: sensors=[mic, camera], tools=[...]` (audit surface for operators)
-
-## When the language extends, this section shrinks
-
-When any of these primitives ship, the relevant grammar moves into its canonical section (Ops reference, Variables, Triggers, etc.) and the entry here is removed. This section stays alive as a continuous staging area for the next horizon of unshipped work.
 
 ## Overview & language model
 
@@ -1782,7 +1702,7 @@ interface McpDispatchCtx {
 
 Hard-coupling skills to specific substrates would make information-flow decisions infrastructural rather than skill-authored, defeating the point of skills as the agent's programming language. The connector layer is what lets the same skill body run against substrate A today and run against substrate B tomorrow without rewriting.
 
-## Lifecycle and status — # Status: header, six canonical states, compile + runtime enforcement
+## Lifecycle and status — # Status: header, three canonical states (Draft / Approved / Disabled), compile + runtime enforcement
 
 Skillscripts carry an explicit lifecycle state via the `# Status:` header. The compiler and runtime enforce status — a Disabled skillscript cannot fire under any path, regardless of who invokes it.
 
@@ -2492,50 +2412,72 @@ Some features depend on others:
 
 The "Not yet implemented, but planned" section at top tracks the user-facing surface; this section preserves the design-order argument for when implementation work picks up.
 
-## Open spec questions — unresolved language design decisions
+## Not yet implemented, but planned
 
-Questions surfaced during design that haven't been resolved. Each carries a current lean where applicable. Resolved items have moved to their canonical sections; this section tracks only what's still open.
+These are features designed or anticipated but not yet implemented in the current build. Authors should not use these forms; they will not compile.
 
-## 1. Block execution model — write down the rules
+## Control flow
 
-Within a target body, op ordering and variable binding conventions aren't fully written down. Specific questions:
-- Can `emit()` calls precede `$` ops in the same target? (Yes; `emit()` has no dependency on subsequent ops.)
-- What's the default output binding when `-> NAME` is omitted? (`${target.output}` — same as bare `target` referenced from other blocks.)
-- How do cross-block references work syntactically? (`${other_target.output}` or `${VAR_BOUND_THERE}`.)
+- **`while CONDITION:` loops** — today's iteration is `foreach IDENT in EXPR:` only. While loops are planned for ad-hoc orchestration patterns ("loop until response contains 'done'").
+- **Arithmetic in `$set`** — today accepts literals + `${VAR}` interpolation; no `+ - * /` operators. Planned alongside `while` for turn counters and orchestration bookkeeping.
 
-**Write a "Block execution model" subsection** in the Overview or Ops reference section. No semantic change, just documentation gap.
+## Pipe filter extensions
 
-## 2. `else:` block visibility into the error
+- **Array aggregation primitives** — `|max`, `|min`, `|sum`, `|reduce` over arrays. Today the language tops out at "shape one record" — aggregating across an array requires `foreach` accumulator ceremony. Planned as a design question: is `foreach` the deliberate ceiling for aggregation, or do we add primitives?
 
-Should `${ERROR}` be an ambient ref inside `else:` blocks, populated with the error type/message? Lean: yes, same shape as `${ERROR_CONTEXT}` in `# OnError:` fallback skills. Useful for logging/telemetry skills.
+## Triggers — note
 
-## 3. Multiple triggers — concurrency
+Trigger sources are `cron` + `event` only (see the Triggers section). There is no separate `agent-event:` / `file-watch:` / `sensor:` trigger source — anything that isn't time-based is an external adapter that POSTs to the `/event` ingress. So there's nothing pending here on the trigger axis; the entry remains only to point readers who expect those sources at the adapter-POST pattern.
 
-If `cron: 0 8 * * *` and `event: user-present` both fire within seconds, does the skill run twice (independent) or get deduped? Lean: independent. Author dedups via state if needed. Affects dispatch layer.
 
-## 4. `execute_skill()` invocation vs trigger firing
+## Tests
 
-When skill A invokes skill B via `execute_skill()`, do skill B's `# Triggers:` fire? Almost certainly no — `execute_skill()` is direct invocation, distinct from the trigger event surface. Worth saying explicitly.
+- **`# Tests:` block** with `given:` / `expect:` assertions — author-authored test cases. Will land when adopter signal demands test infrastructure.
 
-## 5. Output target delivery failures
+## Output kinds
 
-If a delivery target is unreachable when the skill fires, what happens? Lean: delivery failure is its own retryable error; queue if possible, else error to caller. Worth a separate small spec section. Affects dispatch layer.
+- **`# Output: file: <path>`** — file-output routing parses but no router exists today.
+- **`# Output: card:`** — depends on a substrate-side card render surface; not implemented.
 
-## 6. Skill versioning rollback UX
+## Persistent state with declared scope
 
-Edits via upsert preserve history through substrate versioning (SqliteSkillStore's `skill_versions` table, FilesystemSkillStore's git history), but no first-class "rollback" affordance. Probably needs a `--version <N>` flag on the compile API or a sister tool.
+```
+$set NAME = value scope=skill-local
+$set NAME = value scope=agent-global
+$set NAME = value scope=session
+```
 
-## 7. Connector capability declarations
+Scopes: skill-local (persists across fires of this skill, not visible to other skills), agent-global (visible to all skills of the same agent), session (alive for the duration of the current session, cleared at session end). Backed by a configured data-records connector.
 
-Skills can declare required connector capabilities via `# Requires:` for var resolution. Extending this to "needs semantic search" / "needs structured-extraction model with 32K context" capabilities would be useful for the substrate-portable story. Pending design.
 
-## 8. Per-op timeouts
+## Time as first-class primitives
 
-Hung dispatches hang the skill without explicit timeout configuration. Lean: skill-level `# Timeout:` header + per-op `timeout=N` kwarg + runtime defaults. Pending implementation; see "Not yet implemented, but planned" at top.
+Currently `$(NOW)` (wall-clock). Planned relative-time primitives:
 
-*(The former "file-watch path semantics" question was removed — `file-watch` is no longer a trigger source; filesystem watching is now an external adapter that POSTs to the `/event` ingress, so there are no in-language file-watch path semantics to settle.)*
+```
+$(SECONDS_SINCE_LAST_USER_MESSAGE)
+$(MINUTES_SINCE_SESSION_START)
+$(SECONDS_SINCE_LAST_FIRE_OF.<skill-name>)
+```
+
+Most "right time" reasoning is relative, not wall-clock.
+
+## Other planned
+
+- **Absence-as-trigger** — `# Triggers: idle: 5m` fire-on-quiet primitive (would be a new trigger source beyond `cron`|`event`, or an adapter that POSTs on a timer)
+- **Time-windowed aggregation** — filter-like primitives across firings (e.g., "user has shown frustration in 3 of 5 recent turns")
+- **Debounce / rate-limit / coalesce** — declarative queueing policy headers
+- **Suppression as valid output** — explicit "fire-and-suppress" (different from `# Output: none`)
+- **Cross-skill pub-sub** — `# Publishes: signal.X` / `# Subscribes: signal.Y` decoupling
+- **Confidence/threshold gating** — `# RequiresConfidence: classifier >= 0.8` / `# RequiresThreshold:`
+- **Invocation-control axis** — `# Invocable-By: user | agent | trigger` (sensitive ops shouldn't leak across invocation boundaries)
+- **Introspection primitives** — `$(PROMPT_CONTEXT.size)`, `$(SKILLS_FIRED_RECENTLY.last-1h)`, `$(SELF.confidence-trend)`
+
+## When the language extends, this section shrinks
+
+When any of these primitives ship, the relevant grammar moves into its canonical section (Ops reference, Variables, Triggers, etc.) and the entry here is removed. This section stays alive as a continuous staging area for the next horizon of unshipped work.
 
 ---
 
-*Rendered from `skillscript/skillscript-language-reference` — 2026-06-16 12:54 EDT*  
+*Rendered from `skillscript/skillscript-language-reference` — 2026-06-16 15:46 EDT*  
 *Source of truth: AMP (`amp_render_document("skillscript/skillscript-language-reference")`)*
