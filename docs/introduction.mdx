@@ -1,0 +1,43 @@
+---
+title: Introduction
+description: "A language for agents to write themselves in."
+---
+
+Skillscript is a small declarative language for authoring **durable, auditable, reusable agent skills** — routines an agent captures once and runs many times, instead of re-deriving the same workflow on every session.
+
+A *skill* is a compiled, lint-checked, version-stamped procedure: declarative frontmatter (`# Skill:`, `# Vars:`, `# Triggers:`, `# Output:`) plus a small body of ops (`emit`, `notify`, `shell`, `file_write`, `$ <connector>.<tool>`, ...). Skills are substrate-neutral — the language doesn't bake LLM or storage identity into the source; adopters wire substrates through connectors and the same skill source runs against any conforming backend.
+
+## Where to go
+
+<CardGroup cols={2}>
+  <Card title="Adopter Playbook" icon="book" href="/docs/adopter-playbook">
+    Stand up the runtime, wire your substrates (Case 1 typed-contract vs Case 2 MCP-tools), supervise it as a service, and point your agent at it over MCP. Start here if you're an operator.
+  </Card>
+  <Card title="Adopter Agent Guide" icon="robot" href="/docs/adopter-agent-guide">
+    The block to paste into your agent's instruction file (`CLAUDE.md` / `AGENTS.md` / system prompt) so it discovers and prefers its skills instead of re-reasoning every session.
+  </Card>
+  <Card title="Language Reference" icon="code" href="/docs/language-reference">
+    Full syntax + ops + semantics. Frontmatter headers, the three op classes (mutation / runtime-intrinsic / external MCP dispatch), filters, conditionals, triggers, output kinds, composition, error handling.
+  </Card>
+  <Card title="Connector Contract Reference" icon="plug" href="/docs/connector-contract-reference">
+    The four typed contracts (`SkillStore`, `DataStore`, `LocalModel`, `AgentConnector`) substrate authors implement. Interface signatures, payload shapes, durability + identity conventions.
+  </Card>
+</CardGroup>
+
+## At a glance
+
+```
+# Skill: hello
+# Status: Approved
+# Vars: WHO=world
+
+Hello, ${WHO}!
+```
+
+That's a complete, valid skill. `Status: Approved` (with a stamped hash token) means the runtime will execute it; the body between frontmatter and the first target IS the output. Run it via `execute_skill({name: "hello"})` over MCP, or trigger it on a schedule via `# Triggers: cron: 0 9 * * *`.
+
+For the full quickstart — install, author, dashboard, MCP wiring — see the [README on GitHub](https://github.com/sshwarts/skillscript#quickstart) or the [Adopter Playbook](/docs/adopter-playbook).
+
+## Status
+
+Skillscript is **pre-1.0**. The runtime surface freezes at the v1.0 cut; until then breaking changes are documented in the [CHANGELOG](https://github.com/sshwarts/skillscript/blob/main/CHANGELOG.md) but cheap (no external adopter install base yet).
