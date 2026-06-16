@@ -381,7 +381,7 @@ Closed list of language-intrinsic ops the runtime knows directly. Each is a func
 | `emit` | `emit(text="...")` | none | Append to the skill's emission stream; consumed by the configured `# Output:` delivery channel. |
 | `notify` | `notify(agent="...", message="...", [event_type=...], [correlation_id=...]) -> ACK` | optional | Mid-skill agent alert; synchronous send via configured AgentConnector. |
 | `inline` | `inline(skill="<data-skill-name>")` | none | Compile-time inline of an Approved `# Type: data` skill. Resolves at compile, records `content_hash` in provenance. |
-| `execute_skill` | `execute_skill(skill_name="...", inputs={...}) -> R` | optional | Composition primitive. Runtime-resolved. See Composition section. |
+| `execute_skill` | `execute_skill(skill_name="...", inputs=\{...}) -> R` | optional | Composition primitive. Runtime-resolved. See Composition section. |
 | `shell` | `shell(command="...") -> R` / `shell(argv=[...]) -> R` / `shell(command="...", unsafe=true) -> R` | optional | Structural spawn (default), explicit-argv spawn (`argv=[...]`, no tokenizer), or full-shell exec (`unsafe=true`, gated by `runtime.enable_unsafe_shell`). Binary gated by the operator allowlist (see below). stdout binds. |
 | `file_read` | `file_read(path="...") -> R` | required | Read a file at `path`; binds string contents. |
 | `file_write` | `file_write(path="...", content="...")` | none | Write `content` to `path`. `mkdir -p` semantics for parent directories. Mutation-classified. |
@@ -738,12 +738,12 @@ deliver:
 
 | Class | Op | Shape | Binding |
 |---|---|---|---|
-| Mutation | `$set` | `$set NAME = value` (with `${VAR}` interpolation at bind) | NAME (no arrow) |
+| Mutation | `$set` | `$set NAME = value` (with `$\{VAR}` interpolation at bind) | NAME (no arrow) |
 | Mutation | `$append` | `$append VAR <value>` (type-dispatched: list element / string concat) | VAR (no arrow) |
 | Runtime-intrinsic | `emit` | `emit(text="...")` or `emit(text="""...""")` for multi-line | none |
 | Runtime-intrinsic | `notify` | `notify(agent="...", [message=...], [event_type=...], [correlation_id=...]) -> ACK` | optional |
 | Runtime-intrinsic | `inline` | `inline(skill="<name>")` | none (compile-time) |
-| Runtime-intrinsic | `execute_skill` | `execute_skill(skill_name="...", inputs={...}) -> R` | optional |
+| Runtime-intrinsic | `execute_skill` | `execute_skill(skill_name="...", inputs=\{...}) -> R` | optional |
 | Runtime-intrinsic | `shell` | `shell(command="...", [unsafe=true], [approved="..."]) [-> R] [(fallback: "...")]` or `shell(argv=[...], [approved="..."]) [-> R] [(fallback: "...")]` (mutually exclusive forms; binary allowlist applies to both) | optional |
 | Runtime-intrinsic | `file_read` | `file_read(path="...") -> R` | required |
 | Runtime-intrinsic | `file_write` | `file_write(path="...", content="...", [approved="..."])` | none |
@@ -772,13 +772,13 @@ Injected automatically at runtime; never declared by the author.
 
 | Var | Value |
 |-----|-------|
-| `${NOW}` | ISO-8601 timestamp at op-dispatch time |
-| `${USER}` | The configured user identity |
-| `${SESSION_CONTEXT}` | Current session-scope context (project/entity/etc., substrate-defined) |
-| `${TRIGGER_TYPE}` | What event fired this skill |
-| `${TRIGGER_PAYLOAD}` | Event-specific data |
-| `${EVENT.*}` | Event-payload fields populated by the trigger source |
-| `${ERROR_CONTEXT}` | In `# OnError:` fallback skills: type + target where failure occurred |
+| `$\{NOW}` | ISO-8601 timestamp at op-dispatch time |
+| `$\{USER}` | The configured user identity |
+| `$\{SESSION_CONTEXT}` | Current session-scope context (project/entity/etc., substrate-defined) |
+| `$\{TRIGGER_TYPE}` | What event fired this skill |
+| `$\{TRIGGER_PAYLOAD}` | Event-specific data |
+| `$\{EVENT.*}` | Event-payload fields populated by the trigger source |
+| `$\{ERROR_CONTEXT}` | In `# OnError:` fallback skills: type + target where failure occurred |
 
 Iterator vars from `foreach` and output bindings from runtime-intrinsic / MCP-dispatch ops also pass through ambient at compile time; the runtime substitutes them per iteration / per op completion.
 
@@ -883,14 +883,14 @@ Pipe filters apply transforms to resolved variables before substitution. Syntax:
 
 | Filter | Effect | Example | Output |
 |--------|--------|---------|--------|
-| `url` | `encodeURIComponent(value)` | `${location|url}` for `"Asheville, NC"` | `Asheville%2C%20NC` |
-| `shell` | POSIX single-quote escape with outer quotes | `${arg|shell}` for `it's safe` | `'it'\''s safe'` |
-| `json` | `JSON.stringify(value)` | `${payload|json}` for `{k:"v"}` | `"{\"k\":\"v\"}"` |
-| `trim` | Whitespace trim | `${VERDICT|trim}` for `"urgent\n"` | `urgent` |
-| `length` | Count of items (array) or characters (string) | `${ITEMS|length}` for `["a","b","c"]` | `3` |
-| `contains:"X"` | Boolean: type-aware substring / element membership | `${MSG|contains:"urgent"}` for `"Yes, urgent"` | `true` |
-| `fallback:"X"` | Coalesce on missing/undefined/empty ref | `${VAR.missing|fallback:"-"}` | `-` |
-| `isodate` | Epoch seconds → ISO-8601 timestamp | `${EPOCH|isodate}` for `1779660000` | `2026-05-24T22:00:00.000Z` |
+| `url` | `encodeURIComponent(value)` | `$\{location|url}` for `"Asheville, NC"` | `Asheville%2C%20NC` |
+| `shell` | POSIX single-quote escape with outer quotes | `$\{arg|shell}` for `it's safe` | `'it'\''s safe'` |
+| `json` | `JSON.stringify(value)` | `$\{payload|json}` for `\{k:"v"}` | `"\{\"k\":\"v\"}"` |
+| `trim` | Whitespace trim | `$\{VERDICT|trim}` for `"urgent\n"` | `urgent` |
+| `length` | Count of items (array) or characters (string) | `$\{ITEMS|length}` for `["a","b","c"]` | `3` |
+| `contains:"X"` | Boolean: type-aware substring / element membership | `$\{MSG|contains:"urgent"}` for `"Yes, urgent"` | `true` |
+| `fallback:"X"` | Coalesce on missing/undefined/empty ref | `$\{VAR.missing|fallback:"-"}` | `-` |
+| `isodate` | Epoch seconds → ISO-8601 timestamp | `$\{EPOCH|isodate}` for `1779660000` | `2026-05-24T22:00:00.000Z` |
 
 ### `length` semantics
 
@@ -1504,11 +1504,11 @@ The substrate-routing ops (`$ connector.tool`, `$ data_read`, `$ llm`) and the a
 
 ## Five connector types
 
-### MemoryStore
+### DataStore
 
-Routes `$ data_read` retrieval ops. Interface: `MemoryStore.query(filters) → PortableMemory[]`.
+Routes `$ data_read` retrieval ops. Interface: `DataStore.query(filters) → PortableMemory[]`.
 
-Implementations vary by deployment — a knowledge-substrate-backed store, a SQLite-backed store, a vector-DB-backed store, an in-memory test store. All conform to the `MemoryStore.query` contract and return `PortableMemory[]`.
+Implementations vary by deployment — a knowledge-substrate-backed store, a SQLite-backed store, a vector-DB-backed store, an in-memory test store. All conform to the `DataStore.query` contract and return `PortableMemory[]`.
 
 ### LocalModel
 
@@ -1624,7 +1624,7 @@ Skill records are infrastructure, not knowledge atoms — adopter impls should t
 
 All connector types expose `capabilities()` for runtime discovery. Consumers:
 1. `# Requires:` matching against the registered set
-2. Dynamic queries via `listMemoryStores()` / `listLocalModels()` / `listMcpConnectors()` / `listAgentConnectors()` to pick a connector for the moment
+2. Dynamic queries via `listDataStores()` / `listLocalModels()` / `listMcpConnectors()` / `listAgentConnectors()` to pick a connector for the moment
 3. Authoring tools that surface the registered set
 
 ## Multi-instance by design
@@ -1633,7 +1633,7 @@ Multiple instances of the same connector type are the *normal case*, not the exc
 
 ```
 {
-  primary: MemoryStoreImplA,
+  primary: DataStoreImplA,
   project: SqliteProjectStore,
   scratch: InMemoryStore
 }
@@ -2040,6 +2040,13 @@ default: fetch
 
 **Recursion guard.** The runtime enforces a configurable recursion-depth limit (default 10) to prevent infinite-loop composition. Exceeding the limit raises a clean structured error attributable to the offending dispatch site, not a stack overflow.
 
+## Error surfacing in composition
+
+Two non-obvious behaviors when reading a child's failures from the parent (both confirmed by the v1.0 runtime-semantics test battery):
+
+- **Nested errors do NOT surface at the top level.** When a child op fails — e.g. the recursion-depth guard fires — the structured error nests inside the child's `R.errors`, which nests inside *its* parent's `R.errors`, and so on up the chain. It does **not** bubble to the caller's top-level `result.errors`. So a top-level `errors: []` does **not** mean nothing failed downstream. To detect a child failure, inspect the bound `${R.errors}` (and deeper), or rely on `(fallback: ...)` / `# OnError:` — those fire on the structured error regardless of nesting depth.
+- **`# Returns: R` is load-bearing for observability.** If the parent binds a child via `-> R` but does not declare `# Returns: R`, the `# Returns:` filter strips `R` from the parent's `final_vars` — and any nested child errors disappear from the parent's MCP-wire response along with it. A composition skill that wants its child's failures observable from *its own* caller must declare the binding (`# Returns: R`) explicitly. Observability of child failure is opt-in, the same way value export is.
+
 ## Forward-reference resolution
 
 Skill references (`inline(skill=...)`, `execute_skill(skill_name=...)`) are validated at compile time but allow forward references with tier-2 advisories — making it possible to author sibling skills together (chicken-and-egg).
@@ -2155,6 +2162,7 @@ For *data skills* (skills marked `# Type: data`), the compile-time inline primit
 
 - Treat composition as a real cost. Each `execute_skill()` dispatch incurs the child's full execution time + side effects. Don't compose for trivial cases that could be inlined.
 - Declare `# Returns:` when a caller needs structured access to a child's variables. Leave it off for emit-only skills whose consumers read `.outputs.text` — the default-empty filter keeps scratch from propagating.
+- Want a child's failures visible to your caller? Declare the child binding in `# Returns:` — nested errors are filtered out with the binding otherwise (see Error surfacing in composition), and don't trust a top-level `errors: []`.
 - Pair composition with `(fallback: ...)` when the child skill might fail and the parent has a sensible degraded path.
 - Use mechanical mode to TestFlight any multi-skill chain before shipping it as a Headless skill on a cron trigger.
 - Forward references work — author sibling skills in any order, validate independently. The tier-2 warning surfaces the deferred-resolution path; runtime catches genuine misses.
@@ -2529,5 +2537,5 @@ Hung dispatches hang the skill without explicit timeout configuration. Lean: ski
 
 ---
 
-*Rendered from `skillscript/skillscript-language-reference` — 2026-06-15 18:44 EDT*  
+*Rendered from `skillscript/skillscript-language-reference` — 2026-06-16 12:54 EDT*  
 *Source of truth: AMP (`amp_render_document("skillscript/skillscript-language-reference")`)*
