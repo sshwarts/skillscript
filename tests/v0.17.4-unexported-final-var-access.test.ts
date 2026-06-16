@@ -198,4 +198,25 @@ default: compose
     const hits = findings.filter((f) => f.rule === "unexported-final-var-access");
     expect(hits).toHaveLength(1);
   });
+
+  // v1.0 (fix list 33bf53d3 P2.3): the message must reflect the LOUD runtime
+  // behavior. CC verified all contexts: unexported access raises
+  // UnresolvedVariableError at runtime (op + body-template), it does NOT
+  // silently render empty. The message previously taught the false "renders
+  // empty" model — corrected so the lint doesn't read as a silent-footgun.
+  it("message reflects the loud runtime behavior (UnresolvedVariableError, not silent-empty)", async () => {
+    const source = `# Skill: caller
+# Status: Draft
+
+compose:
+    $ execute_skill skill_name="child-with-returns" -> R
+    emit(text="\${R.final_vars.NEVER_DECLARED}")
+default: compose
+`;
+    const { findings } = await lint(source, { skillStore });
+    const hit = findings.find((f) => f.rule === "unexported-final-var-access");
+    expect(hit).toBeDefined();
+    expect(hit?.message.includes("UnresolvedVariableError")).toBe(true);
+    expect(hit?.message.includes("renders empty")).toBe(false);
+  });
 });

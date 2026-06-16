@@ -1873,6 +1873,7 @@ export function substituteRuntime(text: string, vars: Map<string, unknown>): str
       const specs = parseFilterChain(filterChain);
 
       for (const spec of specs) {
+        const arg = interpolateFilterArg(spec.arg, vars);
         if (spec.name === "fallback") {
           // v0.19.12 — empty-aware. Matches the $-op trailer's
           // emptiness predicate (closes Perry's `9d8ff1b1`).
@@ -1880,14 +1881,14 @@ export function substituteRuntime(text: string, vars: Map<string, unknown>): str
           const isEmptyArray = Array.isArray(value) && value.length === 0;
           const isNullish = value === null || value === undefined;
           if (isNullish || isEmptyString || isEmptyArray) {
-            value = spec.arg ?? "";
+            value = arg ?? "";
           }
           continue;
         }
         if (value === undefined) {
           throw new UnresolvedVariableError(ref, "?");
         }
-        value = applyFilter(stringifyValue(value), spec.name, spec.arg);
+        value = applyFilter(stringifyValue(value), spec.name, arg);
       }
 
       if (value === undefined) {
@@ -1964,6 +1965,23 @@ export function stringifyValue(v: unknown): string {
   return JSON.stringify(v);
 }
 
+/**
+ * v1.0 (fix list 33bf53d3 P1.1): interpolate `${VAR}` / `$(VAR)` refs inside a
+ * filter argument before the filter runs, so `|contains:"${KW}"` tests the
+ * value of KW rather than the literal string "${KW}". Pre-fix the arg was taken
+ * verbatim and silently failed to match (round-1 cold-author finding — broke
+ * `cold-feed-filter`'s KEYWORD parameterization). Bounded recursion: the arg is
+ * a small literal, so one `substituteRuntime` pass resolves the inner ref (the
+ * result is not re-scanned). No-op when the arg has no ref, or when no `vars`
+ * scope is in play. Unresolved refs inside the arg fail loud (UnresolvedVariableError),
+ * consistent with every other substitution site.
+ */
+function interpolateFilterArg(arg: string | undefined, vars: Map<string, unknown> | undefined): string | undefined {
+  if (arg === undefined || vars === undefined) return arg;
+  if (!arg.includes("$")) return arg; // fast path: no ref possible
+  return substituteRuntime(arg, vars);
+}
+
 // v0.3.4 — filter chain support in conditions. Each `(REF)(|filter)?`
 // becomes `(REF)(|filter)*` matching substituteRuntime's chain pattern.
 // v0.7.0 — loose-bracket form `\$[({]...[)}]` accepts both `$(REF)` and
@@ -1988,13 +2006,13 @@ const IN = /^\s*\$[({]([A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*)((?:\s*\|\s*[A-Za-z_]\w*(
  * the recurring "filter chain works in substitution but not conditions"
  * gap named in dev-log §14.
  */
-function applyFilterChain(value: string, chain: string | undefined): string {
+function applyFilterChain(value: string, chain: string | undefined, vars?: Map<string, unknown>): string {
   if (chain === undefined || chain === "") return value;
   const specs = parseFilterChain(chain);
   let s = value;
   for (const spec of specs) {
     if (spec.name === "fallback") continue;
-    s = applyFilter(s, spec.name, spec.arg);
+    s = applyFilter(s, spec.name, interpolateFilterArg(spec.arg, vars));
   }
   return s;
 }
@@ -2004,16 +2022,17 @@ function applyFilterChain(value: string, chain: string | undefined): string {
  * undefined-ness through so `|fallback:"X"` can consume an unresolved ref.
  * Used by EQ / CMP / IN paths in evalSimpleCondition. v0.5.0 item 4.
  */
-function applyFilterChainCondition(value: unknown, chain: string | undefined): string {
+function applyFilterChainCondition(value: unknown, chain: string | undefined, vars?: Map<string, unknown>): string {
   const specs = parseFilterChain(chain);
   let current: unknown = value;
   for (const spec of specs) {
+    const arg = interpolateFilterArg(spec.arg, vars);
     if (spec.name === "fallback") {
-      if (current === undefined) current = spec.arg ?? "";
+      if (current === undefined) current = arg ?? "";
       continue;
     }
     if (current === undefined) current = "";
-    current = applyFilter(stringifyValue(current), spec.name, spec.arg);
+    current = applyFilter(stringifyValue(current), spec.name, arg);
   }
   if (current === undefined) current = "";
   return stringifyValue(current);
@@ -2117,7 +2136,7 @@ function evalSimpleCondition(cond: string, vars: Map<string, unknown>): boolean 
   if (t) {
     const val = resolveRef(t[1]!, vars);
     const chain = t[2];
-    const filtered = chain && val !== undefined ? applyFilterChain(stringifyValue(val), chain) : val;
+    const filtered = chain && val !== undefined ? applyFilterChain(stringifyValue(val), chain, vars) : val;
     return isTruthy(filtered);
   }
   const e = EQ.exec(cond);
@@ -2126,7 +2145,7 @@ function evalSimpleCondition(cond: string, vars: Map<string, unknown>): boolean 
     const val = resolveRef(ref!, vars);
     // v0.5.0 item 4: condition-aware chain threading so `|default:"X"`
     // consumes undefined refs in conditional context too.
-    const final = applyFilterChainCondition(val, chain);
+    const final = applyFilterChainCondition(val, chain, vars);
     return op === "==" ? final === lit : final !== lit;
   }
   const eRef = EQ_REF.exec(cond);
@@ -2134,15 +2153,15 @@ function evalSimpleCondition(cond: string, vars: Map<string, unknown>): boolean 
     const [, lhsRef, lhsChain, op, rhsRef, rhsChain] = eRef;
     const lhsVal = resolveRef(lhsRef!, vars);
     const rhsVal = resolveRef(rhsRef!, vars);
-    const lhsFinal = applyFilterChainCondition(lhsVal, lhsChain);
-    const rhsFinal = applyFilterChainCondition(rhsVal, rhsChain);
+    const lhsFinal = applyFilterChainCondition(lhsVal, lhsChain, vars);
+    const rhsFinal = applyFilterChainCondition(rhsVal, rhsChain, vars);
     return op === "==" ? lhsFinal === rhsFinal : lhsFinal !== rhsFinal;
   }
   const cmp = CMP.exec(cond);
   if (cmp) {
     const [, ref, chain, op, lit] = cmp;
     const val = resolveRef(ref!, vars);
-    const final = applyFilterChainCondition(val, chain);
+    const final = applyFilterChainCondition(val, chain, vars);
     return compareNumeric(final, op as CmpOp, lit!, `$(${ref}${chain ? chain : ""})`);
   }
   const cmpRef = CMP_REF.exec(cond);
@@ -2150,8 +2169,8 @@ function evalSimpleCondition(cond: string, vars: Map<string, unknown>): boolean 
     const [, lhsRef, lhsChain, op, rhsRef, rhsChain] = cmpRef;
     const lhsVal = resolveRef(lhsRef!, vars);
     const rhsVal = resolveRef(rhsRef!, vars);
-    const lhsFinal = applyFilterChainCondition(lhsVal, lhsChain);
-    const rhsFinal = applyFilterChainCondition(rhsVal, rhsChain);
+    const lhsFinal = applyFilterChainCondition(lhsVal, lhsChain, vars);
+    const rhsFinal = applyFilterChainCondition(rhsVal, rhsChain, vars);
     const refDesc = `$(${lhsRef}) ${op} $(${rhsRef})`;
     return compareNumeric(lhsFinal, op as CmpOp, rhsFinal, refDesc);
   }
@@ -2196,7 +2215,7 @@ function evalSimpleCondition(cond: string, vars: Map<string, unknown>): boolean 
     }
     const lhsVal = resolveRef(lhsRef!, vars);
     if (lhsVal === undefined) return false;
-    const lhsStr = applyFilterChain(stringifyValue(lhsVal), lhsChain);
+    const lhsStr = applyFilterChain(stringifyValue(lhsVal), lhsChain, vars);
     const found = rhsVal.some((item) => stringifyValue(item) === lhsStr);
     return notKey !== undefined ? !found : found;
   }

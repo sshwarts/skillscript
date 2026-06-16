@@ -1578,7 +1578,7 @@ export function parse(source: string): ParsedSkill {
           continue;
         }
         if (!validateCondition(cond)) {
-          result.parseErrors.push(`Unsupported condition in \`elif\` (target '${currentTarget.name}'): \`${cond}\` — supported shapes: truthy \`$(REF)\`; \`$(REF) ==/!=/</>/<=/>= "literal"\` or \`$(REF) ==/!=/</>/<=/>= $(REF)\`; \`$(REF) (not) in $(REF)\`; composable with \`and\` / \`or\` / \`not\` and parens. Filters + dotted-field allowed inside \`$(REF)\` (e.g. \`$(ITEMS|length) > "0"\`). To access fields on parsed JSON, use \`$ json_parse $(VAR) -> P\` then refer to \`$(P.field)\` (the \`$(VAR|filter).field\` shape is not supported)`);
+          result.parseErrors.push(`Unsupported condition in \`elif\` (target '${currentTarget.name}'): \`${cond}\` — supported shapes: truthy \`\${REF}\`; \`\${REF} ==/!=/</>/<=/>= "literal"\` or \`\${REF} ==/!=/</>/<=/>= \${REF}\`; \`\${REF} (not) in \${REF}\`; composable with \`and\` / \`or\` / \`not\` and parens. Filters + dotted-field allowed inside \`\${REF}\` (e.g. \`\${ITEMS|length} > "0"\`). To access fields on parsed JSON, use \`$ json_parse \${VAR} -> P\` then refer to \`\${P.field}\` (the \`\${VAR|filter}.field\` shape is not supported)`);
           // v0.3.3 Bug D: sink-scope so body lines don't cascade. Mirror
           // of the `if`-rejection path above. Synthetic branch isn't
           // appended to the real ifOp's ifBranches — body lines collect
@@ -1664,7 +1664,7 @@ export function parse(source: string): ParsedSkill {
         continue;
       }
       if (!validateCondition(cond)) {
-        result.parseErrors.push(`Unsupported condition in \`if\` (target '${currentTarget.name}'): \`${cond}\` — supported shapes: truthy \`$(REF)\`; \`$(REF) ==/!=/</>/<=/>= "literal"\` or \`$(REF) ==/!=/</>/<=/>= $(REF)\`; \`$(REF) (not) in $(REF)\`; composable with \`and\` / \`or\` / \`not\` and parens. Filters + dotted-field allowed inside \`$(REF)\` (e.g. \`$(ITEMS|length) > "0"\`). To access fields on parsed JSON, use \`$ json_parse $(VAR) -> P\` then refer to \`$(P.field)\` (the \`$(VAR|filter).field\` shape is not supported)`);
+        result.parseErrors.push(`Unsupported condition in \`if\` (target '${currentTarget.name}'): \`${cond}\` — supported shapes: truthy \`\${REF}\`; \`\${REF} ==/!=/</>/<=/>= "literal"\` or \`\${REF} ==/!=/</>/<=/>= \${REF}\`; \`\${REF} (not) in \${REF}\`; composable with \`and\` / \`or\` / \`not\` and parens. Filters + dotted-field allowed inside \`\${REF}\` (e.g. \`\${ITEMS|length} > "0"\`). To access fields on parsed JSON, use \`$ json_parse \${VAR} -> P\` then refer to \`\${P.field}\` (the \`\${VAR|filter}.field\` shape is not supported)`);
         // v0.3.3 Bug D: push a sink scope frame so body lines (correctly
         // indented relative to the rejected `if`) don't cascade into
         // misleading `Mid-block indent change` errors. The synthetic ifOp

@@ -595,7 +595,7 @@ const INVALID_CONDITIONAL_SYNTAX: LintRule = {
   id: "invalid-conditional-syntax",
   severity: "error",
   description: "An `if:` / `elif:` condition uses syntax outside the supported grammar.",
-  remediation: "Use a supported shape: truthy `$(REF)`; `$(REF) ==/!=/</>/<=/>= \"literal\"` or `$(REF) ==/!=/</>/<=/>= $(REF)`; `$(REF) (not) in $(REF)`; composable with `and` / `or` / `not` and parens. Filters + dotted-field allowed inside `$(REF)`. For field access on parsed JSON, use `$ json_parse $(VAR) -> P` then `$(P.field)`.",
+  remediation: "Use a supported shape: truthy `${REF}`; `${REF} ==/!=/</>/<=/>= \"literal\"` or `${REF} ==/!=/</>/<=/>= ${REF}`; `${REF} (not) in ${REF}`; composable with `and` / `or` / `not` and parens. Filters + dotted-field allowed inside `${REF}`. For field access on parsed JSON, use `$ json_parse ${VAR} -> P` then `${P.field}`.",
   check: (ctx) => ctx.parsed.parseErrors
     .filter((msg) => /Unsupported condition/.test(msg))
     .map((msg) => ({
@@ -1868,7 +1868,7 @@ const UNSAFE_SHELL_DISABLED: LintRule = {
 const SHELL_BINARY_NOT_ALLOWED: LintRule = {
   id: "shell-binary-not-allowed",
   severity: "error",
-  description: "A `shell(command=\"X ...\")` op's binary `X` is not in the operator's shell allowlist. The runtime refuses the op at execution time.",
+  description: "A `shell(command=\"X ...\")` or `shell(argv=[\"X\", ...])` op's binary `X` is not in the operator's shell allowlist. The runtime refuses the op at execution time.",
   remediation: "Either add the binary to `SKILLSCRIPT_SHELL_ALLOWLIST` in your `.env` (or `shellAllowlist` in `skillscript.config.json`), or refactor the skill to use a permitted binary. Run `skillfile shell-audit` to discover what binaries your existing corpus uses. Reminder: lint is a local advisory against your author-env allowlist; runtime enforcement is authoritative.",
   check: (ctx) => {
     if (ctx.shellAllowlist === undefined) return [];
@@ -1876,7 +1876,22 @@ const SHELL_BINARY_NOT_ALLOWED: LintRule = {
     for (const [targetName, target] of ctx.parsed.targets) {
       walkOps(target.ops, (op) => {
         if (op.kind !== "shell") return;
-        const binary = op.policy === "unsafe" ? "bash" : firstShellToken(op.body);
+        // v1.0 (33bf53d3 P2.4): cover the argv form too. `shell(argv=[bin,...])`
+        // carries the binary in `op.argv[0]` (op.body is empty), so the
+        // command-form `firstShellToken(op.body)` returned null and the argv
+        // form silently bypassed the allowlist advisory at compile (Perry's
+        // `expr` cascade in cold-data-threshold). Skip argv[0] when it's a
+        // substitution — resolves at runtime, can't be checked statically,
+        // mirroring firstShellToken's command-form behavior.
+        let binary: string | null;
+        if (op.policy === "unsafe") {
+          binary = "bash";
+        } else if (op.argv !== undefined && op.argv.length > 0) {
+          const first = op.argv[0]!;
+          binary = first.startsWith("${") || first.startsWith("$(") ? null : first;
+        } else {
+          binary = firstShellToken(op.body);
+        }
         if (binary === null) return;
         if (ctx.shellAllowlist!.includes(binary)) return;
         const displayed = op.policy === "unsafe" ? "bash" : binary;
@@ -2322,8 +2337,8 @@ const SET_JSON_LITERAL_ADVISORY: LintRule = {
 // reads as a helpful nudge either way.
 // v0.17.4 — `${R.final_vars.X}` where R was bound by `$ execute_skill
 // skill_name="<child>" ... -> R` and `X` isn't in `<child>`'s declared
-// `# Returns:`. The runtime filter drops the value silently — the
-// caller gets `undefined`/empty at substitution time. Lint catches the
+// `# Returns:`. The runtime filter drops the value, so the reference
+// raises UnresolvedVariableError at runtime (loud, not silent). Lint catches the
 // asymmetry between caller's reach and child's declared export.
 // Sibling to v0.17.3's `unknown-returns-ref` (tier-1) on the
 // declaration side; this rule is tier-2 advisory on the consumer side.
@@ -2335,7 +2350,7 @@ const SET_JSON_LITERAL_ADVISORY: LintRule = {
 const UNEXPORTED_FINAL_VAR_ACCESS: LintRule = {
   id: "unexported-final-var-access",
   severity: "warning",
-  description: "A `${R.final_vars.X}` reference accesses a name not declared in the called skill's `# Returns:` header. The runtime filter drops the value; the substitution renders empty.",
+  description: "A `${R.final_vars.X}` reference accesses a name not declared in the called skill's `# Returns:` header. The runtime filter drops the value, so the reference raises UnresolvedVariableError at runtime (it does NOT silently render empty).",
   remediation: "Add `X` to the called skill's `# Returns:` header (to export it), or remove the access (if you meant `${R.outputs.text}` or another always-exported field).",
   check: async (ctx) => {
     if (ctx.skillStore === undefined) return [];
@@ -2428,7 +2443,7 @@ const UNEXPORTED_FINAL_VAR_ACCESS: LintRule = {
           findings.push({
             rule: "unexported-final-var-access",
             severity: "warning",
-            message: `\`${raw}...}\` in target '${targetName}' accesses '${fieldName}' on the result of \`execute_skill\` to '${calledSkill}', but '${fieldName}' isn't in that skill's \`# Returns:\` (declared: ${declared}). The runtime filter drops it; substitution renders empty. ${remediation}`,
+            message: `\`${raw}...}\` in target '${targetName}' accesses '${fieldName}' on the result of \`execute_skill\` to '${calledSkill}', but '${fieldName}' isn't in that skill's \`# Returns:\` (declared: ${declared}). The runtime filter drops it, so the reference raises UnresolvedVariableError at runtime (loud, not silent). ${remediation}`,
             block: targetName,
             extras: { bind_var: bindVar, called_skill: calledSkill, field: fieldName, declared_returns: Array.from(returns), access_path: via },
           });

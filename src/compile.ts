@@ -553,6 +553,12 @@ function substitute(body: string, resolved: Map<string, string>): string {
       if (!resolved.has(name)) return match;
       const raw = resolved.get(name)!;
       if (!filter || filter === "fallback") return raw;
+      // v1.0 (33bf53d3 P1.1): a filter arg containing a ref (e.g. `|contains:"${KW}"`)
+      // can't be correctly resolved at compile time — applying now would bake the
+      // literal-arg (wrong) result. Defer the whole ref to runtime, which
+      // interpolates the arg; the outer ref still resolves there (declared vars are
+      // seeded into the runtime vars map). Pass through verbatim.
+      if (arg !== undefined && arg.includes("$")) return match;
       return applyFilter(raw, filter, arg);
     },
   );
