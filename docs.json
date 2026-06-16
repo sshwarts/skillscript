@@ -23,7 +23,6 @@
       {
         "group": "Reference",
         "pages": [
-          "docs/language-reference",
           "docs/connector-contract-reference",
           "docs/configuration"
         ]
