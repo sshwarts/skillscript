@@ -1,6 +1,16 @@
-# Skillscript
+<p align="center">
+  <img src="assets/skillscript_logo.png" alt="Skillscript" width="400">
+</p>
 
+<p align="center">
 *A language for agents to write themselves in.*
+</p>
+
+<p align="center">
+  <a href="https://skillscript.ai">skillscript.ai</a>&nbsp; • &nbsp;
+  <a href="https://skillscript.mintlify.app/docs">docs</a>&nbsp;
+  </p>
+
 
 [![npm version](https://img.shields.io/npm/v/skillscript-runtime.svg)](https://www.npmjs.com/package/skillscript-runtime)
 [![tests](https://img.shields.io/badge/tests-passing-green)](#)
