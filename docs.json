@@ -1,0 +1,47 @@
+{
+  "$schema": "https://mintlify.com/docs.json",
+  "name": "Skillscript",
+  "theme": "mint",
+  "colors": {
+    "primary": "#0EA5E9"
+  },
+  "navigation": {
+    "groups": [
+      {
+        "group": "Getting Started",
+        "pages": [
+          "README"
+        ]
+      },
+      {
+        "group": "Adopter Guide",
+        "pages": [
+          "docs/adopter-playbook",
+          "docs/adopter-agent-guide"
+        ]
+      },
+      {
+        "group": "Reference",
+        "pages": [
+          "docs/language-reference",
+          "docs/connector-contract-reference",
+          "docs/configuration"
+        ]
+      },
+      {
+        "group": "Bundled Substrates",
+        "pages": [
+          "docs/sqlite-skill-store"
+        ]
+      }
+    ]
+  },
+  "appearance": {
+    "favicon": "favicon.ico"
+  },
+  "footer": {
+    "socials": {
+      "github": "https://github.com/sshwarts/skillscript"
+    }
+  }
+}
