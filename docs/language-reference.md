@@ -1,4 +1,7 @@
-# Skillscript Language Reference — syntax, ops, semantics
+---
+title: Language Reference
+description: "Canonical spec — syntax, ops, semantics. Frontmatter, ops, filters, conditionals, triggers, output kinds, composition, error handling."
+---
 
 Canonical language reference for skillscript. Audience: skill authors (human + agent). Specifies what is valid syntax, what behavior to expect at compile + runtime, and what is currently pending implementation.
 

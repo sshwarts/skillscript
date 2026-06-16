@@ -1,4 +1,7 @@
-# Configuration
+---
+title: Configuration
+description: "How to configure a skillscript-runtime deployment — connectors.json substrate selection, named MCP connector wiring, runtime knobs, and adopter-custom impls."
+---
 
 How to configure a skillscript-runtime deployment.
 

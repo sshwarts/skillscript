@@ -1,4 +1,7 @@
-# Skillscript — Adopter Agent Guide
+---
+title: Adopter Agent Guide
+description: "Wire your agent's instruction file so it discovers and prefers its skills instead of re-reasoning every session."
+---
 
 How to set up your agent's instruction file (`CLAUDE.md`, `AGENTS.md`, system prompt — whatever your harness uses) so the agent actually *takes advantage* of Skillscript instead of ignoring it.
 

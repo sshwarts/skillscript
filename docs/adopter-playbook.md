@@ -1,4 +1,7 @@
-# Adopter playbook
+---
+title: Adopter Playbook
+description: "Stand up the runtime, wire your substrates, supervise it as a service, and point your agent at it over MCP."
+---
 
 How to wire skillscript-runtime into your deployment. Written for Joe-Programmer: you have your own substrate stack (data store, agent harness, LLM endpoint, filesystem), and you want skillscript to slot in rather than dictate.
 

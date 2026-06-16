@@ -1,4 +1,7 @@
-# Connector Contract Reference
+---
+title: Connector Contract Reference
+description: "The substrate-neutral contracts adopters implement to wire their own backends. Interface signatures, payload shapes, durability + identity conventions."
+---
 
 The substrate-neutral contracts skillscript-runtime exposes for adopters to wire their own substrate behind. This doc is the **canonical source of truth** for the AgentConnector contract. The interface shape was locked at v1.0 by the v0.9.6 audit (thread `b722bbf4`); the wake/deliver receipt shapes carry post-lock refinements per the v0.18.2 session-targeting + graceful-degradation requirements.
 
