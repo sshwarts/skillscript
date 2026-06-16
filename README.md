@@ -259,8 +259,31 @@ docker run -p 7878:7878 -v $(pwd)/skills:/skills \
   ghcr.io/sshwarts/skillscript-runtime:latest
 ```
 
-**Running side-by-side with another instance?** Skip the global install — `npm install skillscript-runtime` (no `-g`) inside your project, then launch via `npx skillfile dashboard --port 7879 --connectors ~/.skillscript/adopter-connectors.json`. Pin a different port + a separate connectors.json + distinct sqlite `dbPath`s under [docs/configuration.md](docs/configuration.md). Global install puts a single `skillfile` binary on PATH and complicates dev iteration against a parallel daemon.
+Then add the MCP to your agent. The simplest path on Claude Code (and similar hosts) is to just ask: *"Add the skillscript MCP server at `http://localhost:7878/rpc`"* — the host writes the config for you. Or wire it manually:
 
+```json
+{
+  "mcpServers": {
+    "skillscript": {
+      "type": "http",
+      "url": "http://localhost:7878/rpc"
+    }
+  }
+}
+```
+
+For stdio-only clients, bridge it the same way you'd bridge any HTTP MCP — via `mcp-remote`:
+
+```json
+{
+  "mcpServers": {
+    "skillscript": {
+      "command": "npx",
+      "args": ["mcp-remote", "http://localhost:7878/rpc"]
+    }
+  }
+}
+```
 ### A canonical autonomous skill
 
 The hello example is a single static target. A more representative shape is a cron-fired skill that pulls data, processes it, and delivers via file. The example below uses only runtime-intrinsic ops (`shell`, `file_write`, `emit`) — no adopter-wired connectors required, so it runs against a fresh install:

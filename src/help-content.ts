@@ -845,6 +845,8 @@ Short-form (\`"sqlite"\`, \`"ollama"\`, \`"filesystem"\`, \`null\`) wires bundle
 
 **Note on \`(fallback:)\` + envelope shapes.** The fallback fires on dispatch throw OR empty bound value — empty string (after trim), empty array, null/undefined. An envelope object like \`{items: []}\` is a **non-empty object** even when the contained array is empty, so the fallback does NOT fire. To handle envelope-empty downstream, either test the contained collection (\`if \${R.items|length} == "0":\`) or apply a filter (\`\${R.items|fallback:[]}\`). The \`object-iteration-advisory\` lint catches a related shape — \`foreach IT in \${R}\` against an envelope-shaped origin.
 
+**Return shapes are tool-native.** External tools return whatever shape they natively return; the language doesn't normalize. Some tools return a **structured envelope** (e.g., \`$ youtrack.search_issues -> R\` → \`R.issuesPage[]\`); some return **pre-formatted text** (e.g., \`$ ddg.search -> R\` → a search-results text blob). Bind and inspect — via \`runtime_capabilities()\` advertised schema, a probe-run trace, or a \`compile_skill\` preview — before writing \`\${R.field}\` or \`foreach IT in \${R.results}\`. Mistaking a text-blob return for a structured envelope is the canonical cold-author trap.
+
 ## Discovery
 
 \`runtime_capabilities()\` reports the live picture: which connectors are registered, which feature flags they advertise, and which named instances exist (e.g., \`default\` / \`qwen\` LocalModels, \`youtrack\` McpConnector).

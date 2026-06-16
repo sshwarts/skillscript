@@ -207,4 +207,26 @@ describe("v0.2.11 docs — help() composition topic + 4th example", () => {
     // v0.7.2: function-call form replaces legacy $ execute_skill symbol-form
     expect(r.content).toMatch(/execute_skill\(skill_name=/);
   });
+
+  it("MCP-wire `help({topic: 'composition'})` is accepted by the schema enum (not rejected as invalid input)", async () => {
+    // Regression guard: pre-v0.19.16 the helpResponse() handler supported
+    // `composition` as a topic, but the MCP server's inputSchema.enum did
+    // NOT include it — so an agent calling via MCP got a validation
+    // rejection before reaching the handler. The adopter-agent-guide doc
+    // referenced the topic, making the gap user-visible.
+    const home = mkdtempSync(join(tmpdir(), "v0211-mcp-help-"));
+    const { mcpServer } = bootstrap({ skillsDir: join(home, "skills"), traceDir: join(home, "traces") });
+    const req = {
+      jsonrpc: "2.0" as const,
+      id: 1,
+      method: "tools/call",
+      params: { name: "help", arguments: { topic: "composition" } },
+    };
+    const resp = await mcpServer.handle(req);
+    expect("error" in resp).toBe(false);
+    const content = (resp as { result: { content: Array<{ text: string }> } }).result.content;
+    const parsed = JSON.parse(content[0]!.text) as { content: string };
+    expect(parsed.content).toMatch(/Composition — composing skills from other skills/);
+    expect(parsed.content).toMatch(/execute_skill/);
+  });
 });

@@ -1,5 +1,85 @@
 # Changelog
 
+## 0.19.16 — 2026-06-16 — adopter-facing doc batch + MCP help-schema fix + event deliver-leg test
+
+Doc batch surfaced by two live-engagement reviews (the skillscript
+adopter agent wiring YouTrack + DuckDuckGo, and Perry's v0.19.15 ring
+signoff probes) plus one MCP-schema bug that surfaced while reviewing
+the new adopter-agent-guide.
+
+### Fixed — MCP help-schema gap
+
+- `src/mcp-server.ts` — `composition` was supported by the `helpResponse()`
+  handler since v0.2.11 but never added to the `help` tool's `inputSchema.enum`.
+  An agent calling `help({topic: "composition"})` via the MCP wire was
+  rejected by schema validation before reaching the handler. Now in the
+  enum + description.
+- `tests/v0.2.11.test.ts` — added a regression test that exercises the
+  MCP-wire path (not just the helpResponse() function in isolation), so
+  any future schema-vs-handler drift fails loudly.
+
+### Added — event-trigger deliver-leg test (closes Perry probe `0a42b363`)
+
+- `tests/v1.0-event-trigger-e2e.test.ts` — new test asserts the canonical
+  site-distress-relay shape end-to-end: register trigger → `fireEvent` →
+  poll the trace store for the returned run_id (= trace_id per v0.19.0
+  preMintedTraceId plumbing) → assert the fired skill executed cleanly
+  and emitted its declared output. Two test-author gotchas surfaced
+  while wiring this: (a) the universal v0.9.0 approval gate refuses
+  naked `# Status: Approved` — test skills must `stampApprovalToken(body)`
+  before storing; (b) `# Vars:` must declare every name the eventPayload
+  supplies, else the lint preflight silently refuses dispatch. Both are
+  correct production behavior, but invisible to tests that only assert
+  on the synchronous `fireEvent` return value.
+
+### Docs — adopter-facing surfaces aligned with reality
+
+- `docs/adopter-playbook.md` — six findings from the skillscript adopter's
+  live YouTrack + DDG engagement:
+  - **Gap 1 — `framing: "newline"`** explicit in the stdio `RemoteMcpConnector`
+    example, with a one-line cross-link to the configuration.md anchor.
+    The legacy `lsp` default silently hangs to `init_timeout` against
+    newline-framed servers (mcp-remote + most spec-compliant MCP stdio
+    servers). The playbook examples are what adopters copy.
+  - **Gap 2 — drop `--sse`** from the `npx mcp-remote` example. The
+    bridge auto-negotiates Streamable HTTP first, SSE as fallback;
+    `--sse` only when the server explicitly requires it.
+  - **Gap 3 — host-PATH prerequisite** for the stdio path. The `command`
+    (server binary, `node`/`npx`, `uv`/`uvx`) must be on the runtime
+    host's PATH at spawn time; CLI inherits the launching shell's PATH,
+    programmatic bootstrap inherits its parent's.
+  - **Minor — local install** for the custom-bootstrap path (so `tsx`/
+    `node` can resolve `skillscript-runtime` alongside project deps); the
+    global install is for the bundled CLI.
+  - **§6 Running as a supervised service** (new section) — macOS
+    LaunchAgent + Linux systemd unit examples with the load-bearing
+    PATH-pinning gotcha (launchd/systemd run with bare PATH, not your
+    shell's; the runtime's spawned binaries — `node`/`npx`/`uv`/`uvx`/
+    every shell-allowlist binary — must be on the pinned `Environment.PATH`).
+    Plus WorkingDirectory + single-supervisor + `.env`-still-loads
+    gotchas. Validated live against a `~/Library/LaunchAgents/com.skillscript.adopter.plist`.
+  - **§7 Wiring your agent over MCP** (new section) — Claude Code "just
+    ask" path + manual HTTP MCP config + stdio bridge via `mcp-remote`,
+    with operational notes on port matching + the `/rpc` no-auth/127.0.0.1
+    default bind posture.
+  - Dated parenthetical scrubbed from §169 per `feedback_playbook_is_timeless`.
+- `docs/adopter-agent-guide.md` — `skill_list()` category descriptions
+  corrected: `receives` is augmenting-only (`# Output: agent: <name>`),
+  not augmenting/template; templates land in `skills` (agent-invokable).
+- `src/help-content.ts` — "Return shapes are tool-native" paragraph
+  added to the connectors help topic (Perry doc-polish thread `37a0f0b1`
+  item 1): contrasts structured-envelope (`youtrack.search_issues -> R`
+  → `R.issuesPage[]`) vs pre-formatted-text (`ddg.search -> R` → text
+  blob) returns, with the three inspection paths (`runtime_capabilities`
+  / probe-run / `compile_skill`).
+- `README.md` — quickstart MCP-wiring snippets re-rendered: `json`
+  language hint on the code fences, clean 2-space JSON indentation,
+  removed the literal `:\` trailing characters, "just ask Claude Code"
+  lead-in matching the playbook §7 framing.
+
+No runtime behavior changes. Full suite: 147/147 files, 1984/1988 tests
+pass (+2 vs v0.19.15: deliver-leg + MCP-wire composition regression).
+
 ## 0.19.15 — 2026-06-15 — v1.0 runtime-semantics test battery (freeze-guard ring)
 
 Closes Perry's `f6b479f5` #2 ask. Existing 1924-test suite is heavy on

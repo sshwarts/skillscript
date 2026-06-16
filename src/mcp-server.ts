@@ -702,13 +702,13 @@ export class McpServer {
 
     this.registerTool({
       name: "help",
-      description: "Cold-agent language discovery. `help()` returns a ~500-token quickstart. `help({topic})` returns a deeper section. Topics: ops / frontmatter / examples / connectors / lint-codes. Read-only.",
+      description: "Cold-agent language discovery. `help()` returns a ~500-token quickstart. `help({topic})` returns a deeper section. Topics: ops / frontmatter / examples / connectors / lint-codes / composition. Read-only.",
       inputSchema: {
         type: "object",
         properties: {
           topic: {
             type: "string",
-            enum: ["ops", "frontmatter", "examples", "connectors", "lint-codes"],
+            enum: ["ops", "frontmatter", "examples", "connectors", "lint-codes", "composition"],
             description: "Optional topic for a deeper section. Omit for the quickstart.",
           },
         },

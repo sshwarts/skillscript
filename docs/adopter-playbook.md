@@ -95,15 +95,20 @@ Your substrate exposes itself as MCP tools (via a local MCP server or remote one
       "class": "RemoteMcpConnector",
       "config": {
         "command": "my-store-mcp-server",
-        "args": ["--db", "/var/store"]
+        "args": ["--db", "/var/store"],
+        "framing": "newline"
       }
     }
   }
   ```
 
+  Set `"framing": "newline"` explicitly — `mcp-remote` and most spec-compliant MCP stdio servers use newline-delimited JSON. The legacy `lsp` default silently hangs to `init_timeout` against newline-framed servers. See [configuration.md — `RemoteMcpConnector` config — stdio framing](configuration.md#remotemcpconnector-config---stdio-framing).
+
+  The `command` (server binary, `node`/`npx`, `uv`/`uvx`, etc.) must be on the runtime host's PATH at spawn time. A programmatic bootstrap inherits its launching shell's PATH; the CLI inherits the user's shell PATH at invocation.
+
 - **HTTP MCP / Streamable HTTP** (Anthropic's hosted MCP, GitHub MCP, Linear MCP, etc.): the MCP server speaks JSON-RPC over HTTP with Server-Sent Events for the stream channel. Two ways to wire it:
 
-  - **(a) Stdio bridge** — `RemoteMcpConnector` + `npx mcp-remote https://... --sse` runs a node child process that bridges HTTPS-SSE into stdio for the runtime to consume. Works today; adds the bridge subprocess overhead per call.
+  - **(a) Stdio bridge** — `RemoteMcpConnector` + `npx mcp-remote https://...` runs a node child process that bridges HTTP MCP into stdio for the runtime to consume. `mcp-remote` auto-negotiates the transport (Streamable HTTP first, falling back to SSE); add `--sse` only if the server requires SSE explicitly. Works today; adds the bridge subprocess overhead per call.
   - **(b) Direct HTTP connector (bundled)** — `HttpMcpConnector` speaks Streamable HTTP MCP directly, no subprocess. Substrate-neutral: works against any MCP server speaking the spec. Wired declaratively:
 
     ```json
@@ -166,13 +171,13 @@ skillfile init --here
 
 This creates `~/.skillscript/` with `skills/`, `traces/`, an empty `connectors.json`, and a `config.toml` stub.
 
-**If you're writing a custom bootstrap (not just using the bundled CLI):** the package is ESM-only. `npm init -y` produces a CJS `package.json` by default, which will fail your first bootstrap run with top-level-await / ESM-import errors. Switch your adopter project to ESM before authoring bootstrap code:
+**If you're writing a custom bootstrap (not just using the bundled CLI):** install the package locally (`npm install skillscript-runtime` in your adopter project) so `tsx`/`node` can resolve it alongside your project dependencies. A global install is convenient for the bundled CLI but doesn't expose the package to your custom bootstrap's module resolution.
+
+The package is ESM-only. `npm init -y` produces a CJS `package.json` by default, which will fail your first bootstrap run with top-level-await / ESM-import errors. Switch your adopter project to ESM before authoring bootstrap code:
 
 ```bash
 npm pkg set type=module
 ```
-
-(Phase 2 cold-adopter dogfood, 2026-06-01: first improvisation an adopter hit was this exact gap — surfaced after a `bootstrap.ts` failed at module load. One-sentence flag saves the trip.)
 
 ### 2. Decide on substrate wiring
 
@@ -231,6 +236,111 @@ SKILLSCRIPT_HOME=/path/to/adopter skillfile dashboard --config /path/to/adopter/
 ```
 
 Each instance reads its own config; ports/paths/db files don't collide.
+
+### 6. Running as a supervised service
+
+For cron/event fires to be reliable, the dashboard/MCP host must run supervised — surviving both reboot and crash. The scheduler is in-process, at-most-once, with no catch-up (see [Trigger model — durability honesty](#durability-honesty)): a down process silently misses fires. A cron skill like `0 3 * * *` only fires if the process happens to be up at 3am. `nohup`-from-a-shell isn't sufficient (dies on reboot/logout/crash).
+
+Use the OS supervisor: a macOS LaunchAgent (`RunAtLoad` + `KeepAlive`) or a Linux systemd unit.
+
+**macOS — `~/Library/LaunchAgents/com.skillscript.adopter.plist`:**
+
+```xml
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>com.skillscript.adopter</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/opt/homebrew/bin/node</string>
+    <string>--import=tsx</string>
+    <string>/path/to/adopter/bootstrap.ts</string>
+  </array>
+  <key>WorkingDirectory</key><string>/path/to/adopter</string>
+  <key>RunAtLoad</key><true/>
+  <key>KeepAlive</key><true/>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key><string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
+    <key>SKILLSCRIPT_HOME</key><string>/path/to/adopter</string>
+  </dict>
+  <key>StandardOutPath</key><string>/path/to/adopter/logs/stdout.log</string>
+  <key>StandardErrorPath</key><string>/path/to/adopter/logs/stderr.log</string>
+</dict>
+</plist>
+```
+
+Load with `launchctl load ~/Library/LaunchAgents/com.skillscript.adopter.plist`.
+
+**Linux — `/etc/systemd/system/skillscript-adopter.service`:**
+
+```ini
+[Unit]
+Description=Skillscript adopter runtime
+After=network.target
+
+[Service]
+ExecStart=/usr/bin/node --import=tsx /path/to/adopter/bootstrap.ts
+WorkingDirectory=/path/to/adopter
+Environment=PATH=/usr/local/bin:/usr/bin:/bin
+Environment=SKILLSCRIPT_HOME=/path/to/adopter
+Restart=always
+RestartSec=5
+User=adopter
+
+[Install]
+WantedBy=multi-user.target
+```
+
+Enable with `systemctl enable --now skillscript-adopter.service`.
+
+**The load-bearing gotcha — pin `PATH` in the supervisor environment.** launchd and systemd run with a bare PATH (typically `/usr/bin:/bin`), not your shell's. The runtime's spawned binaries — `node`/`npx` for `RemoteMcpConnector` (mcp-remote bridges), `uv`/`uvx` for Python MCP servers, every binary on the shell allowlist (`gh`, `curl`, `git`, etc.) — must be on that pinned PATH. Omit it and connectors + shell ops fail with "command not found" under the supervisor even though they work from your shell. This is the same class of environment-specific break as forgetting to pin `TMUX_TMPDIR` in a tmux launcher's plist.
+
+Spirit-of: same PATH concern as the [Case-2 stdio host-PATH note](#case-2--mcp-tools-wiring-substrate-locked) — two surfaces (the shell that launches it ad-hoc AND the supervisor that keeps it up persistently).
+
+**A few additional gotchas:**
+
+- **`WorkingDirectory` matters.** Set it to the bootstrap's directory so relative imports (`./connectors-config.ts`) and `node_modules` resolve correctly. Without it, the supervisor runs from `/` and ESM imports fail.
+- **Single supervisor only.** Don't also run the dashboard manually (`nohup skillfile dashboard &`) alongside the supervised instance — two listeners on the same port either collide or round-robin events, dropping fires silently.
+- **`.env` still loads.** The runtime's `process.loadEnvFile` call reads `.env` from the working directory at boot, independent of the supervisor's environment block. Don't duplicate secrets in both — keep them in `.env` and let the bootstrap load them.
+
+### 7. Wire your agent to the runtime over MCP
+
+With the service running, point your agent at the runtime's `/rpc` endpoint.
+
+**Simplest path (Claude Code + similar agent hosts):** just ask. "Add the skillscript MCP server at `http://localhost:7878/rpc`" — Claude Code writes the config for you. Skip the JSON below unless you want to understand what landed or you're on a host that doesn't write its own config.
+
+**Manual config — standard HTTP MCP** (modern agent hosts that speak HTTP MCP directly) — drop the runtime in your agent's MCP config (`~/.claude.json`, `.mcp.json`, `claude_desktop_config.json`, etc.):
+
+```json
+{
+  "mcpServers": {
+    "skillscript": {
+      "type": "http",
+      "url": "http://localhost:7878/rpc"
+    }
+  }
+}
+```
+
+**Stdio bridge** (older Claude Desktop builds + any client that doesn't speak HTTP MCP) — bridge via `mcp-remote` the same way you'd bridge any HTTP MCP server. Pair this with the [`framing: "newline"` note from Case 2](#case-2--mcp-tools-wiring-substrate-locked) if you wire it the other direction (runtime → external HTTP MCP):
+
+```json
+{
+  "mcpServers": {
+    "skillscript": {
+      "command": "npx",
+      "args": ["mcp-remote", "http://localhost:7878/rpc"]
+    }
+  }
+}
+```
+
+**Two operational notes:**
+
+- **Port matches what the runtime binds.** Default `7878` (`SKILLSCRIPT_PORT` env var / `dashboard.port` config). Two-instance setups (dev + adopter side-by-side per §5) need distinct ports — e.g., adopter on `7879`. Whatever the supervisor unit specifies is what the agent config must point at.
+- **Auth + bind address.** `/rpc` has no auth and binds to `127.0.0.1` by default — the right posture for a local agent talking to a local runtime. If you set `SKILLSCRIPT_HOST=0.0.0.0` to reach the runtime across the network, front it with your own auth layer (reverse proxy + bearer token, mTLS, etc.) — same posture as the `/event` HTTP ingress, which has its own bearer-token gate (`SKILLSCRIPT_EVENT_INGRESS_AUTH_TOKEN`).
 
 ## Shell binary allowlist
 
