@@ -41,7 +41,7 @@ describe("v0.14.1 — mutation gate runtime enforcement: $ data_write", () => {
     // No `# Autonomous: true`, no `??`, no `approved=...`. Bare mutation.
     const src = `# Skill: t\n# Status: Approved\nrun:\n    $ data_write content="should not land" -> R\ndefault: run\n`;
     const compiled = await compile(src, { registry: wired.registry });
-    const result = await execute(compiled.parsed, compiled.resolvedVariables, compiled.targetOrder, { registry: wired.registry });
+    const result = await execute(compiled.parsed, compiled.resolvedVariables, compiled.targetOrder, { registry: wired.registry, fsAllowlist: [tmpdir()] });
 
     expect(result.errors.length).toBe(1);
     expect(result.errors[0]!.class).toBe("UnconfirmedMutationError");
@@ -60,7 +60,7 @@ describe("v0.14.1 — mutation gate runtime enforcement: $ data_write", () => {
     const { store, wired } = wireRuntime();
     const src = `# Skill: t\n# Status: Approved\nrun:\n    $ data_write content="durable" approved="banking thread state" -> R\ndefault: run\n`;
     const compiled = await compile(src, { registry: wired.registry });
-    const result = await execute(compiled.parsed, compiled.resolvedVariables, compiled.targetOrder, { registry: wired.registry });
+    const result = await execute(compiled.parsed, compiled.resolvedVariables, compiled.targetOrder, { registry: wired.registry, fsAllowlist: [tmpdir()] });
 
     expect(result.errors).toEqual([]);
     const rows = await store.query({ query: "durable", limit: 5, mode: "fts" });
@@ -73,7 +73,7 @@ describe("v0.14.1 — mutation gate runtime enforcement: $ data_write", () => {
     const { store, wired } = wireRuntime();
     const src = `# Skill: t\n# Status: Approved\n# Autonomous: true\nrun:\n    $ data_write content="cron handoff" -> R\ndefault: run\n`;
     const compiled = await compile(src, { registry: wired.registry });
-    const result = await execute(compiled.parsed, compiled.resolvedVariables, compiled.targetOrder, { registry: wired.registry });
+    const result = await execute(compiled.parsed, compiled.resolvedVariables, compiled.targetOrder, { registry: wired.registry, fsAllowlist: [tmpdir()] });
 
     expect(result.errors).toEqual([]);
     const rows = await store.query({ query: "cron handoff", limit: 5, mode: "fts" });
@@ -143,7 +143,7 @@ describe("v0.14.1 — mutation gate runtime enforcement: file_write", () => {
     const src = `# Skill: t\n# Status: Approved\n# Vars: P=${path}\nrun:\n    file_write(path="\${P}", content="leaked")\ndefault: run\n`;
     const wired = bootstrap({ skillsDir: join(home, "skills"), traceDir: join(home, "traces") });
     const compiled = await compile(src, { registry: wired.registry });
-    const result = await execute(compiled.parsed, compiled.resolvedVariables, compiled.targetOrder, { registry: wired.registry });
+    const result = await execute(compiled.parsed, compiled.resolvedVariables, compiled.targetOrder, { registry: wired.registry, fsAllowlist: [tmpdir()] });
 
     expect(result.errors.length).toBe(1);
     expect(result.errors[0]!.class).toBe("UnconfirmedMutationError");
@@ -157,7 +157,7 @@ describe("v0.14.1 — mutation gate runtime enforcement: file_write", () => {
     const src = `# Skill: t\n# Status: Approved\n# Vars: P=${path}\nrun:\n    file_write(path="\${P}", content="green path", approved="signed off")\ndefault: run\n`;
     const wired = bootstrap({ skillsDir: join(home, "skills"), traceDir: join(home, "traces") });
     const compiled = await compile(src, { registry: wired.registry });
-    const result = await execute(compiled.parsed, compiled.resolvedVariables, compiled.targetOrder, { registry: wired.registry });
+    const result = await execute(compiled.parsed, compiled.resolvedVariables, compiled.targetOrder, { registry: wired.registry, fsAllowlist: [tmpdir()] });
 
     expect(result.errors).toEqual([]);
     expect(readFileSync(path, "utf8")).toBe("green path");
@@ -266,7 +266,7 @@ describe("v0.14.1 — mutation gate Layer B regression guard", () => {
       wired.registry.registerMcpConnector("data_write", new DataStoreMcpConnector(store));
       const src = `# Skill: t\n# Status: Approved\n# Autonomous: true\nrun:\n    $ data_write content="layer B passthrough" -> R\ndefault: run\n`;
       const compiled = await compile(src, { registry: wired.registry });
-      const result = await execute(compiled.parsed, compiled.resolvedVariables, compiled.targetOrder, { registry: wired.registry });
+      const result = await execute(compiled.parsed, compiled.resolvedVariables, compiled.targetOrder, { registry: wired.registry, fsAllowlist: [tmpdir()] });
 
       expect(result.errors).toEqual([]);
       const rows = await store.query({ query: "layer B passthrough", limit: 5, mode: "fts" });

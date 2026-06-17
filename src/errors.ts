@@ -339,6 +339,38 @@ export class ShellBinaryNotAllowedError extends OpError {
 }
 
 /**
+ * v1.0 Gate #7 — a file_read/file_write op targeted a path outside the operator's
+ * filesystem allowlist (the third allowlist; mirrors ShellBinaryNotAllowedError).
+ * DEFAULT-DENY: an unset allowlist refuses all file ops. The path is canonicalized
+ * (symlinks + `..` resolved) before the check, so the rejected path is the REAL
+ * resolved one — `allowed/../../etc/key` can't sneak through.
+ */
+export class FilePathNotAllowedError extends OpError {
+  constructor(
+    public readonly opName: "file_read" | "file_write",
+    public readonly path: string,
+    public readonly allowlist: string[] | undefined,
+    target?: string,
+  ) {
+    const allowlistDisplay = allowlist === undefined
+      ? "(unset — default-deny)"
+      : allowlist.length === 0
+        ? "(empty list — operator declared no filesystem paths permitted)"
+        : allowlist.join(", ");
+    const message = `\`${opName}\` op refused: path '${path}' is not under any operator-allowed filesystem root. Current fs allowlist: ${allowlistDisplay}.`;
+    const remediation =
+      `Add an allowed root via one of three wiring paths: ` +
+      `(1) \`SKILLSCRIPT_FS_ALLOWLIST\` env var (comma-separated absolute dirs; works on CLI + bootstrap()); ` +
+      `(2) \`fsAllowlist\` field in \`skillscript.config.json\`; ` +
+      `(3) \`bootstrap({ fsAllowlist: [...] })\` programmatic opt for embedders. ` +
+      `Then restart the runtime. Paths are canonicalized (symlinks + \`..\` resolved) before the check, so the target must REALLY resolve under an allowed root. ` +
+      `Keep key/secret directories OUT of the allowlist — file ops must not reach trust material. The allowlist is an operator boundary the skill author cannot escape.`;
+    super(message, opName, remediation, target);
+    this.name = "FilePathNotAllowedError";
+  }
+}
+
+/**
  * A composition reference (`&` data-skill inline, `$ execute_skill`, or
  * `# Templates:` delivery) couldn't be resolved at execute time because
  * the SkillStore has no skill by that name. v0.3.1: forward-reference

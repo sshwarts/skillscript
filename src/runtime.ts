@@ -20,8 +20,10 @@ import {
   MissingSkillReferenceError,
   UnconfirmedMutationError,
   SecuredModeEffectError,
+  FilePathNotAllowedError,
   messageOf,
 } from "./errors.js";
+import { isPathUnderAllowedRoot } from "./safe-path.js";
 import { isSecuredMode } from "./approval.js";
 import {
   classifyMutation,
@@ -99,6 +101,13 @@ export interface ExecuteContext {
    * (zero behavior change when the boundary is off).
    */
   effectsAuthorized?: boolean;
+  /**
+   * v1.0 Gate #7 — the filesystem path allowlist (third allowlist; mirrors
+   * shellAllowlist). file_read/file_write may only touch paths under one of
+   * these operator-owned roots. DEFAULT-DENY: undefined → all file ops refused.
+   * Independent of the approval gate — even an approved skill is path-bounded.
+   */
+  fsAllowlist?: string[];
   /**
    * Runtime absolute timeout (milliseconds) — the built-in fallback when no
    * per-op, skill, or connector default applies. Per ERD §6 decision 7,
@@ -1032,6 +1041,12 @@ async function execOpInner(
         if (op.outputVar !== undefined) vars.set(op.outputVar, placeholder);
         return { lastBoundVar: op.outputVar ?? flatKey, lastValue: placeholder };
       }
+      // v1.0 Gate #7 — filesystem path allowlist (operator boundary, default-deny).
+      // Canonicalizes (realpath) before the under-root check so `..`/symlinks can't
+      // evade. Independent of the approval gate — even an approved skill is bounded.
+      if (!isPathUnderAllowedRoot(path, ctx.fsAllowlist)) {
+        throw new FilePathNotAllowedError("file_read", path, ctx.fsAllowlist, targetName);
+      }
       let content: string;
       try {
         content = await fsReadFile(path, "utf8");
@@ -1088,6 +1103,11 @@ async function execOpInner(
       if (ctx.mechanical === true) {
         emissions.push(`Would write file: ${path} (${content.length} chars; mechanical: true preview).`);
         return { lastBoundVar: null, lastValue: undefined };
+      }
+      // v1.0 Gate #7 — filesystem path allowlist (operator boundary, default-deny).
+      // Checked BEFORE mkdir/write so a denied path never even creates a directory.
+      if (!isPathUnderAllowedRoot(path, ctx.fsAllowlist)) {
+        throw new FilePathNotAllowedError("file_write", path, ctx.fsAllowlist, targetName);
       }
       try {
         await fsMkdir(pathDirname(path), { recursive: true });

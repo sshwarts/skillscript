@@ -78,6 +78,12 @@ export interface SkillscriptConfig {
    */
   shellAllowlist?: string[];
   /**
+   * v1.0 Gate #7 — filesystem path allowlist for file_read/file_write. Absolute
+   * roots; file ops may only touch paths under one of them. Default-deny when
+   * unset. Keep key/secret dirs out.
+   */
+  fsAllowlist?: string[];
+  /**
    * v0.17.4 — when true, outside-MCP `skill_write` forces every write
    * to land Draft regardless of body declaration. Closes the
    * agent-self-approval path for adopters wanting an explicit human
@@ -204,6 +210,14 @@ export function loadSkillscriptConfig(opts: LoadSkillscriptConfigOpts): LoadSkil
       errors.push(`skillscript.config.json: field 'enableUnsafeShell' must be a boolean.`);
     } else {
       config.enableUnsafeShell = obj["enableUnsafeShell"];
+    }
+  }
+
+  if (obj["fsAllowlist"] !== undefined) {
+    if (!Array.isArray(obj["fsAllowlist"]) || !obj["fsAllowlist"].every((p) => typeof p === "string")) {
+      errors.push(`skillscript.config.json: field 'fsAllowlist' must be an array of filesystem-path strings (e.g., ["/srv/skills/workspace"]).`);
+    } else {
+      config.fsAllowlist = obj["fsAllowlist"] as string[];
     }
   }
 

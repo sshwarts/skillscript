@@ -45,6 +45,8 @@ export interface RuntimeEnvConfig {
   maxRecursionDepth?: number;
   // Shell allowlist
   shellAllowlist?: string[];
+  // Filesystem path allowlist (file_read/file_write)
+  fsAllowlist?: string[];
   // Event ingress
   eventIngressEnabled?: boolean;
   eventIngressAuthToken?: string;
@@ -122,6 +124,17 @@ export function resolveRuntimeConfigFromEnv(env: NodeJS.ProcessEnv = process.env
       .split(",")
       .map((b) => b.trim())
       .filter((b) => b.length > 0);
+  }
+
+  // SKILLSCRIPT_FS_ALLOWLIST — comma-separated filesystem roots that file_read /
+  // file_write may touch (Gate #7 third allowlist). Same parse + default-deny
+  // semantics as the shell allowlist.
+  const fsAllowlistRaw = env["SKILLSCRIPT_FS_ALLOWLIST"];
+  if (fsAllowlistRaw !== undefined) {
+    config.fsAllowlist = fsAllowlistRaw
+      .split(",")
+      .map((p) => p.trim())
+      .filter((p) => p.length > 0);
   }
 
   // SKILLSCRIPT_EVENT_INGRESS_ENABLED — boolean

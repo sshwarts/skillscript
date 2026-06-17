@@ -435,6 +435,7 @@ async function cmdRun(args: string[]): Promise<number> {
       ...(traceMode !== undefined ? { trace: { mode: traceMode } } : {}),
       ...(traceStore !== undefined ? { traceStore } : {}),
       ...(envConfig.shellAllowlist !== undefined ? { shellAllowlist: envConfig.shellAllowlist } : {}),
+      ...(envConfig.fsAllowlist !== undefined ? { fsAllowlist: envConfig.fsAllowlist } : {}),
       ...(envConfig.enableUnsafeShell !== undefined ? { enableUnsafeShell: envConfig.enableUnsafeShell } : {}),
     });
     // v0.19.4 — complementary-channels output. Template-bearing skills
@@ -889,6 +890,12 @@ async function cmdRuntimeHost(args: string[], opts: { mode: "serve" | "dashboard
   const shellAllowlist = envShellAllowlistRaw !== undefined
     ? envShellAllowlistRaw.split(",").map((b) => b.trim()).filter((b) => b.length > 0)
     : fileConfig.shellAllowlist;
+  // v1.0 Gate #7 — filesystem path allowlist (env > config.json), same shape as
+  // SKILLSCRIPT_SHELL_ALLOWLIST. Default-deny when unset.
+  const envFsAllowlistRaw = process.env["SKILLSCRIPT_FS_ALLOWLIST"];
+  const fsAllowlist = envFsAllowlistRaw !== undefined
+    ? envFsAllowlistRaw.split(",").map((p) => p.trim()).filter((p) => p.length > 0)
+    : fileConfig.fsAllowlist;
   // v0.19.0 — event ingress (memory `ceaf4579`). Two env knobs:
   //   - SKILLSCRIPT_EVENT_INGRESS_ENABLED=true  (opt-in; default off)
   //   - SKILLSCRIPT_EVENT_INGRESS_AUTH_TOKEN=… (optional bearer-token;
@@ -909,6 +916,7 @@ async function cmdRuntimeHost(args: string[], opts: { mode: "serve" | "dashboard
     ...(absoluteTimeoutMs !== undefined ? { absoluteTimeoutMs } : {}),
     ...(maxRecursionDepth !== undefined ? { maxRecursionDepth } : {}),
     ...(shellAllowlist !== undefined ? { shellAllowlist } : {}),
+    ...(fsAllowlist !== undefined ? { fsAllowlist } : {}),
     ...(enableUnsafeShell !== undefined ? { enableUnsafeShell } : {}),
     ...(forceAlwaysDraft === true ? { forceAlwaysDraft: true } : {}),
     // Scheduler-fired skills record traces by default; `fires` / `health` /

@@ -15,7 +15,7 @@ async function runSkill(src: string): Promise<{ emissions: string[]; errors: unk
   const home = mkdtempSync(join(tmpdir(), "v072tq-"));
   const wired = bootstrap({ skillsDir: join(home, "skills"), traceDir: join(home, "traces") });
   const compiled = await compile(src);
-  const result = await execute(compiled.parsed, compiled.resolvedVariables, compiled.targetOrder, { registry: wired.registry });
+  const result = await execute(compiled.parsed, compiled.resolvedVariables, compiled.targetOrder, { registry: wired.registry, fsAllowlist: [tmpdir()] });
   return { emissions: result.emissions, errors: result.errors };
 }
 

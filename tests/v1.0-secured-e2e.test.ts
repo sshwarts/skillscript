@@ -46,7 +46,7 @@ async function storeOnDisk(body: string): Promise<FilesystemSkillStore> {
   return store;
 }
 function ctx() {
-  return { registry: new Registry(), shellAllowlist: [] as string[], enableUnsafeShell: false };
+  return { registry: new Registry(), shellAllowlist: [] as string[], fsAllowlist: ["/tmp"], enableUnsafeShell: false };
 }
 const refused = (errs: { message: string }[]) =>
   errs.find((e) => /secured mode requires an approved/i.test(e.message));

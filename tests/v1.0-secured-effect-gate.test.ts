@@ -24,6 +24,9 @@ async function run(
   return execute(compiled.parsed, compiled.resolvedVariables, compiled.targetOrder, {
     registry: new Registry(),
     shellAllowlist: [],
+    // fs allowlist generous here so the file_read/file_write gate doesn't confound
+    // the CAPABILITY-gate assertions (the fs path allowlist has its own test file).
+    fsAllowlist: ["/tmp", "/etc"],
     enableUnsafeShell: false,
     effectsAuthorized: opts.authorized ?? false,
   });

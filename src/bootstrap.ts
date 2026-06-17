@@ -100,6 +100,12 @@ export interface BootstrapOpts {
    */
   shellAllowlist?: string[];
   /**
+   * v1.0 Gate #7 — filesystem path allowlist for file_read/file_write (the third
+   * allowlist). Absolute roots; default-deny when unset. Cascade: opt > env
+   * (`SKILLSCRIPT_FS_ALLOWLIST`) > config.json `fsAllowlist`. Keep secret dirs out.
+   */
+  fsAllowlist?: string[];
+  /**
    * v0.17.4 — approval-posture override. When true, the outside-MCP
    * `skill_write` handler forces every write to land in `Draft` status
    * regardless of what the body declares. Adopters wanting strict
@@ -403,6 +409,7 @@ export function bootstrap(opts: BootstrapOpts): BootstrapResult {
   // launch environment or call `process.loadEnvFile()` themselves.
   const envCfg = resolveRuntimeConfigFromEnv();
   const resolvedShellAllowlist = pickEnvOptionalOption(opts.shellAllowlist, envCfg.shellAllowlist);
+  const resolvedFsAllowlist = pickEnvOptionalOption(opts.fsAllowlist, envCfg.fsAllowlist);
 
   // v0.10 — pre-load connectors.json (if configured) to extract substrate
   // intent BEFORE defaultRegistry runs. The substrate section selects
@@ -519,6 +526,7 @@ export function bootstrap(opts: BootstrapOpts): BootstrapResult {
     ...(resolvedAbsoluteTimeoutMs !== undefined ? { absoluteTimeoutMs: resolvedAbsoluteTimeoutMs } : {}),
     ...(resolvedMaxRecursionDepth !== undefined ? { maxRecursionDepth: resolvedMaxRecursionDepth } : {}),
     ...(resolvedShellAllowlist !== undefined ? { shellAllowlist: resolvedShellAllowlist } : {}),
+    ...(resolvedFsAllowlist !== undefined ? { fsAllowlist: resolvedFsAllowlist } : {}),
     ...(opts.trace !== undefined ? { trace: opts.trace, traceStore } : {}),
     ...(onTriggersChanged !== undefined ? { onTriggersChanged } : {}),
     enableUnsafeShell,
@@ -536,6 +544,7 @@ export function bootstrap(opts: BootstrapOpts): BootstrapResult {
     enableUnsafeShell,
     runtimeMode: mode,
     ...(resolvedShellAllowlist !== undefined ? { shellAllowlist: resolvedShellAllowlist } : {}),
+    ...(resolvedFsAllowlist !== undefined ? { fsAllowlist: resolvedFsAllowlist } : {}),
     ...(opts.triggersFilePath !== undefined ? { triggersFilePath: opts.triggersFilePath } : {}),
     ...(resolvedForceAlwaysDraft === true ? { forceAlwaysDraft: true } : {}),
   });

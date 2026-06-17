@@ -20,6 +20,7 @@ async function runSkill(src: string): Promise<{ emissions: string[]; errors: unk
   const result = await execute(compiled.parsed, compiled.resolvedVariables, compiled.targetOrder, {
     registry: wired.registry,
     shellAllowlist: ["echo", "true", "false", "bash", "sh"],
+    fsAllowlist: [tmpdir()],
   });
   return { emissions: result.emissions, errors: result.errors, vars: result.vars };
 }

@@ -79,6 +79,8 @@ export interface SchedulerConfig {
    * the safe + unsafe paths. Default-deny when unset (BREAKING).
    */
   shellAllowlist?: string[];
+  /** v1.0 Gate #7 — filesystem path allowlist for file_read/file_write. */
+  fsAllowlist?: string[];
   absoluteTimeoutMs?: number;
   /**
    * v0.18.7 — composition recursion-depth ceiling (default 10). Threaded
@@ -116,6 +118,7 @@ export class Scheduler {
   private readonly pollIntervalMs: number;
   private readonly enableUnsafeShell: boolean;
   private readonly shellAllowlist: string[] | undefined;
+  private readonly fsAllowlist: string[] | undefined;
   private readonly absoluteTimeoutMs: number | undefined;
   private readonly maxRecursionDepth: number | undefined;
   private readonly trace: TraceConfig | undefined;
@@ -134,6 +137,7 @@ export class Scheduler {
     this.pollIntervalMs = (config.pollIntervalSeconds ?? 30) * 1000;
     this.enableUnsafeShell = config.enableUnsafeShell ?? false;
     this.shellAllowlist = config.shellAllowlist;
+    this.fsAllowlist = config.fsAllowlist;
     this.absoluteTimeoutMs = config.absoluteTimeoutMs;
     this.maxRecursionDepth = config.maxRecursionDepth;
     this.trace = config.trace;
@@ -378,6 +382,7 @@ export class Scheduler {
       registry: this.registry,
       enableUnsafeShell: this.enableUnsafeShell,
       ...(this.shellAllowlist !== undefined ? { shellAllowlist: this.shellAllowlist } : {}),
+      ...(this.fsAllowlist !== undefined ? { fsAllowlist: this.fsAllowlist } : {}),
       ...(this.absoluteTimeoutMs !== undefined ? { absoluteTimeoutMs: this.absoluteTimeoutMs } : {}),
       ...(this.maxRecursionDepth !== undefined ? { maxRecursionDepth: this.maxRecursionDepth } : {}),
       ...(this.trace !== undefined ? { trace: this.trace } : {}),

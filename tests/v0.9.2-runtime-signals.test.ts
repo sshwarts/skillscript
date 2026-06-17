@@ -37,7 +37,7 @@ m:
 
 default: m
 `);
-      const r = await execute(compiled.parsed, compiled.resolvedVariables, compiled.targetOrder, { registry });
+      const r = await execute(compiled.parsed, compiled.resolvedVariables, compiled.targetOrder, { registry, fsAllowlist: [tmpdir()] });
       expect(r.agentDeliveryReceipts).toHaveLength(1);
       const rec = r.agentDeliveryReceipts[0]!;
       expect(rec.agent_id).toBe("oncall");
@@ -66,7 +66,7 @@ m:
 
 default: m
 `);
-      const r = await execute(compiled.parsed, compiled.resolvedVariables, compiled.targetOrder, { registry });
+      const r = await execute(compiled.parsed, compiled.resolvedVariables, compiled.targetOrder, { registry, fsAllowlist: [tmpdir()] });
       expect(r.agentDeliveryReceipts).toHaveLength(1);
       expect(r.agentDeliveryReceipts[0]!.delivery_skipped).toBeUndefined();
     });
@@ -84,7 +84,7 @@ m:
 
 default: m
 `);
-      const r = await execute(compiled.parsed, compiled.resolvedVariables, compiled.targetOrder, { registry });
+      const r = await execute(compiled.parsed, compiled.resolvedVariables, compiled.targetOrder, { registry, fsAllowlist: [tmpdir()] });
       expect(r.fallbacks).toEqual([]);
     });
 
@@ -95,12 +95,12 @@ default: m
 # Status: Approved
 
 m:
-    file_read(path="/nonexistent/path/${process.pid}-test.txt") -> CONTENT (fallback: "default-content")
+    file_read(path="${join(dir, `missing-${process.pid}.txt`)}") -> CONTENT (fallback: "default-content")
     emit(text="content: \${CONTENT}")
 
 default: m
 `);
-      const r = await execute(compiled.parsed, compiled.resolvedVariables, compiled.targetOrder, { registry });
+      const r = await execute(compiled.parsed, compiled.resolvedVariables, compiled.targetOrder, { registry, fsAllowlist: [tmpdir()] });
       expect(r.fallbacks).toHaveLength(1);
       const fb = r.fallbacks[0]!;
       expect(fb.opKind).toBe("file_read");
@@ -125,7 +125,7 @@ m:
 
 default: m
 `);
-      const r = await execute(compiled.parsed, compiled.resolvedVariables, compiled.targetOrder, { registry });
+      const r = await execute(compiled.parsed, compiled.resolvedVariables, compiled.targetOrder, { registry, fsAllowlist: [tmpdir()] });
       expect(r.fallbacks).toHaveLength(1);
       expect(r.fallbacks[0]!.opKind).toBe("$");
       expect(r.fallbacks[0]!.value).toBe("tool-was-missing");

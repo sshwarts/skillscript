@@ -124,6 +124,9 @@ export interface McpServerDeps {
    * See `ExecuteContext.shellAllowlist` for full semantic.
    */
   shellAllowlist?: string[];
+  /** v1.0 Gate #7 — filesystem path allowlist threaded into the execute_skill
+   * dispatch ctx so the runtime enforces file_read/file_write path bounds. */
+  fsAllowlist?: string[];
   /**
    * v0.16.8 — approval-posture override. When true, the outside-MCP
    * `skill_write` handler forces every write to land in `Draft` status
@@ -793,6 +796,7 @@ export class McpServer {
       recursionDepth: 0,
       ...(this.deps.enableUnsafeShell !== undefined ? { enableUnsafeShell: this.deps.enableUnsafeShell } : {}),
       ...(this.deps.shellAllowlist !== undefined ? { shellAllowlist: this.deps.shellAllowlist } : {}),
+      ...(this.deps.fsAllowlist !== undefined ? { fsAllowlist: this.deps.fsAllowlist } : {}),
       ...(agentId !== undefined ? { agentId } : {}),
       ...(callerCtx?.callerIdentity !== undefined ? { callerAgentId: callerCtx.callerIdentity } : {}),
     } satisfies import("./runtime.js").ExecuteContext;
@@ -896,6 +900,7 @@ export class McpServer {
       callSite: "api",
       ...(this.deps.enableUnsafeShell !== undefined ? { enableUnsafeShell: this.deps.enableUnsafeShell } : {}),
       ...(this.deps.shellAllowlist !== undefined ? { shellAllowlist: this.deps.shellAllowlist } : {}),
+      ...(this.deps.fsAllowlist !== undefined ? { fsAllowlist: this.deps.fsAllowlist } : {}),
       ...(this.deps.registry !== undefined ? { registry: this.deps.registry } : {}),
     });
     return {
@@ -926,6 +931,7 @@ export class McpServer {
         ...(inputs !== undefined ? { inputs } : {}),
         ...(this.deps.enableUnsafeShell !== undefined ? { enableUnsafeShell: this.deps.enableUnsafeShell } : {}),
       ...(this.deps.shellAllowlist !== undefined ? { shellAllowlist: this.deps.shellAllowlist } : {}),
+      ...(this.deps.fsAllowlist !== undefined ? { fsAllowlist: this.deps.fsAllowlist } : {}),
         ...(this.deps.registry !== undefined ? { registry: this.deps.registry } : {}),
       });
       return {
