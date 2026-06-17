@@ -103,14 +103,14 @@ describe("T7 — distributed code surface", () => {
 describe("T7 — CLI --help surface", () => {
   const CLI = `node ${join(REPO_ROOT, "dist/cli.js")}`;
 
-  it("9. top-level --help lists all 14 commands (v0.2.7 added serve; v0.2.11 renamed run → execute)", () => {
+  it("9. top-level --help lists all 15 commands (v0.2.7 added serve; v0.2.11 renamed run → execute; v1.0-gate7 added approve)", () => {
     const out = execSync(`${CLI} --help`, { encoding: "utf8" });
     const commands = [
       // `run` is intentionally absent from the top-level listing in v0.2.11 —
       // it's a deprecated alias for `execute` and still dispatchable, but no
       // longer advertised in the usage surface (per memory `2e999f9e`).
       "init", "execute", "compile", "audit", "lint", "list",
-      "fires", "diagram", "sign", "verify", "replay", "health",
+      "fires", "diagram", "sign", "verify", "approve", "replay", "health",
       "serve", "dashboard",
     ];
     for (const cmd of commands) {
@@ -128,7 +128,7 @@ describe("T7 — CLI --help surface", () => {
       // stderr deprecation notice; one-release window per the CLI symmetry
       // memory `2e999f9e`).
       "init", "execute", "compile", "audit", "lint", "list",
-      "fires", "diagram", "sign", "verify", "replay", "health",
+      "fires", "diagram", "sign", "verify", "approve", "replay", "health",
       "serve", "dashboard",
     ];
     for (const cmd of commands) {

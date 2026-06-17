@@ -21,6 +21,7 @@ import type { ProvenanceBlock } from "./provenance.js";
 import { renderSidecarProvenance } from "./provenance.js";
 import { Registry } from "./connectors/registry.js";
 import { FilesystemSkillStore } from "./connectors/skill-store.js";
+import { setApprovalPublicKey, setSecuredMode, stampApprovalEd25519 } from "./approval.js";
 import { OllamaLocalModel } from "./connectors/local-model.js";
 import { SqliteDataStore } from "./connectors/data-store.js";
 import { parse, type SkillOp } from "./parser.js";
@@ -169,6 +170,12 @@ const COMMAND_HELP: Readonly<Record<string, CommandHelp>> = {
     args: [{ name: "<path|name>", description: "Path to .skill.md file OR name registered in SkillStore" }],
     examples: ["skillfile sign hello"],
   },
+  approve: {
+    description: "Approve a stored skill (sign it for secured-mode execution)",
+    usage: "skillfile approve <name>",
+    args: [{ name: "<name>", description: "Name of a skill in the SkillStore to review + sign with the operator's approval key" }],
+    examples: ["skillfile approve my-skill"],
+  },
   verify: {
     description: "Verify the skill matches a signature",
     usage: "skillfile verify <path|name> <hash>",
@@ -237,7 +244,7 @@ const COMMAND_HELP: Readonly<Record<string, CommandHelp>> = {
 
 const COMMAND_ORDER: ReadonlyArray<string> = [
   "init", "execute", "compile", "audit", "lint", "list",
-  "fires", "diagram", "sign", "verify", "replay", "health",
+  "fires", "diagram", "sign", "verify", "approve", "replay", "health",
   "serve", "dashboard",
 ];
 
@@ -334,6 +341,7 @@ async function main(): Promise<number> {
     case "diagram": return await cmdDiagram(rest);
     case "sign":    return await cmdSign(rest);
     case "verify":  return await cmdVerify(rest);
+    case "approve": return await cmdApprove(rest);
     case "replay":  return await cmdReplay(rest);
     case "health":  return await cmdHealth(rest);
     case "serve":               return await cmdRuntimeHost(rest, { mode: "serve" });
@@ -677,6 +685,59 @@ async function cmdList(args: string[]): Promise<number> {
     process.stdout.write(`  ${m.name} [${m.status}]${desc}\n`);
   }
   return 0;
+}
+
+/**
+ * v1.0 Gate #7 — `skillfile approve <name>`. The operator approval action: sign
+ * the stored skill body with the operator's Ed25519 PRIVATE key and stamp
+ * `# Status: Approved v3:<sig>`. Running this command IS the human review — it
+ * prints the body, then signs. The signed body lands Approved (the store honors
+ * a valid v3 signature in secured mode; the metadata.status="Approved" override
+ * supplies the transition authority). The runtime never holds the private key —
+ * only this approve action reads it.
+ */
+async function cmdApprove(args: string[]): Promise<number> {
+  const name = args.find((a) => !a.startsWith("-"));
+  if (name === undefined) {
+    process.stderr.write("Usage: skillfile approve <skill-name>\n");
+    return 64;
+  }
+  const keyFile = process.env["SKILLSCRIPT_APPROVAL_KEY_FILE"] ?? join(homedir(), ".skillscript", "approval.key");
+  const pubFile = process.env["SKILLSCRIPT_APPROVAL_PUBLIC_KEY_FILE"] ?? join(homedir(), ".skillscript", "approval.pub");
+  if (!existsSync(keyFile)) {
+    process.stderr.write(
+      `skillfile approve: no approval private key at ${keyFile}.\n` +
+      `Start the runtime once in secured mode to provision a keypair, or set SKILLSCRIPT_APPROVAL_KEY_FILE.\n`,
+    );
+    return 66;
+  }
+  const store = new FilesystemSkillStore(SKILLS_DIR);
+  let loaded;
+  try {
+    loaded = await store.load(name);
+  } catch {
+    process.stderr.write(`skillfile approve: skill '${name}' not found in ${SKILLS_DIR}.\n`);
+    return 66;
+  }
+  // Show the body for human review — running this command IS the human approval.
+  process.stdout.write(`\n── reviewing '${name}' (signing approves it) ──\n${loaded.source}\n──────────────────────────────────────────────\n`);
+  const priv = await readFile(keyFile, "utf8");
+  // Arm secured mode + the public key so the store honors the v3 signature
+  // (otherwise the unsecured path would v1-restamp it). Private key signs here;
+  // the runtime never holds it.
+  if (existsSync(pubFile)) setApprovalPublicKey(await readFile(pubFile, "utf8"));
+  setSecuredMode(true);
+  const signed = stampApprovalEd25519(loaded.source, priv);
+  const info = await store.store(name, signed, { status: "Approved" });
+  if (info.status === "Approved") {
+    process.stdout.write(`✓ approved '${name}' — signed v3, version ${info.version}\n`);
+    return 0;
+  }
+  process.stderr.write(
+    `skillfile approve: '${name}' did not land Approved (status ${info.status}). ` +
+    `The public key at ${pubFile} may not match the signing key.\n`,
+  );
+  return 1;
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────
