@@ -1,5 +1,40 @@
 # Changelog
 
+## 0.20.0 — 2026-06-17 — Gate #7: the approval security boundary
+
+The runtime gains a real, enforced execution boundary. The Draft → Approved
+status gate applies in both runtime modes; the mode decides whether an Approved
+skill must be **cryptographically keyed**.
+
+- **Secured mode** (`SKILLSCRIPT_SECURED_MODE=true`) — an Approved skill executes
+  effectfully only if its body carries a valid **Ed25519** operator signature.
+  Asymmetric by design: the private key signs at approve-time and never reaches
+  the runtime; the public key verifies on every execution. An unapproved or
+  tampered skill cannot perform a single effectful op, regardless of how it's
+  dispatched (CLI, cron, `/event`, MCP, in-skill composition).
+- **Unsecured mode** (default) — approval is **unkeyed**: a bare
+  `# Status: Approved` runs. The trusted-author / single-operator convenience
+  posture. (The legacy v1 CRC32 hash-token scheme + the per-version approval
+  registry are **retired**.)
+- **Three default-deny operator allowlists**, always enforced in both modes:
+  shell binaries (`SKILLSCRIPT_SHELL_ALLOWLIST`), MCP connector tools, and
+  filesystem paths (`SKILLSCRIPT_FS_ALLOWLIST`, new — gates `file_read`/
+  `file_write`, canonicalized against `..`/symlink escape).
+- **Approve flow** — `skillfile approve <name>` (review + sign), `skillfile
+  reapprove [--apply]` (batch re-bless), and the dashboard **Approvals** queue
+  (review surface only — signing happens at the operator's terminal; the
+  network-facing runtime never holds the private key). `skill_write` /
+  `skill_status` cannot grant approval in secured mode.
+- **Bundled examples ship `# Status: Draft`** (no shipped token can validate on
+  another install); `skillfile init` locally approves the seeded demos with the
+  machine's own authority (secured → provision keypair + sign; unsecured → bare
+  Approved). First-run keypair provisioning is automatic; the default key path
+  moved to `~/.config/skillscript/` (outside `SKILLSCRIPT_HOME`).
+- Enforcement parity across surfaces: CLI by-name dispatch refuses an unapproved
+  skill outright (matching scheduler/MCP); by-path stays the ad-hoc escape with
+  effects gated. `SqliteSkillStore` reaches secured-mode parity with the
+  filesystem store.
+
 ## 0.19.16 — 2026-06-16 — adopter-facing doc batch + MCP help-schema fix + event deliver-leg test
 
 Doc batch surfaced by two live-engagement reviews (the skillscript

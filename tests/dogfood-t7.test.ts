@@ -24,8 +24,8 @@ const REPO_ROOT = join(__dirname, "..");
 const PACKAGE_JSON = JSON.parse(readFileSync(join(REPO_ROOT, "package.json"), "utf8")) as Record<string, unknown>;
 
 describe("T7 — package.json polish", () => {
-  it("1. version is 0.19.16 (adopter-facing doc batch + MCP help-schema fix + event deliver-leg test. (1) help() composition topic added to MCP inputSchema.enum — was supported by helpResponse() but rejected by MCP wire schema validation; regression test exercises the wire path. (2) lane (c) gains deliver-leg test asserting fireEvent → trace store polling for run_id (= trace_id) → fired skill executed cleanly + emitted output; surfaced two test-author gotchas: universal approval gate requires stampApprovalToken(body), and # Vars: must declare what eventPayload supplies. (3) docs/adopter-playbook.md — 6 findings from live YouTrack+DDG engagement (framing:newline, --sse drop, host-PATH prereq, local-install advice, supervised-service section with launchd/systemd + PATH-pinning gotcha, agent MCP wiring section) + dated-parenthetical scrub. (4) docs/adopter-agent-guide.md — receives/skills category descriptions corrected. (5) src/help-content.ts — return-shapes-are-tool-native paragraph for connectors topic. (6) README.md — quickstart MCP-wiring snippets re-rendered with json fences + clean indent.)", () => {
-    expect(PACKAGE_JSON["version"]).toBe("0.19.16");
+  it("1. version is 0.20.0 (Gate #7 approval boundary: secured mode + keyed/unkeyed Ed25519 approval, three default-deny allowlists (shell/connector/fs), approve + reapprove CLI + dashboard approval queue, CLI/sqlite enforcement parity, v1 hash-token retired, examples ship Draft + init auto-approves, keyfile moved outside SKILLSCRIPT_HOME)", () => {
+    expect(PACKAGE_JSON["version"]).toBe("0.20.0");
   });
 
   it("2. main + types + bin + engines.node ≥ 22.5 declared", () => {
