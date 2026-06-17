@@ -10,6 +10,7 @@
 import type { SkillCatalog, SkillEntry, SkillListFilter, SkillStore } from "./connectors/types.js";
 import { parse } from "./parser.js";
 import type { TriggerDecl, OutputDecl } from "./parser.js";
+import { evaluateApprovalGate } from "./approval.js";
 
 const DEFAULT_AUDIENCE: SkillListFilter["audience"] = "agent";
 const DEFAULT_STATUS = "Approved";
@@ -62,19 +63,21 @@ export async function buildSkillCatalog(
     }
 
     let parsed;
-    let source: string;
+    let source = "";
     try {
       const loaded = await skillStore.load(meta.name);
       source = loaded.source;
       parsed = parse(source);
     } catch {
       // Skill loaded but parse failed — surface a minimal entry so
-      // adopter dashboards can still see the skill exists.
+      // adopter dashboards can still see the skill exists. gate_ok reflects the
+      // already-loaded source (empty when load itself failed → false).
       entries.push({
         name: meta.name,
         category: "headless",
         description: meta.description ?? "",
         status: meta.status,
+        gate_ok: evaluateApprovalGate(source).ok,
         vars: [],
         output: [],
         triggers: [],
@@ -84,6 +87,8 @@ export async function buildSkillCatalog(
     }
 
     const entry = buildEntry(meta.name, meta.description ?? extractFirstProse(source), meta.status, parsed, meta.author);
+    // v0.20.1 — approval-gate result (source already in hand, so this is free).
+    entry.gate_ok = evaluateApprovalGate(source).ok;
 
     // trigger_kind filter — narrow to entries with at least one trigger of the requested kind
     if (filter.trigger_kind !== undefined && !entry.triggers.some((t) => t.kind === filter.trigger_kind)) {
@@ -113,6 +118,9 @@ export function buildEntry(
     category: deriveCategory(parsed.outputs, parsed.triggers),
     description,
     status,
+    // Status-based default; buildSkillCatalog overrides with the real
+    // evaluateApprovalGate(source) result (it has the source in hand).
+    gate_ok: status === "Approved",
     vars: renderVars(parsed.vars),
     output: renderOutputs(parsed.outputs),
     triggers: renderTriggers(parsed.triggers),

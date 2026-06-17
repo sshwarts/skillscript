@@ -21,6 +21,7 @@ import type { ProvenanceBlock } from "./provenance.js";
 import { renderSidecarProvenance } from "./provenance.js";
 import { Registry } from "./connectors/registry.js";
 import { FilesystemSkillStore } from "./connectors/skill-store.js";
+import type { SkillStore } from "./connectors/types.js";
 import { setApprovalPublicKey, setSecuredMode, isSecuredMode, stampApprovalEd25519, evaluateApprovalGate } from "./approval.js";
 import { OllamaLocalModel } from "./connectors/local-model.js";
 import { SqliteDataStore } from "./connectors/data-store.js";
@@ -911,6 +912,33 @@ async function cmdReapprove(args: string[]): Promise<number> {
   return fail === 0 ? 0 : 1;
 }
 
+// v0.20.1 — secured-mode startup nudge. Scans the store for skills that are
+// Approved but fail the gate (no/legacy/invalid signature) and warns once at
+// boot, pointing at `skillfile reapprove`. Best-effort: never blocks startup.
+async function warnStaleApprovals(skillStore: SkillStore): Promise<void> {
+  if (!isSecuredMode()) return;
+  try {
+    const approved = await skillStore.query({ status: "Approved" });
+    const stale: string[] = [];
+    for (const m of approved) {
+      const loaded = await skillStore.load(m.name);
+      if (!evaluateApprovalGate(loaded.source).ok) stale.push(m.name);
+    }
+    if (stale.length === 0) return;
+    const shown = stale.slice(0, 5).join(", ");
+    const more = stale.length > 5 ? `, +${stale.length - 5} more` : "";
+    process.stderr.write(
+      `\n⚠  Secured mode: ${stale.length} stored skill${stale.length === 1 ? "" : "s"} ` +
+      `${stale.length === 1 ? "is" : "are"} Approved but carry no valid signature — ` +
+      `they will be REFUSED until re-approved.\n` +
+      `   Re-bless the set:  skillfile reapprove --apply\n` +
+      `   (${shown}${more})\n\n`,
+    );
+  } catch {
+    /* best-effort — a scan failure must never block the runtime starting */
+  }
+}
+
 // ─── Helpers ──────────────────────────────────────────────────────────────
 
 interface RunCompileOpts {
@@ -1171,6 +1199,10 @@ async function cmdRuntimeHost(args: string[], opts: { mode: "serve" | "dashboard
   // Register declarative `# Triggers:` headers BEFORE arming the tick loop
   // so the first tick can fire any minute-aligned cron entries.
   await wireDeclarativeTriggers(wired);
+  // v0.20.1 — when secured mode is armed, loudly flag any stored skill that's
+  // Approved-but-unsigned (e.g. a pre-secured v1 corpus) so the operator runs
+  // `reapprove` instead of discovering refusals skill-by-skill at runtime.
+  await warnStaleApprovals(wired.skillStore);
   wired.scheduler.start();
   // v0.2.7: dashboard mounts the SPA; serve runs headless on /rpc only.
   const server = new DashboardServer({

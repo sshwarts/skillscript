@@ -339,6 +339,15 @@ export interface SkillEntry {
   description: string;
   status: SkillStatus;
   /**
+   * v0.20.1 — approval-gate result under the runtime's current mode. `false`
+   * means the skill will be refused at execution: a `Draft`, or (in secured
+   * mode) an `Approved` skill whose body lacks a valid signature — i.e. it
+   * "needs approval". Lets the dashboard build the approval queue + the
+   * "re-approval needed" badge from one `skill_list` query (the source is
+   * already loaded to parse, so computing this is free).
+   */
+  gate_ok: boolean;
+  /**
    * v0.18.6 — optional connector-provided authorship attribution.
    * `null` when the substrate doesn't track or expose author per skill.
    * Bundled stores populate from `SkillMeta.author` (captured at first

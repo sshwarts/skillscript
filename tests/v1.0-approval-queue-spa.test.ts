@@ -111,34 +111,43 @@ describe("approvalSignalBadges — queue triage column", () => {
   });
 });
 
-describe("renderApprovals — queue fetches Drafts explicitly", () => {
-  it("queries skill_list with status:Draft (not the default Approved filter) and renders the command in secured mode", async () => {
+describe("renderApprovals — queue = Drafts + stale Approved (gate_ok:false)", () => {
+  it("queries Draft AND Approved, and surfaces both a Draft and a v1-stale Approved skill", async () => {
     g.state.securedApproval = { enabled: true, public_key_present: true };
-    const calls: Array<{ name: string; args: unknown }> = [];
-    // Stub fetch the way the SPA's rpc()/callTool() expect: JSON-RPC envelope
-    // with result.content[0].text being a JSON string.
+    const statuses: string[] = [];
     g.fetch = async (_url: string, opts: { body: string }) => {
       const req = JSON.parse(opts.body);
       const toolName = req.params.name;
-      calls.push({ name: toolName, args: req.params.arguments });
-      let payload: unknown;
+      let payload: unknown = {};
       if (toolName === "skill_list") {
-        payload = { receives: [], skills: [{ name: "danger", status: "Draft", description: "d" }], headless: [] };
+        const status = req.params.arguments?.filter?.status;
+        statuses.push(status);
+        if (status === "Draft") {
+          payload = { receives: [], skills: [{ name: "draft-skill", status: "Draft", description: "d", gate_ok: false }], headless: [] };
+        } else if (status === "Approved") {
+          // one stale (v1) Approved + one healthy v3 Approved — only the stale belongs in the queue
+          payload = { receives: [], skills: [
+            { name: "legacy-v1", status: "Approved", description: "old", gate_ok: false },
+            { name: "healthy-v3", status: "Approved", description: "ok", gate_ok: true },
+          ], headless: [] };
+        }
       } else if (toolName === "skill_read") {
-        payload = { source: '# Skill: danger\nrun:\n    file_write(path="x", content="y", approved="z")\ndefault: run' };
-      } else {
-        payload = {};
+        payload = { source: `# Skill: ${req.params.arguments.name}\nrun:\n    file_write(path="x", content="y", approved="z")\ndefault: run` };
       }
       return {
         json: async () => ({ jsonrpc: "2.0", id: req.id, result: { content: [{ type: "text", text: JSON.stringify(payload) }] } }),
       };
     };
     const html = await g.renderApprovals();
-    // The queue MUST request Drafts explicitly — the bug we fixed.
-    const listCall = calls.find((c) => c.name === "skill_list");
-    expect((listCall?.args as { filter?: { status?: string } })?.filter?.status).toBe("Draft");
-    expect(html).toContain("danger");
-    expect(html).toContain("skillfile approve danger");
-    expect(html).toContain("1 write"); // security-signal badge from the body
+    // Both statuses are queried (the 30s poll only sees Approved).
+    expect(statuses).toContain("Draft");
+    expect(statuses).toContain("Approved");
+    // Draft + stale-v1 Approved are in the queue; the healthy v3 one is NOT.
+    expect(html).toContain("draft-skill");
+    expect(html).toContain("legacy-v1");
+    expect(html).not.toContain("healthy-v3");
+    expect(html).toMatch(/Approvals \(2\)/);
+    expect(html).toContain("re-approval needed"); // the stale-Approved badge
+    expect(html).toContain("skillfile approve legacy-v1");
   });
 });

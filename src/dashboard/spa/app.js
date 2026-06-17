@@ -136,40 +136,54 @@ function renderSecuredBanner() {
 // terminal where the operator's private key lives, never on this process.
 async function renderApprovals() {
   const secured = securedModeOn();
-  // The pending-approval set is Draft skills. NOTE: the shared `state.skills`
-  // poll uses skill_list's default status=Approved filter, so Drafts never land
-  // there — the queue must query them explicitly (audience:all + status:Draft).
-  let drafts = [];
+  // The "needs approval" set = every skill the gate refuses (gate_ok === false),
+  // excluding intentionally-retired Disabled skills. That's two cases:
+  //   • Draft skills — never approved.
+  //   • Approved-but-stale — Approved status with a body the gate rejects
+  //     (in secured mode: no/legacy/invalid signature — the v1-migration corpus).
+  // The 30s poll only sees Approved, so the queue queries Draft + Approved
+  // explicitly and filters Approved by gate_ok (now on every skill_list entry).
+  let pending = [];
   try {
-    const catalog = await callTool("skill_list", { filter: { audience: "all", status: "Draft" } });
-    drafts = [...(catalog.receives ?? []), ...(catalog.skills ?? []), ...(catalog.headless ?? [])];
+    const [draftCat, apprCat] = await Promise.all([
+      callTool("skill_list", { filter: { audience: "all", status: "Draft" } }),
+      callTool("skill_list", { filter: { audience: "all", status: "Approved" } }),
+    ]);
+    const flat = (c) => [...(c.receives ?? []), ...(c.skills ?? []), ...(c.headless ?? [])];
+    const drafts = flat(draftCat).map((s) => ({ ...s, _why: "draft" }));
+    const stale = flat(apprCat).filter((s) => s.gate_ok === false).map((s) => ({ ...s, _why: "stale" }));
+    pending = [...drafts, ...stale];
   } catch (err) {
     return `<h2>Approvals</h2><section><div class="empty">Failed to load the approval queue: ${esc(err.message)}</div></section>`;
   }
+  const staleCount = pending.filter((s) => s._why === "stale").length;
   const intro = secured
-    ? `<p>Secured mode is <strong>ON</strong>. Each Draft below is inert — no
-       effectful op will run until it is approved. Review the source, then run
-       the command at a terminal that can read your approval key.</p>`
+    ? `<p>Secured mode is <strong>ON</strong>. Each skill below is inert — no
+       effectful op will run until it is approved. ${staleCount > 0 ? `${staleCount} carry a stale/legacy approval (e.g. a pre-secured v1 stamp) and need re-signing — the fastest path is <code>skillfile reapprove --apply</code> at a terminal.` : ""}
+       Review the source, then sign at a terminal that can read your approval key.</p>`
     : `<p>Secured mode is <strong>OFF</strong> — Draft skills can be approved
        in-page from their detail view (the runtime self-stamps). Turn on secured
        mode (<code>SKILLSCRIPT_SECURED_MODE=true</code>) to require key-signed
        approval. The queue below still shows what's pending review.</p>`;
-  if (drafts.length === 0) {
-    return `<h2>Approvals</h2><section>${intro}<div class="empty">No skills awaiting approval — every skill is Approved or Disabled.</div></section>`;
+  if (pending.length === 0) {
+    return `<h2>Approvals</h2><section>${intro}<div class="empty">Nothing awaiting approval — every skill is Approved (and valid) or Disabled.</div></section>`;
   }
-  // Fetch each draft's source so we can show its security-signal summary inline.
+  // Fetch each skill's source so we can show its security-signal summary inline.
   // skill_read may fail (load() throws) — degrade that row to "source N/A".
   const sources = await Promise.all(
-    drafts.map((s) => callTool("skill_read", { name: s.name }).then((r) => r?.source ?? null).catch(() => null)),
+    pending.map((s) => callTool("skill_read", { name: s.name }).then((r) => r?.source ?? null).catch(() => null)),
   );
-  const rows = drafts.map((s, i) => {
+  const rows = pending.map((s, i) => {
     const src = sources[i];
     const sig = src ? collectSecuritySignals(src) : null;
     const sigBadges = sig ? approvalSignalBadges(sig) : `<span class="empty">source N/A</span>`;
+    const whyBadge = s._why === "stale"
+      ? `<span class="badge error" title="Approved status, but the body lacks a valid signature">re-approval needed</span>`
+      : `<span class="badge Draft">Draft</span>`;
     const cmd = approveCommand(s.name);
     return `
       <tr>
-        <td><a href="#skill/${encodeURIComponent(s.name)}"><strong>${esc(s.name)}</strong></a><br>
+        <td><a href="#skill/${encodeURIComponent(s.name)}"><strong>${esc(s.name)}</strong></a> ${whyBadge}<br>
             <span style="color:#6c757d;font-size:0.85em;">${esc(s.description ?? "—")}</span></td>
         <td>${sigBadges}</td>
         <td>
@@ -179,7 +193,7 @@ async function renderApprovals() {
       </tr>`;
   }).join("");
   return `
-    <h2>Approvals (${drafts.length})</h2>
+    <h2>Approvals (${pending.length})</h2>
     <section>
       ${intro}
       <table>
