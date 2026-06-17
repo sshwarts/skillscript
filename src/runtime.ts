@@ -19,8 +19,10 @@ import {
   TypeMismatchError,
   MissingSkillReferenceError,
   UnconfirmedMutationError,
+  SecuredModeEffectError,
   messageOf,
 } from "./errors.js";
+import { isSecuredMode } from "./approval.js";
 import {
   classifyMutation,
   authorizationGranted,
@@ -86,6 +88,17 @@ export interface ExecuteContext {
   ) => Promise<ExecuteResult>;
   /** Mechanical-only preview: `$` ops skip real dispatch and bind a placeholder. */
   mechanical?: boolean;
+  /**
+   * v1.0 Gate #7 — the effect capability. In SECURED mode, effectful ops
+   * (egress/mutation: `$`, shell, file_write, notify) and output-routing
+   * delivery dispatch ONLY when this is true. Minted exclusively by a verified
+   * approval at load time (or set unconditionally when the boundary is OFF).
+   * Source-mode / unapproved bodies run without it → effects refused at the
+   * dispatch choke, regardless of mechanical's (incomplete) suppression.
+   * Read alongside `isSecuredMode()`; in unsecured mode it is ignored entirely
+   * (zero behavior change when the boundary is off).
+   */
+  effectsAuthorized?: boolean;
   /**
    * Runtime absolute timeout (milliseconds) — the built-in fallback when no
    * per-op, skill, or connector default applies. Per ERD §6 decision 7,
@@ -564,7 +577,11 @@ export async function execute(
   // `wake_skipped`.
   const agentDeliveryReceipts: AgentDeliveryReceiptRecord[] = [];
   const agentWakeReceipts: AgentWakeReceiptRecord[] = [];
-  if (ctx.mechanical !== true) {
+  // v1.0 Gate #7 — output-routing is an effectful egress; gate it with the same
+  // capability as the op-level choke. In secured mode an unapproved body cannot
+  // deliver to an agent/template, even though its emit-to-transcript ran.
+  const deliveryAuthorized = !(isSecuredMode() && ctx.effectsAuthorized !== true);
+  if (ctx.mechanical !== true && deliveryAuthorized) {
     for (const decl of outputDecls) {
       if (decl.target === undefined) continue;
       // Agent-bound output kinds: literal `===` so TS narrows decl.kind
@@ -736,6 +753,19 @@ function extractOpConnector(op: SkillOp): string | undefined {
   return undefined;
 }
 
+/**
+ * v1.0 Gate #7 — the complete effectful (egress/mutation) op set the capability
+ * gate covers. `$` = all external MCP dispatch (connector / data_write / data_read
+ * / llm); `shell` = process spawn; `file_write` = local mutation; `notify` = agent
+ * delivery. Excluded (no egress/mutation): `$set`/`$append` (local vars), `?`/`emit`
+ * (transcript), `foreach`/`if` (control flow — their nested ops are each checked),
+ * `inline` (compile-resolved + gated at compile), `file_read` (local read).
+ * Output-routing delivery is gated separately at the execute() tail.
+ */
+function isEffectfulOpKind(kind: SkillOp["kind"]): boolean {
+  return kind === "$" || kind === "shell" || kind === "file_write" || kind === "notify";
+}
+
 async function execOpInner(
   op: SkillOp,
   vars: Map<string, unknown>,
@@ -748,6 +778,15 @@ async function execOpInner(
   traceBuilder: TraceBuilder | null,
   authState: MutationAuthState = { skillAutonomous: false },
 ): Promise<ExecOpsResult> {
+  // v1.0 Gate #7 — complete-mediation choke. Every effectful op (egress/mutation)
+  // physically traverses this point; in secured mode it may dispatch ONLY when
+  // the execution was authorized by a verified approval. Source-mode/Draft/forged
+  // bodies arrive with effectsAuthorized unset → refused here, regardless of
+  // mechanical's (incomplete) suppression. Non-effectful ops ($set/$append/?/emit/
+  // foreach/if/inline/file_read) pass through. No-op when the boundary is OFF.
+  if (isEffectfulOpKind(op.kind) && isSecuredMode() && ctx.effectsAuthorized !== true) {
+    throw new SecuredModeEffectError(op.kind, targetName);
+  }
   switch (op.kind) {
     case "$set": {
       // v0.5.0 item 3 — `$set X = "...$(REF)..."` now resolves $(REF) at

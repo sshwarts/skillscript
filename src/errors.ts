@@ -63,6 +63,25 @@ export class ApprovalRejectedError extends ConnectorError {
   }
 }
 
+/**
+ * v1.0 Gate #7 — an effectful op (or output-routing delivery) was reached in
+ * secured mode without an authorized approval. Complete-mediation refusal at
+ * the dispatch choke: the body never passed signature verification (source-mode,
+ * Draft, forged, or unapproved), so it cannot egress or mutate.
+ */
+export class SecuredModeEffectError extends Error {
+  constructor(
+    public readonly opKind: string,
+    public readonly target?: string,
+    public readonly remediation: string = "This is an intentional safety gate: a human must review and approve the skill via the dashboard. Preview it with mechanical mode, or keep iterating as a Draft.",
+  ) {
+    super(
+      `effectful op '${opKind}'${target ? ` in target '${target}'` : ""} refused — secured mode requires an approved (signed) skill to perform effects.`,
+    );
+    this.name = "SecuredModeEffectError";
+  }
+}
+
 export class VersionNotFoundError extends ConnectorError {
   constructor(
     public readonly skill_name: string,
