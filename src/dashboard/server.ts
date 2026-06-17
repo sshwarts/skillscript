@@ -1,4 +1,5 @@
 import { createServer } from "node:http";
+import { timingSafeEqual } from "node:crypto";
 import type { IncomingMessage, ServerResponse, Server } from "node:http";
 import { readFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
@@ -87,6 +88,27 @@ export interface DashboardServerConfig {
    * the typical adopter wires both).
    */
   scheduler?: Scheduler;
+  /**
+   * v0.20.1 — optional shared-secret gate for the dashboard surface (SPA + the
+   * `/rpc` it uses). When set, every request must present the token via
+   * `?token=<x>` (browser entry — a cookie is then set so follow-up requests
+   * pass), a `skillscript_dash` cookie, or `Authorization: Bearer <x>` (for
+   * programmatic `/rpc` callers); 401 otherwise. Default unset → open (localhost
+   * bind is the only gate, as before). `/event` keeps its own bearer token.
+   *
+   * This is NETWORK/CASUAL hygiene (keep network parties out when binding beyond
+   * localhost), NOT an agent-forgery boundary — the dashboard holds no signing
+   * key. Falls back to `SKILLSCRIPT_DASHBOARD_AUTH_TOKEN`.
+   */
+  authToken?: string;
+}
+
+/** Constant-time token comparison (length-guarded so timingSafeEqual won't throw). */
+function tokensEqual(a: string, b: string): boolean {
+  const ab = Buffer.from(a);
+  const bb = Buffer.from(b);
+  if (ab.length !== bb.length) return false;
+  return timingSafeEqual(ab, bb);
 }
 
 const MIME: Record<string, string> = {
@@ -106,6 +128,7 @@ export class DashboardServer {
   private readonly eventIngressEnabled: boolean;
   private readonly eventIngressAuthToken: string | undefined;
   private readonly scheduler: Scheduler | undefined;
+  private readonly authToken: string | undefined;
   private httpServer: Server | null = null;
 
   constructor(config: DashboardServerConfig) {
@@ -142,6 +165,8 @@ export class DashboardServer {
     if (this.eventIngressEnabled && this.scheduler === undefined) {
       throw new Error("DashboardServer: eventIngressEnabled requires a scheduler reference");
     }
+    // v0.20.1 — dashboard auth gate. Empty string treated as unset.
+    this.authToken = config.authToken ?? (process.env["SKILLSCRIPT_DASHBOARD_AUTH_TOKEN"] || undefined);
   }
 
   async start(): Promise<void> {
@@ -164,6 +189,11 @@ export class DashboardServer {
   async handle(req: IncomingMessage, res: ServerResponse): Promise<void> {
     try {
       const url = new URL(req.url ?? "/", `http://${this.bindAddress}:${this.port}`);
+      // v0.20.1 — dashboard auth gate (SPA + /rpc). `/event` self-authenticates
+      // with its own bearer token, so it's exempt here.
+      if (url.pathname !== "/event" && !this.checkDashboardAuth(req, url, res)) {
+        return;
+      }
       // /rpc is POST-only — any other method on /rpc is 405 (not falling
       // through to the static handler, which would 404 with misleading
       // semantics).
@@ -208,6 +238,42 @@ export class DashboardServer {
       res.statusCode = 500;
       res.end(`Internal server error: ${(err as Error).message}`);
     }
+  }
+
+  /**
+   * v0.20.1 — dashboard auth gate. Returns true when the request may proceed
+   * (no token configured, or a valid token presented); false when it already
+   * sent a 401. On a browser `?token=` entry it sets a cookie so the SPA's
+   * follow-up asset + `/rpc` requests carry the token without re-tokening.
+   */
+  private checkDashboardAuth(req: IncomingMessage, url: URL, res: ServerResponse): boolean {
+    if (this.authToken === undefined) return true; // gate disabled (default)
+    const presented = this.extractDashboardToken(req, url);
+    if (presented !== undefined && tokensEqual(presented, this.authToken)) {
+      if (url.searchParams.has("token")) {
+        // Persist for the browser session so assets + /rpc don't need ?token=.
+        res.setHeader("Set-Cookie", `skillscript_dash=${encodeURIComponent(this.authToken)}; HttpOnly; SameSite=Strict; Path=/`);
+      }
+      return true;
+    }
+    res.statusCode = 401;
+    res.setHeader("content-type", "text/plain; charset=utf-8");
+    res.end("401 Unauthorized — append ?token=<SKILLSCRIPT_DASHBOARD_AUTH_TOKEN> to the URL (or send it as a Bearer token).");
+    return false;
+  }
+
+  /** Token from `?token=` query, the `skillscript_dash` cookie, or a Bearer header. */
+  private extractDashboardToken(req: IncomingMessage, url: URL): string | undefined {
+    const q = url.searchParams.get("token");
+    if (q) return q;
+    const cookie = req.headers["cookie"];
+    if (typeof cookie === "string") {
+      const m = /(?:^|;\s*)skillscript_dash=([^;]+)/.exec(cookie);
+      if (m && m[1] !== undefined) return decodeURIComponent(m[1]);
+    }
+    const auth = req.headers["authorization"];
+    if (typeof auth === "string" && auth.startsWith("Bearer ")) return auth.slice(7);
+    return undefined;
   }
 
   /**

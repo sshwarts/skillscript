@@ -24,8 +24,8 @@ const REPO_ROOT = join(__dirname, "..");
 const PACKAGE_JSON = JSON.parse(readFileSync(join(REPO_ROOT, "package.json"), "utf8")) as Record<string, unknown>;
 
 describe("T7 — package.json polish", () => {
-  it("1. version is 0.20.0 (Gate #7 approval boundary: secured mode + keyed/unkeyed Ed25519 approval, three default-deny allowlists (shell/connector/fs), approve + reapprove CLI + dashboard approval queue, CLI/sqlite enforcement parity, v1 hash-token retired, examples ship Draft + init auto-approves, keyfile moved outside SKILLSCRIPT_HOME)", () => {
-    expect(PACKAGE_JSON["version"]).toBe("0.20.0");
+  it("1. version is 0.20.1 (Gate #7 follow-ups: approval queue surfaces stale/legacy Approved skills via skill_list gate_ok, secured-mode startup warning for unsigned-Approved corpus, optional SKILLSCRIPT_DASHBOARD_AUTH_TOKEN access gate)", () => {
+    expect(PACKAGE_JSON["version"]).toBe("0.20.1");
   });
 
   it("2. main + types + bin + engines.node ≥ 22.5 declared", () => {

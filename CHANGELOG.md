@@ -1,5 +1,28 @@
 # Changelog
 
+## 0.20.1 — 2026-06-17 — approval-migration UX + dashboard access gate
+
+Follow-ups that make the secured-mode migration legible, plus an optional
+access gate for the dashboard.
+
+- **The approval queue now surfaces the legacy corpus.** `skill_list` entries
+  carry a `gate_ok` flag (computed from the source already loaded to parse — no
+  extra I/O), so the dashboard **Approvals** tab shows not just `Draft` skills
+  but every `Approved` skill the gate refuses — i.e. a pre-secured `v1`-stamped
+  corpus, badged "re-approval needed." Each drops out of the tab as it's
+  re-signed. The tab becomes a migration worklist that empties as you work it.
+- **Secured-mode startup warning.** When the runtime starts in secured mode it
+  scans the store and warns once if any skill is Approved-but-unsigned, pointing
+  at `skillfile reapprove --apply` — so the operator isn't discovering refusals
+  skill-by-skill. Best-effort; never blocks startup.
+- **Optional dashboard access gate.** `SKILLSCRIPT_DASHBOARD_AUTH_TOKEN` gates
+  the dashboard SPA + `/rpc` behind a shared secret — presented via `?token=`
+  (browser entry sets a session cookie), the `skillscript_dash` cookie, or
+  `Authorization: Bearer`. Default unset → open (localhost bind, as before).
+  This is network/casual hygiene for binding beyond localhost; the dashboard
+  holds no signing key, so it is *not* an agent-forgery boundary (that remains
+  key custody). `/event` keeps its own bearer token.
+
 ## 0.20.0 — 2026-06-17 — Gate #7: the approval security boundary
 
 The runtime gains a real, enforced execution boundary. The Draft → Approved

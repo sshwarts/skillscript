@@ -142,3 +142,67 @@ describe("DashboardServer /rpc endpoint", () => {
     expect(r.status).toBe(405);
   });
 });
+
+describe("DashboardServer auth gate (v0.20.1)", () => {
+  // A server with the dashboard token set. Mirrors setup() but adds authToken.
+  async function securedSetup(): Promise<Ctx & { token: string }> {
+    const home = mkdtempSync(join(tmpdir(), "skillscript-dashauth-"));
+    const skillStore = new FilesystemSkillStore(join(home, "skills"));
+    const traceStore = new FilesystemTraceStore(join(home, "traces"));
+    const scheduler = new Scheduler({ registry: new Registry(), skillStore, traceStore });
+    const mcpServer = new McpServer({ skillStore, scheduler, traceStore });
+    const port = 30000 + Math.floor(Math.random() * 10000);
+    const token = "tok-secret-abc123";
+    const server = new DashboardServer({ mcpServer, port, bindAddress: "127.0.0.1", authToken: token });
+    await server.start();
+    return {
+      server, mcpServer, skillStore, token,
+      baseUrl: `http://127.0.0.1:${port}`,
+      cleanup: async () => { await server.stop(); rmSync(home, { recursive: true, force: true }); },
+    };
+  }
+
+  let ctx: Ctx & { token: string };
+  beforeEach(async () => { ctx = await securedSetup(); });
+  afterEach(async () => { await ctx.cleanup(); });
+
+  it("GET / with no token → 401", async () => {
+    const r = await fetch(`${ctx.baseUrl}/`, { redirect: "manual" });
+    expect(r.status).toBe(401);
+  });
+
+  it("GET /?token=<wrong> → 401", async () => {
+    const r = await fetch(`${ctx.baseUrl}/?token=nope`);
+    expect(r.status).toBe(401);
+  });
+
+  it("GET /?token=<correct> → 200 + sets the session cookie", async () => {
+    const r = await fetch(`${ctx.baseUrl}/?token=${ctx.token}`);
+    expect(r.status).toBe(200);
+    expect(r.headers.get("set-cookie")).toMatch(/skillscript_dash=/);
+    expect(r.headers.get("set-cookie")).toMatch(/HttpOnly/);
+  });
+
+  it("the session cookie alone authorizes follow-up requests", async () => {
+    const r = await fetch(`${ctx.baseUrl}/app.js`, { headers: { cookie: `skillscript_dash=${ctx.token}` } });
+    expect(r.status).toBe(200);
+  });
+
+  it("POST /rpc with a Bearer token → 200 (programmatic callers)", async () => {
+    const r = await fetch(`${ctx.baseUrl}/rpc`, {
+      method: "POST",
+      headers: { "content-type": "application/json", authorization: `Bearer ${ctx.token}` },
+      body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list" }),
+    });
+    expect(r.status).toBe(200);
+  });
+
+  it("POST /rpc with no token → 401", async () => {
+    const r = await fetch(`${ctx.baseUrl}/rpc`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list" }),
+    });
+    expect(r.status).toBe(401);
+  });
+});
