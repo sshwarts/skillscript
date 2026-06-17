@@ -387,6 +387,11 @@ export class Scheduler {
       // per Perry's mapping. Specific callers (CLI, dashboard, agent-driven)
       // pass their own triggerCtx with the right source value.
       triggerCtx: triggerCtx ?? { source: "inline", name: "", fired_at_ms: nowMs },
+      // v1.0 Gate #7 — the approval gate (evaluateApprovalGate above) passed, so
+      // this trigger-fired skill is authorized to perform effects. cron + event
+      // both reach here through the one dispatch path; this mints the capability
+      // for both. An unapproved skill never reaches this line (gate skips it).
+      effectsAuthorized: true,
       skillVersion: loaded.metadata.version,
       // v0.16.9 — identity follows the skill. Trigger-fired dispatch
       // (cron, scheduled, event-source) carries the skill's author as

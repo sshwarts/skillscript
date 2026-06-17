@@ -23,7 +23,7 @@ import { execute, type ExecuteContext, type ExecuteResult } from "./runtime.js";
 import type { Registry } from "./connectors/registry.js";
 import type { SkillStore } from "./connectors/types.js";
 import { MissingSkillReferenceError, ApprovalRejectedError } from "./errors.js";
-import { evaluateApprovalGate } from "./approval.js";
+import { evaluateApprovalGate, isSecuredMode } from "./approval.js";
 
 const DEFAULT_MAX_RECURSION_DEPTH = 10;
 
@@ -158,6 +158,11 @@ export async function executeSkillByName(
     recursionDepth: depth,
     maxRecursionDepth: limit,
     entrySkillName: ctx.entrySkillName ?? ctx._currentSkillName,
+    // v1.0 Gate #7 — the gate above passed (valid v3 signature in secured mode),
+    // so this stored skill is authorized to perform effects. The verified load
+    // IS the capability mint; explicit (not inherited) so the child's own
+    // approval governs, not the parent's.
+    effectsAuthorized: true,
     ...(loaded.metadata.author !== undefined ? { agentId: loaded.metadata.author } : {}),
   };
 
@@ -259,10 +264,18 @@ export async function executeSkillFromSource(
   const skillStore = opts.skillStore ?? (ctx.registry.hasSkillStore("primary") ? ctx.registry.getSkillStore("primary") : undefined);
   const compiled = await compile(source, { inputs, ...(skillStore !== undefined ? { skillStore } : {}) });
 
+  // v1.0 Gate #7 — source-mode capability. An ad-hoc body bypasses the SkillStore,
+  // so in secured mode it may perform effects ONLY if the body itself carries a
+  // valid signature (i.e. an operator approved exactly this body). An unsigned /
+  // agent-authored body runs with effects refused at the dispatch choke (compile,
+  // preview, $set, emit only). Unsecured mode preserves the historical free run.
+  const effectsAuthorized = !isSecuredMode() || evaluateApprovalGate(source).ok;
+
   const childCtx: ExecuteContext = {
     ...ctx,
     recursionDepth: depth,
     maxRecursionDepth: limit,
+    effectsAuthorized,
   };
 
   const result = await execute(
