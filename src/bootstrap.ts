@@ -357,18 +357,19 @@ export function defaultRegistry(opts: DefaultRegistryOpts): { registry: Registry
  */
 /**
  * v1.0 Gate #7 — default location for the operator's Ed25519 PRIVATE key.
- * Operator-scoped (`~/.skillscript/`), deliberately OUTSIDE SKILLSCRIPT_HOME —
- * the agent's accessible dir (skills/data) — so a co-resident agent doesn't get
- * the forging secret by default (Perry's location requirement: location, not
- * just perms). For full isolation, run the runtime under a uid that cannot read
- * this path; the managed-custody backend (post-1.0) closes the same-uid case.
+ * `~/.config/skillscript/` — deliberately OUTSIDE SKILLSCRIPT_HOME (default
+ * `~/.skillscript/`, the agent-accessible skills/data dir) so a co-resident
+ * agent doesn't get the forging secret by default (Perry's location
+ * requirement: location, not just perms — the two must not collide). For full
+ * isolation, run the runtime under a uid that cannot read this path; the
+ * managed-custody backend (post-1.0) closes the same-uid case.
  */
 export function defaultApprovalKeyFile(): string {
-  return pathJoin(homedir(), ".skillscript", "approval.key");
+  return pathJoin(homedir(), ".config", "skillscript", "approval.key");
 }
 /** Default location for the PUBLIC key (non-secret; runtime reads it to verify). */
 export function defaultApprovalPublicKeyFile(): string {
-  return pathJoin(homedir(), ".skillscript", "approval.pub");
+  return pathJoin(homedir(), ".config", "skillscript", "approval.pub");
 }
 
 /**

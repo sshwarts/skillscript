@@ -208,8 +208,10 @@ Create `skillscript.config.json` in your `$SKILLSCRIPT_HOME`:
 
 **For custom substrates**: write your own bootstrap. See `examples/custom-bootstrap.example.ts` and `examples/onboarding-scaffold/bootstrap.ts` for complete worked walkthroughs.
 
-Two security knobs that adopters wiring real substrates should know about:
+Security knobs that adopters wiring real substrates should know about:
 
+- **The approval boundary (secured mode).** `SKILLSCRIPT_SECURED_MODE=true` enforces that only key-signed skills perform effects. Default-deny by design — leave it off only for trusted-author / single-operator setups. Full detail, the approve flow, and key custody: [Approval + secured mode](#approval--secured-mode).
+- **Filesystem path allowlist.** `SKILLSCRIPT_FS_ALLOWLIST` is default-deny — `file_read` / `file_write` refuse every path until you wire roots. See [Filesystem path allowlist](#filesystem-path-allowlist). (Keep your approval-key directory out of it.)
 - **Per-connector tool allowlists** — `allowed_tools` on each `connectors.json` MCP connector entry restricts which tools that connector can dispatch. Three-state (`undefined` = allow all, `[]` = allow none, listed = exactly those). Tier-1 `disallowed-tool` lint + runtime defense-in-depth refuse out-of-list dispatch. **`allowed_tools` belongs at the entry top-level**, sibling to `class` and `config` — NOT inside the `config` block. The loader hard-errors on misplacement (placing it inside `config:` would silently allow-all every tool — the worst-case failure mode for a security control). See `docs/configuration.md` §"Named MCP connector instances" for the JSON shape.
 - **Shell-execution discipline** — `shell(command="...")` runs structured-spawn by default (binary on PATH, whitespace-tokenized argv, no bash). `shell(command="...", unsafe=true)` opts into bash interpretation (pipes, `$VAR`, command substitution) and refuses to fire unless the runtime is configured with `enable_unsafe_shell = true` in `config.toml`. Lint flags every `unsafe=true` op tier-2 to keep audit posture visible. See `scaffold/config.toml` for the documented default + `help({topic:"lint-codes"})` for the `unsafe-shell-disabled` rule.
 
@@ -345,6 +347,49 @@ With the service running, point your agent at the runtime's `/rpc` endpoint.
 
 - **Port matches what the runtime binds.** Default `7878` (`SKILLSCRIPT_PORT` env var / `dashboard.port` config). Two-instance setups (dev + adopter side-by-side per §5) need distinct ports — e.g., adopter on `7879`. Whatever the supervisor unit specifies is what the agent config must point at.
 - **Auth + bind address.** `/rpc` has no auth and binds to `127.0.0.1` by default — the right posture for a local agent talking to a local runtime. If you set `SKILLSCRIPT_HOST=0.0.0.0` to reach the runtime across the network, front it with your own auth layer (reverse proxy + bearer token, mTLS, etc.) — same posture as the `/event` HTTP ingress, which has its own bearer-token gate (`SKILLSCRIPT_EVENT_INGRESS_AUTH_TOKEN`).
+
+## Approval + secured mode
+
+Every skill carries a lifecycle status — `Draft → Approved → Disabled`. **Only `Approved` skills execute**; `Draft` is the safety gate (a skill under authoring or review), `Disabled` is retired. That status gate applies in *both* runtime modes. What the mode decides is whether an `Approved` skill must additionally be **cryptographically keyed**:
+
+| | Unsecured | Secured (`SKILLSCRIPT_SECURED_MODE=true`) |
+|---|---|---|
+| `Draft` skill | refused | refused |
+| `Approved` skill | runs — a bare `# Status: Approved` is sufficient (unkeyed) | runs **only** if the body carries a valid operator signature |
+| Tamper-evidence | none (an Approved body can be edited freely) | yes — editing the body breaks the signature |
+| Effectful ops (`$`, `shell`, `file_*`, `notify`) | run | **refused unless the skill is signed** (the `effectsAuthorized` capability gate) |
+| Who can grant approval | anyone who can set the status | only a holder of the operator's private key |
+
+**Unsecured** is the trusted-author / single-operator convenience posture: you trust whoever writes skills, the status flag is the only barrier. **Secured** is the enforced boundary — an unapproved or tampered skill cannot perform a single effectful op, regardless of how it's dispatched (CLI, cron, `/event`, MCP, in-skill composition). Unsecured is the current default; secured is the recommended posture for any multi-author or networked deployment.
+
+> The shell + filesystem allowlists (below) are **always enforced, in both modes** — they bound *what* a running skill may touch. Secured mode adds the orthogonal boundary on *whether an unapproved skill runs at all*.
+
+### Asymmetric signing — how secured approval works
+
+Approval is an Ed25519 signature, not a shared secret:
+
+- **Private key** — held by the operator, read **only** by the approve flow (`skillfile approve`). The runtime never loads it. For full isolation, run the runtime under a uid that cannot read the private key — then a co-resident agent can't forge approvals even with full read access to the runtime process. Same-uid still works, but isn't fully isolated (a documented 1.0 precondition; managed custody closes it later).
+- **Public key** — non-secret; the runtime reads it to *verify* signatures on every execution. No hot-path secret is the point: verification needs only the public key.
+
+First-run provisioning is automatic — starting the runtime or `skillfile init` in secured mode generates the keypair if absent (private written `0600`, default `~/.config/skillscript/approval.{key,pub}`, deliberately outside `SKILLSCRIPT_HOME`, the agent-readable data dir).
+
+### The approve flow
+
+| Action | How |
+|---|---|
+| Approve one skill (review the body, then sign) | `skillfile approve <name>` |
+| Batch-approve everything pending | `skillfile reapprove --apply` (dry-run preview: `skillfile reapprove`) |
+| Approve from the dashboard | the **Approvals** queue — review the body + security signals, then run the emitted command at your terminal |
+
+The dashboard is a **review** surface, not a signing surface: it surfaces the pending queue and per-skill security-signal summary, but signing happens at your terminal where the private key lives (the network-facing runtime never holds it). `skill_write` / `skill_status` **cannot** grant approval in secured mode — an agent-written or status-flipped skill lands `Draft` until a key-holder signs it. (In unsecured mode, `skill_status → Approved` is honored directly, unkeyed.)
+
+### Migrating an existing skill set
+
+Turning secured mode on means any skill that's `Approved` without a valid signature is refused at execution. `skillfile reapprove` sweeps the store, reports the set needing re-blessing, and `--apply` re-signs them in one pass — so you don't run `skillfile approve` once per skill.
+
+### Bundled demos
+
+Bundled example skills ship as `# Status: Draft` — a signature baked at package-build time could never validate on your install (the key is per-operator). `skillfile init` locally approves the three seeded demos with *your* machine's authority (secured → provision keypair + sign; unsecured → bare Approved), so they're runnable immediately after init.
 
 ## Shell binary allowlist
 
@@ -505,6 +550,25 @@ Per-skill capability declaration: skills declare what shell binaries they need i
 ```
 
 The operator policy validates `declared ∩ allowlist` — each skill's shell footprint becomes self-documenting and auditable. Slated for a future ring once the chokepoint + observability surfaces ship.
+
+## Filesystem path allowlist
+
+**The runtime enforces a default-deny operator allowlist for paths reachable via `file_read(...)` / `file_write(...)` ops** — the third operator boundary, mirroring the shell allowlist with the same rationale (skill authors are agents; the operator scopes which parts of the filesystem skills may touch).
+
+| Operator switch | Controls |
+|---|---|
+| `SKILLSCRIPT_FS_ALLOWLIST` | Comma-separated roots under which `file_read` / `file_write` may operate |
+
+- **Default-deny.** An unset or empty allowlist refuses *every* file op with `FilePathNotAllowedError` — a freshly-installed runtime does no file I/O until you wire roots. Applies to `file_read` as well as `file_write` (a read-then-`emit` is an exfiltration path).
+- **Canonicalized before the check.** Both the target and each allowed root are resolved to their real absolute path (realpath, component-by-component), so `..` traversal and symlink evasion can't escape an allowed root — the classic allowlist bypasses are closed.
+- **Off-allowlist is final.** No in-skill keyword (`approved=`, `# Autonomous: true`) escapes it. **Keep secret / key directories OUT of the allowlist** — a skill must never be able to read the operator's approval key. (This is why the default key path lives outside `SKILLSCRIPT_HOME`.)
+
+```bash
+# permit reads/writes under a workspace + an event-drop dir
+SKILLSCRIPT_FS_ALLOWLIST=/srv/skillscript/workspace,/var/skillscript/events
+```
+
+TOCTOU note: the check resolves the real path at call time; a symlink swapped between check and open is a residual closed by fd-based opens later. Checking the resolved real path is the standard mitigation shipped today.
 
 ## Trigger model
 
@@ -891,12 +955,7 @@ How `author` is captured depends on how the skill gets written:
 
 Adopters whose `SkillStore` is backed by an addressable substrate (e.g., a memory store) can author skills by writing the substrate record directly — without going through the MCP `skill_write` handler. This captures `SkillMeta.author` from the substrate's own writer-identity (whatever the direct-write API authenticates as).
 
-**Gotcha:** direct-write must declare `# Status: Draft`, not `# Status: Approved`. The runtime's hash-token tamper gate rejects skills with `# Status: Approved` that lack a `vN:<token>` stamp; the stamp is computed by the runtime's `update_status` flow, not by the substrate. To publish:
-
-1. Write the skill with `# Status: Draft` via your substrate's direct-write API.
-2. Call `skill_status({name, new_state: "Approved"})` via MCP (or the dashboard's Approve button). This stamps the token and preserves the captured author.
-
-Write-Approved-without-stamp will fail at execute time with `ApprovalRejectedError`. Always Draft-then-promote.
+**Gotcha:** in **secured mode**, a direct-write declaring `# Status: Approved` without a valid signature is forced to `Draft` — the substrate can't mint approval, only the operator's key can. Publish by writing `Draft`, then signing via `skillfile approve <name>` or the dashboard Approvals queue (both preserve the captured author). In **unsecured mode** a bare `# Status: Approved` direct-write is honored as-is. Either way, in-skill `$ skill_write` always lands its child `Draft` regardless of body declaration. See [Approval + secured mode](#approval--secured-mode).
 
 ## Identity propagation — for multi-agent hosts
 
@@ -939,7 +998,7 @@ X-Agent-Id: alice
 
 ### Trust model
 
-The runtime trusts the host's header attestation. There's no signature verification — anyone reaching the runtime with a forged `X-Agent-Id` could claim to be anyone. The runtime is **not** the authentication boundary; the host is. Bilateral trust:
+The runtime trusts the host's header attestation. There's no signature verification on the *identity claim* (distinct from secured-mode approval, which *is* signature-verified — different boundary, different mechanism): anyone reaching the runtime with a forged `X-Agent-Id` could claim to be anyone. The runtime is **not** the authentication boundary; the host is. Bilateral trust:
 
 - **The host** (your MCP gateway) authenticates the agent via its own auth surface (OAuth, JWT, session cookies, mTLS — whatever fits your platform) and injects the verified identity into the outbound `X-Agent-Id` header.
 - **The runtime** trusts the host because you configured it to (`mcpCallerIdentityHeader` is opt-in; unset means "I don't trust any inbound identity claim, fall back to my own writer identity").
@@ -1037,20 +1096,7 @@ See `examples/custom-bootstrap.example.ts` for a worked walkthrough.
 - **Durable-forever opt-in via `expires_at: null`.** `DataWrite.expires_at` accepts a unix timestamp for finite expiry, `null` to opt into "durable forever" (the portable verb for substrates with default TTL — AMP memory vaults, Redis with default expiry, hosted memory APIs), or omitted (substrate's default lifecycle, may be durable or may have decay). Substrates that are durable-by-default (the bundled `SqliteDataStore`) treat `null` as a no-op. Substrates with default sweep should map `null` to their pin / no-decay flag.
 - **Two trigger primitives, both functional.** `cron` (time-based) and `event` (HTTP `/event` ingress, named registration). All other concepts that look like triggers — session-start, agent-event, file-watch, sensor — are adapter responsibilities: the adapter POSTs `/event` when relevant. Keeps the runtime substrate-neutral; the trigger surface stays tight.
 - **Output kinds are intentionally substrate-neutral.** `# Output:` accepts `text` / `agent: <name>` / `template: <name>` / `file: <path>` / `none`. Substrate-specific values (`slack:`, `card:`, etc.) are out of scope — adopters wanting Slack / WhatsApp / Discord / etc. delivery use either `$ slack.post ...` MCP dispatch inside the skill body OR deliver via `agent: <name>` and let the receiving agent decide.
-- **Authorization is hash-token approval.** Skills must carry `# Status: Approved vN:<token>` where the token re-computes from the body minus its `# Status:` line. Bundled `v1:` is CRC32 — discipline-barrier strength, suited to single-operator deployments. Adversarial threat models swap a stronger function:
-
-  ```ts
-  import { registerApprovalFn, setPreferredApprovalVersion } from "skillscript-runtime";
-  import { createHmac } from "node:crypto";
-
-  // v2: HMAC-SHA256 with operator-held key. Agent that knows the algorithm
-  // can no longer self-stamp without the key.
-  const key = process.env["APPROVAL_HMAC_KEY"]!;
-  registerApprovalFn("v2", (body) => createHmac("sha256", key).update(body).digest("hex"));
-  setPreferredApprovalVersion("v2"); // dashboard now stamps v2 on Approve clicks
-  ```
-
-  Wire this in your bootstrap BEFORE any skill is stamped — otherwise existing skills carry `v1:` tokens that still verify (CRC32 stays registered) but new approvals use the upgraded function. The runtime maintains a per-version registry, so mixed-version skill bodies coexist cleanly.
+- **Authorization is signature-based in secured mode.** An `Approved` skill runs unkeyed in unsecured mode (a bare `# Status: Approved` is sufficient) and requires a valid Ed25519 operator signature in secured mode — verified on every execution against the operator's public key, with the private key held off the runtime. See [Approval + secured mode](#approval--secured-mode) for the model, the approve flow, key custody, and migration. The shell + filesystem allowlists bound blast radius in *both* modes; secured mode is what gates whether an unapproved skill runs at all.
 
 ## Skill discovery + cross-agent composition
 

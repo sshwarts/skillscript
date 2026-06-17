@@ -500,7 +500,7 @@ async function cmdRun(args: string[]): Promise<number> {
     // every effectful op refused at dispatch, "regardless of method".
     if (envConfig.securedMode === true) {
       setSecuredMode(true);
-      const pubFile = envConfig.approvalPublicKeyFile ?? join(homedir(), ".skillscript", "approval.pub");
+      const pubFile = envConfig.approvalPublicKeyFile ?? defaultApprovalPublicKeyFile();
       if (existsSync(pubFile)) setApprovalPublicKey(await readFile(pubFile, "utf8"));
     }
     // v1.0 Gate #7 — a STORED (by-name) skill that fails the gate in secured
@@ -782,8 +782,8 @@ async function cmdApprove(args: string[]): Promise<number> {
     process.stderr.write("Usage: skillfile approve <skill-name>\n");
     return 64;
   }
-  const keyFile = process.env["SKILLSCRIPT_APPROVAL_KEY_FILE"] ?? join(homedir(), ".skillscript", "approval.key");
-  const pubFile = process.env["SKILLSCRIPT_APPROVAL_PUBLIC_KEY_FILE"] ?? join(homedir(), ".skillscript", "approval.pub");
+  const keyFile = process.env["SKILLSCRIPT_APPROVAL_KEY_FILE"] ?? defaultApprovalKeyFile();
+  const pubFile = process.env["SKILLSCRIPT_APPROVAL_PUBLIC_KEY_FILE"] ?? defaultApprovalPublicKeyFile();
   if (!existsSync(keyFile)) {
     process.stderr.write(
       `skillfile approve: no approval private key at ${keyFile}.\n` +
@@ -836,8 +836,8 @@ async function cmdApprove(args: string[]): Promise<number> {
 async function cmdReapprove(args: string[]): Promise<number> {
   const apply = args.includes("--apply");
   const only = args.find((a) => !a.startsWith("-"));
-  const keyFile = process.env["SKILLSCRIPT_APPROVAL_KEY_FILE"] ?? join(homedir(), ".skillscript", "approval.key");
-  const pubFile = process.env["SKILLSCRIPT_APPROVAL_PUBLIC_KEY_FILE"] ?? join(homedir(), ".skillscript", "approval.pub");
+  const keyFile = process.env["SKILLSCRIPT_APPROVAL_KEY_FILE"] ?? defaultApprovalKeyFile();
+  const pubFile = process.env["SKILLSCRIPT_APPROVAL_PUBLIC_KEY_FILE"] ?? defaultApprovalPublicKeyFile();
 
   // Arm the public key + secured mode so the gate classifies bodies exactly as
   // the runtime would (v3 signature verified; v1/missing/tampered → fail).
