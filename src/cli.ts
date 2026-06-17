@@ -21,7 +21,7 @@ import type { ProvenanceBlock } from "./provenance.js";
 import { renderSidecarProvenance } from "./provenance.js";
 import { Registry } from "./connectors/registry.js";
 import { FilesystemSkillStore } from "./connectors/skill-store.js";
-import { setApprovalPublicKey, setSecuredMode, stampApprovalEd25519 } from "./approval.js";
+import { setApprovalPublicKey, setSecuredMode, stampApprovalEd25519, evaluateApprovalGate } from "./approval.js";
 import { OllamaLocalModel } from "./connectors/local-model.js";
 import { SqliteDataStore } from "./connectors/data-store.js";
 import { parse, type SkillOp } from "./parser.js";
@@ -176,6 +176,13 @@ const COMMAND_HELP: Readonly<Record<string, CommandHelp>> = {
     args: [{ name: "<name>", description: "Name of a skill in the SkillStore to review + sign with the operator's approval key" }],
     examples: ["skillfile approve my-skill"],
   },
+  reapprove: {
+    description: "Migrate pre-secured-mode approvals — batch re-sign Approved skills lacking a valid signature",
+    usage: "skillfile reapprove [<name>] [--apply]",
+    args: [{ name: "<name>", description: "Optional — limit the sweep to a single skill (default: all stored skills)" }],
+    options: [{ flag: "--apply", description: "Re-sign the migration set with the operator's approval key (default: dry-run report only)" }],
+    examples: ["skillfile reapprove", "skillfile reapprove --apply", "skillfile reapprove my-skill --apply"],
+  },
   verify: {
     description: "Verify the skill matches a signature",
     usage: "skillfile verify <path|name> <hash>",
@@ -244,7 +251,7 @@ const COMMAND_HELP: Readonly<Record<string, CommandHelp>> = {
 
 const COMMAND_ORDER: ReadonlyArray<string> = [
   "init", "execute", "compile", "audit", "lint", "list",
-  "fires", "diagram", "sign", "verify", "approve", "replay", "health",
+  "fires", "diagram", "sign", "verify", "approve", "reapprove", "replay", "health",
   "serve", "dashboard",
 ];
 
@@ -342,6 +349,7 @@ async function main(): Promise<number> {
     case "sign":    return await cmdSign(rest);
     case "verify":  return await cmdVerify(rest);
     case "approve": return await cmdApprove(rest);
+    case "reapprove": return await cmdReapprove(rest);
     case "replay":  return await cmdReplay(rest);
     case "health":  return await cmdHealth(rest);
     case "serve":               return await cmdRuntimeHost(rest, { mode: "serve" });
@@ -738,6 +746,97 @@ async function cmdApprove(args: string[]): Promise<number> {
     `The public key at ${pubFile} may not match the signing key.\n`,
   );
   return 1;
+}
+
+// v1.0 Gate #7 Phase 3 — force-re-approve migration (batch-assisted re-bless).
+//
+// Secured mode REJECTS pre-secured-mode approval tokens (v1 hash-stamps): they
+// can't distinguish a human approval from an agent self-approval, so trusting
+// them would launder illegitimate self-approvals. The default is therefore
+// force-re-approve — existing Approved skills are NOT grandfathered; they must
+// be re-signed with the operator's key. This command is the friction
+// mitigation: instead of running `skillfile approve` N times, it sweeps the
+// store, reports every Approved skill whose body fails the secured gate (the
+// migration set), and — with `--apply` — re-signs the whole set in one pass.
+//
+// Dry-run by default: classification needs only the PUBLIC key (read-only).
+// `--apply` additionally requires the private key (the operator's authorization).
+async function cmdReapprove(args: string[]): Promise<number> {
+  const apply = args.includes("--apply");
+  const only = args.find((a) => !a.startsWith("-"));
+  const keyFile = process.env["SKILLSCRIPT_APPROVAL_KEY_FILE"] ?? join(homedir(), ".skillscript", "approval.key");
+  const pubFile = process.env["SKILLSCRIPT_APPROVAL_PUBLIC_KEY_FILE"] ?? join(homedir(), ".skillscript", "approval.pub");
+
+  // Arm the public key + secured mode so the gate classifies bodies exactly as
+  // the runtime would (v3 signature verified; v1/missing/tampered → fail).
+  // Without arming, the unsecured gate would accept v1 stamps and the migration
+  // set would come back empty — the silent-grandfather bug we must not ship.
+  if (!existsSync(pubFile)) {
+    process.stderr.write(
+      `skillfile reapprove: no approval public key at ${pubFile}.\n` +
+      `Start the runtime once in secured mode to provision a keypair, or set SKILLSCRIPT_APPROVAL_PUBLIC_KEY_FILE.\n`,
+    );
+    return 66;
+  }
+  setApprovalPublicKey(await readFile(pubFile, "utf8"));
+  setSecuredMode(true);
+
+  const store = new FilesystemSkillStore(SKILLS_DIR);
+  const metas = await store.query();
+  const approved = metas.filter((m) => m.status === "Approved" && (only === undefined || m.name === only));
+
+  const needs: Array<{ name: string; reason: string; source: string }> = [];
+  let alreadyValid = 0;
+  for (const m of approved) {
+    const loaded = await store.load(m.name);
+    const gate = evaluateApprovalGate(loaded.source);
+    if (gate.ok) { alreadyValid++; continue; }
+    needs.push({ name: m.name, reason: gate.reason, source: loaded.source });
+  }
+
+  const scope = only ? `'${only}'` : `${approved.length} Approved skill${approved.length === 1 ? "" : "s"}`;
+  if (needs.length === 0) {
+    process.stdout.write(`✓ ${scope}: all carry a valid signature — nothing to migrate.\n`);
+    return 0;
+  }
+
+  process.stdout.write(`\nMigration set — ${needs.length} Approved skill${needs.length === 1 ? "" : "s"} lack a valid signature (${alreadyValid} already valid):\n`);
+  for (const item of needs) {
+    process.stdout.write(`  • ${item.name}\n      ${item.reason}\n`);
+  }
+
+  if (!apply) {
+    process.stdout.write(
+      `\nDry run — nothing changed. Review each body (\`skillfile compile <name>\`) then re-bless:\n` +
+      `  skillfile reapprove --apply${only ? ` ${only}` : ""}   # re-signs the set with your approval key\n` +
+      `Or approve individually: skillfile approve <name>\n`,
+    );
+    return 0;
+  }
+
+  if (!existsSync(keyFile)) {
+    process.stderr.write(
+      `skillfile reapprove --apply: no approval private key at ${keyFile}.\n` +
+      `Set SKILLSCRIPT_APPROVAL_KEY_FILE to the operator's private key, or run on the host that holds it.\n`,
+    );
+    return 66;
+  }
+  const priv = await readFile(keyFile, "utf8");
+  let ok = 0;
+  let fail = 0;
+  for (const item of needs) {
+    const signed = stampApprovalEd25519(item.source, priv);
+    const info = await store.store(item.name, signed, { status: "Approved" });
+    if (info.status === "Approved") {
+      ok++;
+      process.stdout.write(`  ✓ re-blessed '${item.name}' (v3, version ${info.version})\n`);
+    } else {
+      fail++;
+      process.stderr.write(`  ✗ '${item.name}' did not land Approved (status ${info.status}) — public key may not match the signing key.\n`);
+    }
+  }
+  process.stdout.write(`\nDone — ${ok} re-blessed${fail > 0 ? `, ${fail} failed` : ""}.\n`);
+  return fail === 0 ? 0 : 1;
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────
