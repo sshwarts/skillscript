@@ -74,3 +74,39 @@ describe("skill_write self-approval closure (secured mode)", () => {
     expect(info.status).toBe("Approved");
   });
 });
+
+describe("skill_status (update_status) cannot grant approval in secured mode", () => {
+  it("promoting an unsigned Draft to Approved is REFUSED (the red-team finding)", async () => {
+    setApprovalPublicKey(keys.publicKeyPem);
+    setSecuredMode(true);
+    const store = freshStore();
+    await store.store("t", DRAFT); // Draft, no signature
+    await expect(store.update_status("t", "Approved")).rejects.toThrow(/cannot promote to Approved in secured mode/i);
+  });
+
+  it("a body already carrying a valid v3 signature stays Approved (idempotent)", async () => {
+    setApprovalPublicKey(keys.publicKeyPem);
+    setSecuredMode(true);
+    const store = freshStore();
+    await store.store("t", stampApprovalEd25519(DRAFT, keys.privateKeyPem)); // Approved v3
+    const info = await store.update_status("t", "Approved");
+    expect(info.status).toBe("Approved");
+  });
+
+  it("demotion to Draft/Disabled is always allowed", async () => {
+    setApprovalPublicKey(keys.publicKeyPem);
+    setSecuredMode(true);
+    const store = freshStore();
+    await store.store("t", DRAFT);
+    const info = await store.update_status("t", "Disabled");
+    expect(info.status).toBe("Disabled");
+  });
+
+  it("unsecured mode still v1-stamps on promotion (legacy)", async () => {
+    setSecuredMode(false);
+    const store = freshStore();
+    await store.store("t", DRAFT);
+    const info = await store.update_status("t", "Approved");
+    expect(info.status).toBe("Approved");
+  });
+});

@@ -13,7 +13,7 @@ import type {
   ManifestInfo,
 } from "./types.js";
 import { VALID_SKILL_STATUSES, isSkillStatus } from "./types.js";
-import { SkillNotFoundError, VersionNotFoundError, StorageConflictError } from "../errors.js";
+import { SkillNotFoundError, VersionNotFoundError, StorageConflictError, ApprovalRejectedError } from "../errors.js";
 import { stampApprovalToken, extractStatusFromBody, isSecuredMode, evaluateApprovalGate } from "../approval.js";
 import { parse } from "../parser.js";
 
@@ -369,8 +369,25 @@ export class FilesystemSkillStore implements SkillStore {
     // `registerApprovalFn("v2", hmacSha256Fn)` etc. before update_status.
     let updated: string;
     if (status === "Approved") {
-      const stamped = stampApprovalToken(rewriteStatusHeader(source, "Approved"));
-      updated = stamped;
+      if (isSecuredMode()) {
+        // v1.0 Gate #7 — update_status cannot MINT approval in secured mode (no
+        // private key here). Promotion to Approved is honored ONLY if the stored
+        // body ALREADY carries a valid v3 signature (it was signed by the approve
+        // flow). A status-flip on an unsigned body is refused — no v1 stamp, no
+        // "Approved-but-unsigned" state (the red-team's skill_status finding).
+        // Approve via the dashboard, which signs the body; skill_status alone
+        // cannot grant approval.
+        if (!evaluateApprovalGate(source).ok) {
+          throw new ApprovalRejectedError(
+            name,
+            "cannot promote to Approved in secured mode — the skill carries no valid signature. Approve it via the dashboard (which signs the body); a status change alone cannot grant approval.",
+            "update_status",
+          );
+        }
+        updated = source; // already validly signed + Approved — keep as-is
+      } else {
+        updated = stampApprovalToken(rewriteStatusHeader(source, "Approved"));
+      }
     } else {
       updated = rewriteStatusHeader(source, status);
     }
