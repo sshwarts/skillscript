@@ -362,10 +362,8 @@ export class FilesystemSkillStore implements SkillStore {
       throw err;
     }
     const previous_status = extractStatus(source) ?? "Draft";
-    // v0.9.0 — transitions to Approved stamp `# Status: Approved vN:<token>`
-    // automatically; transitions to Draft/Disabled strip any prior token.
-    // Adopter dashboards can supplant this with a stronger `f()` by calling
-    // `registerApprovalFn("v2", hmacSha256Fn)` etc. before update_status.
+    // v1.0 Gate #7 — secured mode requires a v3 signature to reach Approved (the
+    // store can't mint one); unsecured transitions to a bare `# Status: Approved`.
     let updated: string;
     if (status === "Approved") {
       if (isSecuredMode()) {

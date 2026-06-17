@@ -1,18 +1,18 @@
 /**
  * Vitest setup — global hooks shared across all test files.
  *
- * v0.9.1 — minimal compatibility hook. Production code (v0.9.1
- * `SkillStore.store()` auto-stamp, P0.4) now handles `# Status: Approved`
- * bodies natively, so this hook only covers the legacy case where
- * fixtures omit `# Status:` entirely. Such fixtures are treated as
- * implicitly Approved for test convenience — a bare-words skill body
- * without lifecycle ceremony lands runnable.
+ * Compatibility hook for fixtures that omit `# Status:` entirely: such bodies
+ * are treated as implicitly Approved for test convenience (a bare-words skill
+ * body without lifecycle ceremony lands runnable). v1.0 Gate #7 — unsecured
+ * approval is UNKEYED, so this inserts a bare `# Status: Approved` header (no
+ * token; the gate accepts it in unsecured mode, which is the test default).
  *
- * Tests exercising the gate's refusal path (Draft / tampered / Disabled)
- * write those statuses explicitly — they never reach this code path.
+ * Tests exercising the gate's refusal path (Draft / Disabled / secured-mode
+ * unsigned) write those statuses + arm secured mode explicitly — they never
+ * reach this code path.
  */
 import { FilesystemSkillStore } from "../src/connectors/skill-store.js";
-import { stampApprovalToken, extractStatusFromBody } from "../src/approval.js";
+import { extractStatusFromBody } from "../src/approval.js";
 
 const originalStore = FilesystemSkillStore.prototype.store;
 FilesystemSkillStore.prototype.store = async function patchedStore(
@@ -23,11 +23,11 @@ FilesystemSkillStore.prototype.store = async function patchedStore(
 ) {
   let body = source;
   const extracted = extractStatusFromBody(body);
-  // Production code stamps Approved bodies natively. Only handle the
-  // no-Status-header case here: insert a stamped Approved line so the
-  // fixture runs without manual ceremony.
   if (extracted === null) {
-    body = stampApprovalToken(body);
+    // No Status header → insert a bare Approved header (unkeyed; runnable).
+    body = /^#\s*Skill\s*:/m.test(body)
+      ? body.replace(/^(#\s*Skill\s*:.*)$/m, `$1\n# Status: Approved`)
+      : `# Status: Approved\n${body}`;
   }
   return originalStore.call(this, name, body, metadata);
 };

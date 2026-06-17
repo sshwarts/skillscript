@@ -8,7 +8,6 @@ import {
   canonicalizeForSigning,
   setSecuredMode,
   setApprovalPublicKey,
-  stampApprovalToken,
   ED25519_VERSION,
 } from "../src/approval.js";
 
@@ -87,20 +86,23 @@ describe("v3 — tamper-evidence + forgery resistance", () => {
   });
 });
 
-describe("secured mode — rejects every non-v3 (forgeable) scheme", () => {
-  it("a valid v1/crc32 token is REJECTED in secured mode (not merely superseded)", () => {
+describe("secured mode — accepts v3 ONLY (every other scheme refused)", () => {
+  // A non-v3 token (a retired v1, or any forged scheme) on an Approved body.
+  const nonV3 = SKILL.replace("# Status: Draft", "# Status: Approved v1:deadbeef");
+
+  it("a non-v3 token is REJECTED in secured mode", () => {
     const { publicKeyPem } = generateApprovalKeypair();
     setApprovalPublicKey(publicKeyPem);
     setSecuredMode(true);
-    const v1Stamped = stampApprovalToken(SKILL, "v1"); // a perfectly valid crc32 stamp
-    const r = evaluateApprovalGate(v1Stamped);
+    const r = evaluateApprovalGate(nonV3);
     expect(r.ok).toBe(false);
-    if (!r.ok) expect(r.reason).toMatch(/not accepted in secured mode/i);
+    if (!r.ok) expect(r.reason).toMatch(/not accepted/i);
   });
 
-  it("the same v1 token IS accepted when secured mode is OFF (legacy preserved)", () => {
-    const v1Stamped = stampApprovalToken(SKILL, "v1");
-    expect(evaluateApprovalGate(v1Stamped).ok).toBe(true);
+  it("an Approved body runs in unsecured mode regardless of any token (unkeyed)", () => {
+    // Unsecured approval is unkeyed: the status header alone suffices, so the
+    // gate doesn't even inspect the token (a stray/legacy one is ignored).
+    expect(evaluateApprovalGate(nonV3).ok).toBe(true);
   });
 });
 

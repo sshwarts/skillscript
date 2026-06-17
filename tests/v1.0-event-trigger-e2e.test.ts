@@ -20,7 +20,6 @@ import { FilesystemSkillStore } from "../src/connectors/skill-store.js";
 import { FilesystemTraceStore } from "../src/trace.js";
 import { Registry } from "../src/connectors/registry.js";
 import { EventNotFoundError, EventParamMismatchError } from "../src/errors.js";
-import { stampApprovalToken } from "../src/approval.js";
 
 const APPROVED = "# Status: Approved";
 
@@ -137,15 +136,13 @@ describe("v1.0 freeze — event-trigger runtime layer", () => {
     // (registration → fireEvent → run_id). This test covers DELIVER —
     // the canonical site-distress-relay shape: event fires → skill runs
     // to completion → output recorded under run_id (= trace_id per
-    // v0.19.0 preMintedTraceId plumbing). Skill body must carry a
-    // stamped approval token; the scheduler's universal execution gate
-    // (v0.9.0) refuses naked `# Status: Approved` and silently logs
-    // "approval gate refused" — production-correct, but the test must
-    // stamp explicitly.
+    // v0.19.0 preMintedTraceId plumbing). v1.0 Gate #7 — unsecured approval is
+    // unkeyed, so a bare `# Status: Approved` runs (the scheduler gate enforces
+    // keying only in secured mode, which this test doesn't arm).
     const { scheduler, skillStore, home, cleanup } = await buildScheduler();
     try {
       const body = `# Skill: relay\n# Status: Approved\n# Description: site-distress relay\n# Vars: MESSAGE\nm:\n    emit(text="dispatched: \${MESSAGE}")\ndefault: m\n`;
-      await skillStore.store("relay", stampApprovalToken(body));
+      await skillStore.store("relay", body);
       scheduler.registerTrigger({
         skillName: "relay",
         source: "event",

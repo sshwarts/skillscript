@@ -1,40 +1,34 @@
 /**
- * v0.9.0 — skill-approval mechanism.
+ * Skill-approval mechanism (v1.0 Gate #7).
  *
- * Canonical model (per thread 29b6208e):
- *   - Draft  : authored, lint+compile+view ok, cannot execute
- *   - Approved + valid hash-token : can execute (manual / trigger / composition)
+ * Canonical model:
+ *   - Draft / Disabled : cannot execute (lint + compile + view still ok).
+ *   - Approved         : executes. The runtime MODE decides whether that
+ *     approval must be cryptographically KEYED:
+ *       • unsecured — UNKEYED. A bare `# Status: Approved` is sufficient; no
+ *         token, no signature. (No tamper-evidence — that's the keyless cost.)
+ *       • secured   — KEYED. The body must carry a valid `v3:<sig>` Ed25519
+ *         signature (sign with the operator's private key at approve-time;
+ *         verify with the public key at runtime — the private key never reaches
+ *         the runtime). Unforgeable without the private key.
  *
- * Approval token = `vN:<token>` where N picks the scheme:
- *   v0 — reserved, rejected (naked "Approved" fails fast)
- *   v1 — CRC32 (symmetric, recompute-and-compare). Tamper-EVIDENT only —
- *        forgeable by anyone with the algorithm. Legacy / unsecured-mode default.
- *   v2 — reserved for HMAC-SHA256 (never shipped; asymmetric chosen instead)
- *   v3 — Ed25519 signature (ASYMMETRIC). Sign with the operator's private key
- *        (approve-time only); verify with the public key (runtime, non-secret).
- *        The SECURED-MODE credential — unforgeable without the private key.
- *   adopter-extensible past v3 via `registerApprovalFn` (symmetric schemes).
+ * Only v3 exists. The legacy symmetric hash-token scheme (v1 CRC32 + the
+ * per-version `registerApprovalFn` registry) is retired — pre-1.0 it had no
+ * install base, and unsecured mode no longer uses tokens at all.
  *
- * v1/v2 are symmetric (token = fn(body)); v3 is asymmetric (sign≠verify).
- * In SECURED MODE the gate verifies v3 ONLY and REJECTS every other version
- * (an accepted-if-present v1 would leave the forgeable path open).
- *
- * Token/signature is computed over the body *excluding* the `# Status:` line,
- * so stamping the token doesn't perturb its own input.
+ * The signature is computed over the body *excluding* its `# Status:` line, so
+ * stamping the token doesn't perturb its own input.
  */
 
 import { sign as edSign, verify as edVerify, generateKeyPairSync } from "node:crypto";
 
-const APPROVAL_FNS: Map<string, (bodyMinusStatus: string) => string> = new Map();
-let PREFERRED_VERSION = "v1";
-
-/** The asymmetric (Ed25519) version slot — the secured-mode credential. */
+/** The asymmetric (Ed25519) version slot — the only approval credential. */
 export const ED25519_VERSION = "v3";
 
-// ─── Secured-mode config (process-wide, set at boot; mirrors PREFERRED_VERSION) ──
-// When secured mode is ON, the gate accepts v3 signatures ONLY and rejects all
-// symmetric (forgeable) schemes. The public key verifies v3; the runtime never
-// holds the private key. Set from runtime config in bootstrap.
+// ─── Secured-mode config (process-wide, set at boot) ─────────────────────────
+// When secured mode is ON, the gate requires a valid v3 signature for an
+// Approved skill to execute effectfully. The public key verifies v3; the
+// runtime never holds the private key. Set from runtime config in bootstrap.
 let SECURED_MODE = false;
 let APPROVAL_PUBLIC_KEY_PEM: string | null = null;
 
@@ -54,28 +48,6 @@ export function hasApprovalPublicKey(): boolean {
   return APPROVAL_PUBLIC_KEY_PEM !== null;
 }
 
-/**
- * Set the version used by `stampApprovalToken(body)` when no explicit
- * version is passed. Adopter bootstraps that register `v2` HMAC (or
- * stronger) call this to make the dashboard's approval flow stamp with
- * the upgraded function. Default stays `v1` (bundled CRC32).
- */
-export function setPreferredApprovalVersion(version: string): void {
-  if (version === "v0") {
-    throw new Error(`approval version 'v0' is reserved`);
-  }
-  if (!APPROVAL_FNS.has(version)) {
-    throw new Error(
-      `approval version '${version}' is not registered; call registerApprovalFn first`,
-    );
-  }
-  PREFERRED_VERSION = version;
-}
-
-export function getPreferredApprovalVersion(): string {
-  return PREFERRED_VERSION;
-}
-
 export interface ApprovalToken {
   version: string;
   token: string;
@@ -86,29 +58,6 @@ export type ApprovalVerification =
   // an UNKEYED unsecured approval (bare `# Status: Approved`, no signature).
   | { ok: true; token?: ApprovalToken }
   | { ok: false; reason: string };
-
-/**
- * Register an approval function for a version slot. Adopter-extension API;
- * intended for substituting cryptographic strength (HMAC, Ed25519) without
- * touching language internals. `v0` is reserved and cannot be registered.
- */
-export function registerApprovalFn(version: string, fn: (body: string) => string): void {
-  if (version === "v0") {
-    throw new Error(`approval version 'v0' is reserved and cannot be registered`);
-  }
-  if (!/^v\d+$/.test(version)) {
-    throw new Error(`approval version must match /^v\\d+$/ (got '${version}')`);
-  }
-  APPROVAL_FNS.set(version, fn);
-}
-
-export function getApprovalFn(version: string): ((body: string) => string) | null {
-  return APPROVAL_FNS.get(version) ?? null;
-}
-
-export function registeredApprovalVersions(): string[] {
-  return [...APPROVAL_FNS.keys()].sort();
-}
 
 /**
  * Strip the `# Status:` header line from a skill body. The hash input is the
@@ -194,26 +143,9 @@ export function parseApprovalToken(raw: string): ApprovalToken | null {
 }
 
 /**
- * Compute the canonical approval token for a body at a given version. The
- * dashboard calls this when stamping `# Status: Approved <token>`.
- */
-export function computeApprovalToken(body: string, version: string = "v1"): ApprovalToken {
-  if (version === "v0") {
-    throw new Error(`approval version 'v0' is reserved`);
-  }
-  const fn = APPROVAL_FNS.get(version);
-  if (!fn) {
-    throw new Error(
-      `approval version '${version}' is not registered (available: ${registeredApprovalVersions().join(", ") || "none"})`,
-    );
-  }
-  return { version, token: fn(stripStatusLineForHashing(body)) };
-}
-
-/**
- * Verify a stored token against the current body. Called by runtime at every
- * execution entry point. A mismatch means the body was edited since approval,
- * so the human-approval gate must run again.
+ * Verify a stored token against the current body. Called in secured mode at
+ * every execution entry point. Only a v3 Ed25519 signature is accepted; an
+ * invalid signature (edited body, wrong key) or any other version is refused.
  */
 export function verifyApprovalToken(body: string, rawToken: string): ApprovalVerification {
   const parsed = parseApprovalToken(rawToken);
@@ -241,32 +173,12 @@ export function verifyApprovalToken(body: string, rawToken: string): ApprovalVer
     };
   }
 
-  // Secured mode accepts v3 ONLY. Every symmetric (forgeable) scheme is
-  // REJECTED, not merely superseded — accepting a v1 if present leaves the
-  // crc32 forgery path open.
-  if (SECURED_MODE) {
-    return {
-      ok: false,
-      reason: `approval token version '${parsed.version}' is not accepted in secured mode — re-approve via the dashboard (a signed approval is required)`,
-    };
-  }
-
-  // Unsecured / legacy — symmetric recompute-and-compare (v1 crc32, adopter v2+).
-  const fn = APPROVAL_FNS.get(parsed.version);
-  if (!fn) {
-    return {
-      ok: false,
-      reason: `approval version '${parsed.version}' is not registered (available: ${registeredApprovalVersions().join(", ") || "none"})`,
-    };
-  }
-  const expected = fn(stripStatusLineForHashing(body));
-  if (expected !== parsed.token) {
-    return {
-      ok: false,
-      reason: `approval token mismatch — skill body has been edited since approval; re-approve via dashboard`,
-    };
-  }
-  return { ok: true, token: parsed };
+  // Only v3 is accepted. Any other version (a retired v1, or a forged scheme)
+  // is refused — re-approve with the operator's key.
+  return {
+    ok: false,
+    reason: `approval token version '${parsed.version}' is not accepted — a v3 signed approval is required; re-approve via the dashboard`,
+  };
 }
 
 /**
@@ -349,38 +261,20 @@ export function evaluateApprovalGate(body: string): ApprovalVerification {
 }
 
 /**
- * Stamp `# Status: Approved <token>` into a skill body. Called by the
- * dashboard's approval flow + by test helpers that need to produce a
- * runnable fixture body programmatically. The function recomputes the
- * token over the body MINUS its `# Status:` line so the stamp is
- * idempotent regardless of the body's current header state.
- *
- * v0.15.0 — only replaces a `# Status:` line in the HEADER BLOCK (lines
- * from start until the first blank line or first non-`#`-comment line).
- * Pre-v0.15.0 the unbounded `/^# Status:/m` regex matched any line in
- * the body — including `# Status:` text inside string literals (e.g.
- * a parent skill that writes a child via `$ skill_write source="...# Status: Approved..."`).
- * Bug surfaced by the skill-store-roundtrip demo (cold-adopter probe,
- * 2026-06-01): the stamper mutated the inner string content + skipped
- * stamping the parent.
- */
-export function stampApprovalToken(body: string, version?: string): string {
-  const v = version ?? PREFERRED_VERSION;
-  return writeApprovedStatusLine(body, computeApprovalToken(body, v));
-}
-
-/**
  * Stamp `# Status: Approved v3:<sig>` into a body, signing with the operator's
- * Ed25519 private key. The approve-flow (dashboard/CLI) equivalent of
- * `stampApprovalToken` for the asymmetric scheme — APPROVE-TIME ONLY.
+ * Ed25519 private key — APPROVE-TIME ONLY (dashboard / `skillfile approve`).
+ *
+ * Only the HEADER-BLOCK `# Status:` line is rewritten (lines from the start
+ * until the first blank or non-`#` line), so `# Status:` text inside a string
+ * literal (e.g. a parent that writes a child via `$ skill_write source="..."`)
+ * is left untouched.
  */
 export function stampApprovalEd25519(body: string, privateKeyPem: string): string {
   return writeApprovedStatusLine(body, signApprovalEd25519(body, privateKeyPem));
 }
 
 /** Write `# Status: Approved <version>:<token>` into the header block, replacing
- * an existing header `# Status:` line or inserting after `# Skill:`. Shared by
- * both the symmetric and asymmetric stampers. */
+ * an existing header `# Status:` line or inserting after `# Skill:`. */
 function writeApprovedStatusLine(body: string, token: ApprovalToken): string {
   const line = `# Status: Approved ${token.version}:${token.token}`;
   const headerStatusLine = findHeaderStatusLine(body);
@@ -415,29 +309,3 @@ function findHeaderStatusLine(body: string): number | null {
   return null;
 }
 
-// ─── v1: CRC32 reference impl ─────────────────────────────────────────────────
-
-const CRC32_TABLE: number[] = (() => {
-  const table = new Array<number>(256);
-  for (let i = 0; i < 256; i++) {
-    let c = i;
-    for (let k = 0; k < 8; k++) {
-      c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1;
-    }
-    table[i] = c >>> 0;
-  }
-  return table;
-})();
-
-function crc32Utf8(input: string): string {
-  const bytes = new TextEncoder().encode(input);
-  let crc = 0xffffffff;
-  for (let i = 0; i < bytes.length; i++) {
-    const idx = (crc ^ (bytes[i] ?? 0)) & 0xff;
-    crc = (CRC32_TABLE[idx] ?? 0) ^ (crc >>> 8);
-  }
-  crc = (crc ^ 0xffffffff) >>> 0;
-  return crc.toString(16).padStart(8, "0");
-}
-
-registerApprovalFn("v1", crc32Utf8);

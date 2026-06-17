@@ -1,6 +1,12 @@
 import { describe, it, expect } from "vitest";
 import { tokenizeKeywordArgs, interpretDoubleQuotedEscapes } from "../src/parser.js";
-import { stampApprovalToken, computeApprovalToken } from "../src/approval.js";
+import {
+  stampApprovalEd25519,
+  generateApprovalKeypair,
+  setSecuredMode,
+  setApprovalPublicKey,
+  evaluateApprovalGate,
+} from "../src/approval.js";
 import { compile } from "../src/compile.js";
 import { execute } from "../src/runtime.js";
 import { bootstrap } from "../src/bootstrap.js";
@@ -109,42 +115,48 @@ describe("v0.15.0 — interpretDoubleQuotedEscapes exported (parser.ts → runti
   });
 });
 
-describe("v0.15.0 — stampApprovalToken only mutates header-block Status lines", () => {
+describe("v1.0 — stampApprovalEd25519 only mutates header-block Status lines", () => {
+  // The header-block scoping (v0.15.0 parser-hardening) now lives in the v3
+  // stamper's shared writeApprovedStatusLine. Exercise it through the live
+  // stamper with a generated keypair.
+  const { publicKeyPem, privateKeyPem } = generateApprovalKeypair();
+  const stamp = (body: string) => stampApprovalEd25519(body, privateKeyPem);
+
   it("does NOT mutate `# Status:` text inside a string literal when no outer Status exists", () => {
     // Parent body has NO outer `# Status:` header but contains nested
-    // `# Status:` content inside a triple-quote literal. Pre-v0.15.0 the
-    // stamper picked the FIRST regex match (the inner one) and replaced
-    // it, leaving the parent unstamped. Post-v0.15.0 the stamper only
-    // considers header-block lines (above the first blank line).
+    // `# Status:` content inside a triple-quote literal. The stamper only
+    // considers header-block lines (above the first blank line), so the inner
+    // one is left verbatim and the stamp is inserted after `# Skill:`.
     const body = `# Skill: parent\n# Autonomous: true\n\nrun:\n    $set CHILD = """# Skill: child\n# Status: Approved\ndefault: run\n"""\n    $ skill_write name="child" source=\${CHILD}\ndefault: run\n`;
-    const stamped = stampApprovalToken(body);
-    // Inner `# Status: Approved` inside the triple-quote is preserved verbatim.
+    const stamped = stamp(body);
     expect(stamped).toMatch(/"""# Skill: child\n# Status: Approved\ndefault: run\n"""/);
-    // Outer header gets the stamp inserted after `# Skill:`.
     const headerBlock = stamped.split("\n\n")[0]!;
-    expect(headerBlock).toMatch(/^# Skill: parent\n# Status: Approved v1:[0-9a-f]+/);
+    expect(headerBlock).toMatch(/^# Skill: parent\n# Status: Approved v3:[A-Za-z0-9_-]+/);
   });
 
   it("DOES replace the header-block `# Status:` when one exists (existing behavior preserved)", () => {
     const body = `# Skill: parent\n# Status: Draft\n# Autonomous: true\n\nrun:\n    emit(text="ok")\ndefault: run\n`;
-    const stamped = stampApprovalToken(body);
-    expect(stamped).toMatch(/^# Skill: parent\n# Status: Approved v1:[0-9a-f]+\n# Autonomous: true/);
+    const stamped = stamp(body);
+    expect(stamped).toMatch(/^# Skill: parent\n# Status: Approved v3:[A-Za-z0-9_-]+\n# Autonomous: true/);
     expect(stamped).not.toMatch(/# Status: Draft/);
   });
 
-  it("idempotent: re-stamping a correctly-stamped body produces the same bytes", () => {
+  it("idempotent: re-stamping a correctly-stamped body produces the same bytes (Ed25519 is deterministic)", () => {
     const body = `# Skill: parent\n# Status: Approved\n\nrun:\n    emit(text="ok")\ndefault: run\n`;
-    const first = stampApprovalToken(body);
-    const second = stampApprovalToken(first);
+    const first = stamp(body);
+    const second = stamp(first);
     expect(second).toBe(first);
   });
 
-  it("computed token matches verification path (sanity)", () => {
-    const body = `# Skill: t\n# Status: Approved\n\nrun:\n    emit(text="hi")\ndefault: run\n`;
-    const stamped = stampApprovalToken(body);
-    const m = /^# Status: Approved (v\d+:[0-9a-f]+)$/m.exec(stamped);
-    expect(m).not.toBeNull();
-    const recomputed = computeApprovalToken(stamped, "v1");
-    expect(m![1]).toBe(`${recomputed.version}:${recomputed.token}`);
+  it("the stamped body verifies through the gate in secured mode (sanity)", () => {
+    setApprovalPublicKey(publicKeyPem);
+    setSecuredMode(true);
+    try {
+      const stamped = stamp(`# Skill: t\n# Status: Approved\n\nrun:\n    emit(text="hi")\ndefault: run\n`);
+      expect(evaluateApprovalGate(stamped).ok).toBe(true);
+    } finally {
+      setSecuredMode(false);
+      setApprovalPublicKey(null);
+    }
   });
 });

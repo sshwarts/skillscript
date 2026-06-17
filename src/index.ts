@@ -202,18 +202,16 @@ export type {
 export { DashboardServer } from "./dashboard/server.js";
 export type { DashboardServerConfig } from "./dashboard/server.js";
 
-// v0.9.0 — approval-gate surface for adopters wanting stronger threat models.
+// v1.0 Gate #7 — approval surface (Ed25519 v3; secured-mode keyed approval).
 export {
-  computeApprovalToken,
   verifyApprovalToken,
   evaluateApprovalGate,
-  stampApprovalToken,
-  registerApprovalFn,
-  setPreferredApprovalVersion,
-  getPreferredApprovalVersion,
+  signApprovalEd25519,
+  stampApprovalEd25519,
+  generateApprovalKeypair,
   parseApprovalToken,
-  registeredApprovalVersions,
   extractStatusFromBody,
+  ED25519_VERSION,
 } from "./approval.js";
 export type { ApprovalToken, ApprovalVerification } from "./approval.js";
 export { ApprovalRejectedError } from "./errors.js";

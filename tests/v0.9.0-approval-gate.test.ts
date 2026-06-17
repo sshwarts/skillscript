@@ -13,13 +13,9 @@ import { join } from "node:path";
 import type { JsonRpcRequest } from "../src/mcp-server.js";
 import { FilesystemSkillStore } from "../src/connectors/skill-store.js";
 import {
-  computeApprovalToken,
-  stampApprovalToken,
   verifyApprovalToken,
   evaluateApprovalGate,
   parseApprovalToken,
-  registerApprovalFn,
-  registeredApprovalVersions,
   extractStatusFromBody,
   generateApprovalKeypair,
   stampApprovalEd25519,
@@ -52,67 +48,36 @@ async function callTool(server: McpServer, name: string, args: Record<string, un
 }
 
 describe("v0.9.0 — approval gate", () => {
-  describe("token mechanics", () => {
-    it("computes deterministic v1 CRC32 tokens", () => {
-      const body = "# Skill: x\n# Status: Approved\nm:\n    emit(text=\"hi\")\ndefault: m\n";
-      const a = computeApprovalToken(body, "v1");
-      const b = computeApprovalToken(body, "v1");
-      expect(a).toEqual(b);
-      expect(a.version).toBe("v1");
-      expect(a.token).toMatch(/^[a-f0-9]{8}$/);
-    });
-
-    it("excludes the # Status: line from the hash input", () => {
-      const draft = "# Skill: x\n# Status: Draft\nm:\n    emit(text=\"hi\")\ndefault: m\n";
-      const approved = "# Skill: x\n# Status: Approved\nm:\n    emit(text=\"hi\")\ndefault: m\n";
-      // Different status lines, same body — tokens must be identical.
-      expect(computeApprovalToken(draft).token).toEqual(computeApprovalToken(approved).token);
-    });
-
+  describe("token parsing + v3 verification", () => {
     it("parses well-formed token strings", () => {
-      expect(parseApprovalToken("v1:abc12345")).toEqual({ version: "v1", token: "abc12345" });
+      expect(parseApprovalToken("v3:abc12345")).toEqual({ version: "v3", token: "abc12345" });
       expect(parseApprovalToken("v42:my-token_value")).toEqual({ version: "v42", token: "my-token_value" });
       expect(parseApprovalToken("abc")).toBeNull();
-      expect(parseApprovalToken("v1:")).toBeNull();
+      expect(parseApprovalToken("v3:")).toBeNull();
       expect(parseApprovalToken(":abc")).toBeNull();
     });
 
-    it("verifyApprovalToken accepts a stamped body", () => {
-      const body = stampApprovalToken("# Skill: x\n# Status: Approved\nm:\n    emit(text=\"hi\")\ndefault: m\n");
-      const ext = extractStatusFromBody(body)!;
-      expect(verifyApprovalToken(body, ext.approvalToken!).ok).toBe(true);
+    it("verifyApprovalToken accepts a v3-signed body and rejects a tampered one", () => {
+      const { publicKeyPem, privateKeyPem } = generateApprovalKeypair();
+      setApprovalPublicKey(publicKeyPem);
+      setSecuredMode(true);
+      try {
+        const body = stampApprovalEd25519("# Skill: x\n# Status: Approved\nm:\n    emit(text=\"hi\")\ndefault: m\n", privateKeyPem);
+        const ext = extractStatusFromBody(body)!;
+        expect(verifyApprovalToken(body, ext.approvalToken!).ok).toBe(true);
+        const tampered = body.replace("hi", "BYE");
+        const v = verifyApprovalToken(tampered, ext.approvalToken!);
+        expect(v.ok).toBe(false);
+        if (!v.ok) expect(v.reason).toMatch(/signature is invalid/);
+      } finally {
+        setSecuredMode(false);
+        setApprovalPublicKey(null);
+      }
     });
 
-    it("verifyApprovalToken rejects a tampered body", () => {
-      const body = stampApprovalToken("# Skill: x\n# Status: Approved\nm:\n    emit(text=\"hi\")\ndefault: m\n");
-      const tampered = body.replace("hi", "BYE");
-      const ext = extractStatusFromBody(body)!;
-      const v = verifyApprovalToken(tampered, ext.approvalToken!);
-      expect(v.ok).toBe(false);
-      if (!v.ok) expect(v.reason).toMatch(/body has been edited/);
-    });
-
-    it("rejects v0 as reserved", () => {
-      expect(() => computeApprovalToken("body", "v0")).toThrow(/reserved/);
+    it("rejects v0 (reserved) and any non-v3 version", () => {
       expect(verifyApprovalToken("body", "v0:abc").ok).toBe(false);
-    });
-
-    it("registerApprovalFn refuses v0 and shape-mismatch versions", () => {
-      expect(() => registerApprovalFn("v0", () => "x")).toThrow(/reserved/);
-      expect(() => registerApprovalFn("notav", () => "x")).toThrow(/must match/);
-    });
-
-    it("registerApprovalFn lets adopters add a stronger v2", () => {
-      const before = registeredApprovalVersions();
-      registerApprovalFn("v999", () => "deterministic");
-      expect(registeredApprovalVersions()).toContain("v999");
-      const body = "# Skill: x\n# Status: Approved\nm:\n    emit(text=\"hi\")\ndefault: m\n";
-      expect(computeApprovalToken(body, "v999").token).toBe("deterministic");
-      // Cleanup for test isolation
-      (registeredApprovalVersions().filter(v => v !== "v1")).forEach(v => {
-        // no public unregister; accept the registry pollution since it's test-only
-      });
-      void before;
+      expect(verifyApprovalToken("body", "v1:abc").ok).toBe(false); // v1 retired
     });
   });
 
@@ -140,12 +105,6 @@ describe("v0.9.0 — approval gate", () => {
       // runs (no token required; v1 retired). Secured-mode refusal of naked
       // Approved is covered in v1.0-approval-ed25519.test.ts.
       const g = evaluateApprovalGate(HELLO_DRAFT.replace("Draft", "Approved"));
-      expect(g.ok).toBe(true);
-    });
-
-    it("accepts a stamped Approved body", () => {
-      const stamped = stampApprovalToken(HELLO_DRAFT.replace("Draft", "Approved"));
-      const g = evaluateApprovalGate(stamped);
       expect(g.ok).toBe(true);
     });
   });
