@@ -14,7 +14,7 @@ import type {
 } from "./types.js";
 import { VALID_SKILL_STATUSES, isSkillStatus } from "./types.js";
 import { SkillNotFoundError, VersionNotFoundError, StorageConflictError } from "../errors.js";
-import { stampApprovalToken, extractStatusFromBody } from "../approval.js";
+import { stampApprovalToken, extractStatusFromBody, isSecuredMode, evaluateApprovalGate } from "../approval.js";
 import { parse } from "../parser.js";
 
 const CONTRACT_VERSION = "1.0.0";
@@ -241,13 +241,27 @@ export class FilesystemSkillStore implements SkillStore {
     // preserved-Approved-on-overwrite paths.
     const finalExtracted = extractStatusFromBody(bodyToWrite);
     if (resolvedStatus === "Approved" && (finalExtracted === null || finalExtracted.status === "Approved")) {
-      // Ensure body header says Approved (in case caller passed
-      // metadata.status="Approved" with a Draft body — auto-stamp on the
-      // canonical body shape).
-      if (finalExtracted === null || finalExtracted.status !== "Approved") {
-        bodyToWrite = rewriteStatusHeader(bodyToWrite, "Approved");
+      if (isSecuredMode()) {
+        // v1.0 Gate #7 — in secured mode the store CANNOT mint approval (no
+        // private key here). An Approved write is honored ONLY if the body
+        // already carries a valid v3 signature (the approve flow, which holds
+        // the key, signs then writes). Anything else — an agent declaring
+        // Approved, or a status flip with no signature — is forced to Draft.
+        // This closes the self-approval vector: skill_write can never approve.
+        if (!evaluateApprovalGate(bodyToWrite).ok) {
+          resolvedStatus = "Draft";
+          bodyToWrite = rewriteStatusHeader(bodyToWrite, "Draft");
+        }
+        // else: body carries a valid v3 signature → keep Approved as-is (no stamp).
+      } else {
+        // Unsecured (legacy) — v0.9.1 v1 auto-stamp. Ensure the header says
+        // Approved (caller may have passed metadata.status with a Draft body),
+        // then stamp the v1 token onto the canonical body shape.
+        if (finalExtracted === null || finalExtracted.status !== "Approved") {
+          bodyToWrite = rewriteStatusHeader(bodyToWrite, "Approved");
+        }
+        bodyToWrite = stampApprovalToken(bodyToWrite);
       }
-      bodyToWrite = stampApprovalToken(bodyToWrite);
     }
 
     const content_hash = hashSource(bodyToWrite);
