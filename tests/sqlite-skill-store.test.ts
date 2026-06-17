@@ -6,6 +6,7 @@ import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { SqliteSkillStore } from "../src/connectors/sqlite-skill-store.js";
 import { SkillStoreConformance } from "../src/testing/conformance.js";
 import { SkillNotFoundError, VersionNotFoundError } from "../src/errors.js";
+import { setSecuredMode, setApprovalPublicKey, generateApprovalKeypair, stampApprovalEd25519 } from "../src/approval.js";
 
 const SAMPLE_SKILL = `# Skill: hello
 # Status: Draft
@@ -272,6 +273,37 @@ describe("SqliteSkillStore — auto-stamp on store()", () => {
     await store.store("hello", SAMPLE_SKILL);
     const src = await store.load("hello");
     expect(src.source).toBe(SAMPLE_SKILL);
+  });
+});
+
+describe("SqliteSkillStore — secured-mode parity (v1.0 Gate #7)", () => {
+  let store: SqliteSkillStore;
+  beforeEach(() => { store = new SqliteSkillStore({ dbPath: ":memory:" }); });
+  afterEach(async () => { setSecuredMode(false); setApprovalPublicKey(null); store.close(); });
+
+  it("forces an unsigned Approved write to Draft in secured mode (cannot self-approve)", async () => {
+    setApprovalPublicKey(generateApprovalKeypair().publicKeyPem);
+    setSecuredMode(true);
+    const info = await store.store("hello", APPROVED_SKILL, { status: "Approved" });
+    expect(info.status).toBe("Draft");
+    const src = await store.load("hello");
+    expect(src.metadata.status).toBe("Draft");
+  });
+
+  it("update_status → Approved on an unsigned body is refused in secured mode", async () => {
+    await store.store("hello", SAMPLE_SKILL); // Draft
+    setApprovalPublicKey(generateApprovalKeypair().publicKeyPem);
+    setSecuredMode(true);
+    await expect(store.update_status("hello", "Approved")).rejects.toThrow(/no valid signature|cannot promote/i);
+  });
+
+  it("honors a genuine v3-signed Approved write in secured mode", async () => {
+    const { publicKeyPem, privateKeyPem } = generateApprovalKeypair();
+    setApprovalPublicKey(publicKeyPem);
+    setSecuredMode(true);
+    const signed = stampApprovalEd25519(APPROVED_SKILL, privateKeyPem);
+    const info = await store.store("hello", signed, { status: "Approved" });
+    expect(info.status).toBe("Approved");
   });
 });
 

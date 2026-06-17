@@ -18,8 +18,9 @@ import {
   SkillNotFoundError,
   VersionNotFoundError,
   StorageConflictError,
+  ApprovalRejectedError,
 } from "../errors.js";
-import { extractStatusFromBody } from "../approval.js";
+import { extractStatusFromBody, isSecuredMode, evaluateApprovalGate } from "../approval.js";
 import { parse as parseSkillSource } from "../parser.js";
 
 const CONTRACT_VERSION = "1.0.0";
@@ -344,15 +345,21 @@ export class SqliteSkillStore implements SkillStore {
     if (name.length === 0) {
       throw new StorageConflictError(name, "name must not be empty", "SqliteSkillStore");
     }
-    // v1.0 Gate #7 — unsecured approval is UNKEYED: a bare `# Status: Approved`
-    // header is sufficient and no token is minted (v1 hash-stamps retired).
-    // Matches FilesystemSkillStore. (Secured-mode v3 enforcement lives on the
-    // filesystem store, the primary substrate; sqlite is unsecured-only today.)
-    const bodyToWrite = source;
+    // v1.0 Gate #7 — approval is KEYED in secured mode, UNKEYED otherwise.
+    // Unsecured: a bare `# Status: Approved` is sufficient, no token minted (v1
+    // retired). Secured: the store can't mint approval (no private key), so an
+    // Approved write is honored ONLY if the body already carries a valid v3
+    // signature (the approve flow signs then writes); anything else is forced to
+    // Draft. Mirrors FilesystemSkillStore — closes the self-approval vector.
+    let bodyToWrite = source;
     const extracted = extractStatusFromBody(source);
+    let status = metadata?.status ?? extracted?.status ?? "Draft";
+    if (status === "Approved" && isSecuredMode() && !evaluateApprovalGate(bodyToWrite).ok) {
+      status = "Draft";
+      bodyToWrite = rewriteStatusHeader(source, "Draft");
+    }
     const content_hash = hashSource(bodyToWrite);
     const version = shortHash(content_hash);
-    const status = metadata?.status ?? extracted?.status ?? "Draft";
     const description = metadata?.description ?? extractHeader(bodyToWrite, "Description");
     const nowSec = Math.floor(Date.now() / 1000);
     const metaJson = serializeMetadata(metadata);
@@ -448,8 +455,18 @@ export class SqliteSkillStore implements SkillStore {
     const row = this.skillRow(name);
     const previous_status = row["status"] as SkillStatus;
     const source = row["source"] as string;
-    // v1.0 Gate #7 — unkeyed unsecured approval: just set the status header
-    // (no token minted on the Approved transition).
+    // v1.0 Gate #7 — in secured mode, update_status cannot MINT approval (no
+    // private key). Promotion to Approved is honored ONLY if the stored body
+    // already carries a valid v3 signature; a status-flip on an unsigned body is
+    // refused. Mirrors FilesystemSkillStore (the skill_status self-approval
+    // closure). Unsecured: unkeyed — just set the bare header, no token.
+    if (status === "Approved" && isSecuredMode() && !evaluateApprovalGate(source).ok) {
+      throw new ApprovalRejectedError(
+        name,
+        "cannot promote to Approved in secured mode — the skill carries no valid signature. Approve it via the dashboard (which signs the body); a status change alone cannot grant approval.",
+        "update_status",
+      );
+    }
     const updated = rewriteStatusHeader(source, status);
     const content_hash = hashSource(updated);
     const version = shortHash(content_hash);

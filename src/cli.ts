@@ -456,11 +456,12 @@ async function cmdRun(args: string[]): Promise<number> {
     process.stderr.write(`skillfile run: ${opts.error}\n`);
     return 64;
   }
-  const source = await loadSkillSource(opts.skillRef!);
-  if (source === null) {
+  const resolved = await loadSkillSourceResolved(opts.skillRef!);
+  if (resolved === null) {
     process.stderr.write(`skillfile run: skill '${opts.skillRef}' not found\n`);
     return 1;
   }
+  const source = resolved.source;
   const registry = buildRegistry();
 
   try {
@@ -501,6 +502,18 @@ async function cmdRun(args: string[]): Promise<number> {
       setSecuredMode(true);
       const pubFile = envConfig.approvalPublicKeyFile ?? join(homedir(), ".skillscript", "approval.pub");
       if (existsSync(pubFile)) setApprovalPublicKey(await readFile(pubFile, "utf8"));
+    }
+    // v1.0 Gate #7 — a STORED (by-name) skill that fails the gate in secured
+    // mode is refused OUTRIGHT, matching the scheduler + MCP execute_skill
+    // dispatch paths (a stored skill behaves identically however it's invoked).
+    // A by-PATH ad-hoc skill is the explicit escape hatch — it still runs, but
+    // with effects gated below (it just can't have carried a valid approval).
+    if (resolved.fromStore && isSecuredMode()) {
+      const gate = evaluateApprovalGate(source);
+      if (!gate.ok) {
+        process.stderr.write(`skillfile execute: '${opts.skillRef}' refused — ${gate.reason}\n`);
+        return 1;
+      }
     }
     const effectsAuthorized = !isSecuredMode() || evaluateApprovalGate(source).ok;
     const result = await execute(compiled.parsed, compiled.resolvedVariables, compiled.targetOrder, {
@@ -984,26 +997,39 @@ function extractFlag(args: string[], name: string): string | undefined {
  * `examples/<name>.skill.md` paths are resolved against either the working
  * directory or the configured EXAMPLES_DIR — whichever exists.
  */
-async function loadSkillSource(ref: string): Promise<string | null> {
-  const candidates: string[] = [];
-  if (isAbsolute(ref)) candidates.push(ref);
+interface ResolvedSkillSource {
+  source: string;
+  /** True when the ref resolved from the SkillStore (by-name), not a filesystem
+   *  path. By-name dispatch is gated like the scheduler/MCP paths (refused
+   *  outright when unapproved in secured mode); by-path is the ad-hoc escape. */
+  fromStore: boolean;
+}
+
+async function loadSkillSourceResolved(ref: string): Promise<ResolvedSkillSource | null> {
+  const candidates: Array<{ path: string; fromStore: boolean }> = [];
+  if (isAbsolute(ref)) candidates.push({ path: ref, fromStore: false });
   else {
-    candidates.push(resolve(process.cwd(), ref));
+    candidates.push({ path: resolve(process.cwd(), ref), fromStore: false });
     if (ref.startsWith("examples/")) {
-      candidates.push(join(HOME_DIR, ref));
+      candidates.push({ path: join(HOME_DIR, ref), fromStore: false });
     }
     if (!ref.includes("/") && !ref.endsWith(".skill") && !ref.endsWith(".skill.md")) {
-      candidates.push(join(SKILLS_DIR, `${ref}.skill.md`));
+      candidates.push({ path: join(SKILLS_DIR, `${ref}.skill.md`), fromStore: true });
     }
   }
   for (const c of candidates) {
     try {
-      return await readFile(c, "utf8");
+      return { source: await readFile(c.path, "utf8"), fromStore: c.fromStore };
     } catch {
       /* try next */
     }
   }
   return null;
+}
+
+async function loadSkillSource(ref: string): Promise<string | null> {
+  const r = await loadSkillSourceResolved(ref);
+  return r === null ? null : r.source;
 }
 
 function buildRegistry(): Registry {

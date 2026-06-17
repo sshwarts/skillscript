@@ -67,13 +67,39 @@ afterEach(() => {
 });
 
 describe("skillfile execute — secured mode is enforced on the CLI path", () => {
-  it("SECURED + unapproved (v1) skill: effect refused, no file written", async () => {
+  it("SECURED + unapproved BY-NAME: refused outright (matches scheduler/MCP), no file", async () => {
     const { home, skillsDir, ws, pubFile, keyFile, marker } = setup();
-    // unsecured store write → lands Approved under a v1 stamp (the pre-secured artifact)
+    // unsecured store write → lands a bare Approved (unsigned) — unapproved under
+    // secured rules. A STORED skill is refused OUTRIGHT (doesn't run), the same
+    // as cron/MCP dispatch.
     await new FilesystemSkillStore(skillsDir).store("effect-probe", effectBody(marker), { status: "Approved" });
 
     const r = runExecute(home, ws, pubFile, keyFile, true);
-    expect(r.stderr + r.stdout).toMatch(/SecuredModeEffectError/);
+    expect(r.stderr + r.stdout).toMatch(/refused/i);
+    expect(r.code).not.toBe(0);
+    expect(existsSync(marker), "effect must NOT have fired").toBe(false);
+  });
+
+  it("SECURED + unapproved BY-PATH: runs but effects gated (the ad-hoc escape hatch)", async () => {
+    const { home, ws, pubFile, keyFile, marker } = setup();
+    // An ad-hoc file path bypasses the store + approval gate by design, but
+    // effects are still refused at dispatch — it just can't carry an approval.
+    const adhoc = join(home, "adhoc.skill.md");
+    writeFileSync(adhoc, `# Skill: adhoc\n# Status: Approved\nrun:\n    emit(text="ran")\n    file_write(path="${marker}", content="fired", approved="x")\ndefault: run\n`);
+    const r = spawnSync("node", [CLI, "execute", adhoc], {
+      cwd: ROOT,
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        SKILLSCRIPT_HOME: home,
+        SKILLSCRIPT_FS_ALLOWLIST: ws,
+        SKILLSCRIPT_SECURED_MODE: "true",
+        SKILLSCRIPT_APPROVAL_PUBLIC_KEY_FILE: pubFile,
+        SKILLSCRIPT_APPROVAL_KEY_FILE: keyFile,
+      },
+    });
+    expect((r.stdout ?? "") + (r.stderr ?? ""), "ad-hoc skill still runs (emits)").toMatch(/ran/);
+    expect((r.stdout ?? "") + (r.stderr ?? "")).toMatch(/SecuredModeEffectError/);
     expect(existsSync(marker), "effect must NOT have fired").toBe(false);
   });
 
