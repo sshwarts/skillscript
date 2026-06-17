@@ -11,7 +11,7 @@
 // left literal `.` / `..` intact (the substitution `[^A-Za-z0-9._-]`
 // excluded slashes but allowed the bare-dot traversal vector).
 
-import { join, resolve, sep, dirname, basename } from "node:path";
+import { join, isAbsolute, sep, dirname } from "node:path";
 import { realpathSync } from "node:fs";
 import { InvalidPathError } from "./errors.js";
 
@@ -73,20 +73,32 @@ export function validatePathComponent(part: string): void {
  * the standard mitigation and what we ship for 1.0.
  */
 export function canonicalizePath(target: string): string {
-  const abs = resolve(target);
-  const tail: string[] = [];
-  let cur = abs;
-  for (;;) {
-    try {
-      const real = realpathSync(cur);
-      return tail.length === 0 ? real : join(real, ...tail.reverse());
-    } catch {
-      const parent = dirname(cur);
-      if (parent === cur) return abs; // reached filesystem root; nothing resolvable
-      tail.push(basename(cur));
-      cur = parent;
+  // Resolve COMPONENT BY COMPONENT — do NOT lexically collapse `..` up front
+  // (resolve()/join() would). `..` must be applied AFTER a symlink is followed,
+  // or `link/..` escapes: lexical collapse cancels `link/..` to nothing, masking
+  // that `link` points elsewhere (Perry's catch). So: prepend cwd by raw string
+  // concat (no normalization), then walk parts — realpath each existing
+  // component (following symlinks), apply `..` to the REAL accumulated path, and
+  // once a component doesn't exist, treat the remaining tail purely lexically
+  // (a non-existent path can hold no symlinks).
+  const startAbs = isAbsolute(target) ? target : `${process.cwd()}${sep}${target}`;
+  let real: string = sep;
+  let lexicalTail = false;
+  for (const part of startAbs.split(sep)) {
+    if (part === "" || part === ".") continue;
+    if (part === "..") { real = dirname(real); continue; }
+    const candidate = real === sep ? sep + part : real + sep + part;
+    if (!lexicalTail) {
+      try {
+        real = realpathSync(candidate); // follows a symlink for THIS component
+        continue;
+      } catch {
+        lexicalTail = true; // candidate doesn't exist → rest is pure-lexical
+      }
     }
+    real = candidate;
   }
+  return real;
 }
 
 /**

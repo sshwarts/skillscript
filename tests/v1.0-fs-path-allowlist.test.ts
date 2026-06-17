@@ -55,6 +55,17 @@ describe("isPathUnderAllowedRoot — bypass resistance (the security-critical pa
     // root/link/secret.txt LOOKS under root, but realpath resolves to outside.
     expect(isPathUnderAllowedRoot(join(root, "link", "secret.txt"), [root])).toBe(false);
   });
+  it("symlink + `..` cannot escape (the resolve-then-realpath ordering bug, Perry's catch)", () => {
+    const root = tmp();
+    const outside = tmp();
+    symlinkSync(outside, join(root, "link")); // root/link -> outside (a sibling)
+    // RAW path (skill paths are raw strings, never join()-normalized — join would
+    // lexically collapse `link/..` before we see it). `link` resolves to `outside`,
+    // so `link/..` is outside's parent → escape is NOT under root. Must be refused
+    // (the old resolve()-first impl allowed it — Perry's catch).
+    const rawEscape = join(root, "link") + "/../escape";
+    expect(isPathUnderAllowedRoot(rawEscape, [root])).toBe(false);
+  });
   it("canonicalizePath resolves a not-yet-existing file under a symlinked parent", () => {
     const root = tmp();
     const outside = tmp();
