@@ -5,19 +5,54 @@
  *   - Draft  : authored, lint+compile+view ok, cannot execute
  *   - Approved + valid hash-token : can execute (manual / trigger / composition)
  *
- * Approval token = `vN:<hex>` where N picks the hash function:
+ * Approval token = `vN:<token>` where N picks the scheme:
  *   v0 — reserved, rejected (naked "Approved" fails fast)
- *   v1 — CRC32 (bundled default; discipline-barrier strength)
- *   v2 — reserved for HMAC-SHA256
- *   v3 — reserved for Ed25519 signature
- *   adopter-extensible past v3 via `registerApprovalFn`
+ *   v1 — CRC32 (symmetric, recompute-and-compare). Tamper-EVIDENT only —
+ *        forgeable by anyone with the algorithm. Legacy / unsecured-mode default.
+ *   v2 — reserved for HMAC-SHA256 (never shipped; asymmetric chosen instead)
+ *   v3 — Ed25519 signature (ASYMMETRIC). Sign with the operator's private key
+ *        (approve-time only); verify with the public key (runtime, non-secret).
+ *        The SECURED-MODE credential — unforgeable without the private key.
+ *   adopter-extensible past v3 via `registerApprovalFn` (symmetric schemes).
  *
- * Token is computed over the body *excluding* the `# Status:` line, so
- * stamping the token doesn't perturb its own input.
+ * v1/v2 are symmetric (token = fn(body)); v3 is asymmetric (sign≠verify).
+ * In SECURED MODE the gate verifies v3 ONLY and REJECTS every other version
+ * (an accepted-if-present v1 would leave the forgeable path open).
+ *
+ * Token/signature is computed over the body *excluding* the `# Status:` line,
+ * so stamping the token doesn't perturb its own input.
  */
+
+import { sign as edSign, verify as edVerify, generateKeyPairSync } from "node:crypto";
 
 const APPROVAL_FNS: Map<string, (bodyMinusStatus: string) => string> = new Map();
 let PREFERRED_VERSION = "v1";
+
+/** The asymmetric (Ed25519) version slot — the secured-mode credential. */
+export const ED25519_VERSION = "v3";
+
+// ─── Secured-mode config (process-wide, set at boot; mirrors PREFERRED_VERSION) ──
+// When secured mode is ON, the gate accepts v3 signatures ONLY and rejects all
+// symmetric (forgeable) schemes. The public key verifies v3; the runtime never
+// holds the private key. Set from runtime config in bootstrap.
+let SECURED_MODE = false;
+let APPROVAL_PUBLIC_KEY_PEM: string | null = null;
+
+export function setSecuredMode(on: boolean): void {
+  SECURED_MODE = on;
+}
+export function isSecuredMode(): boolean {
+  return SECURED_MODE;
+}
+/** Configure the Ed25519 PUBLIC key (PEM) used to verify v3 tokens. The private
+ * key is never set here — it lives in the operator's keyfile, read only by the
+ * approve flow, never by the runtime. */
+export function setApprovalPublicKey(pem: string | null): void {
+  APPROVAL_PUBLIC_KEY_PEM = pem;
+}
+export function hasApprovalPublicKey(): boolean {
+  return APPROVAL_PUBLIC_KEY_PEM !== null;
+}
 
 /**
  * Set the version used by `stampApprovalToken(body)` when no explicit
@@ -86,6 +121,67 @@ export function stripStatusLineForHashing(body: string): string {
 }
 
 /**
+ * Canonical form signed/verified by the asymmetric (v3) scheme.
+ *
+ * STRUCTURAL whitespace only (per Perry's confirm): normalize line endings to
+ * `\n` and exclude the `# Status:` line (where the signature lives — solves the
+ * sign-its-own-input chicken-egg). It deliberately does NOT strip or collapse
+ * trailing/interior whitespace — that could alter content INSIDE a string-literal
+ * value (e.g. `$set X = "a   b"`), letting two distinct bodies canonicalize the
+ * same or breaking a legitimate re-sign. Only `\r\n`/`\r` → `\n` is normalized,
+ * so a body signed on one platform verifies on another; every real edit still
+ * invalidates the signature (re-approval required — tamper-evidence preserved).
+ */
+export function canonicalizeForSigning(body: string): string {
+  const lf = body.replace(/\r\n?/g, "\n");
+  return stripStatusLineForHashing(lf);
+}
+
+// ─── v3: Ed25519 asymmetric signature ─────────────────────────────────────────
+
+/**
+ * Sign a body with the operator's Ed25519 private key (PEM). Returns the
+ * `v3:<base64url>` token the dashboard/CLI approve flow stamps. APPROVE-TIME
+ * ONLY — the private key never enters the runtime's verification path.
+ */
+export function signApprovalEd25519(body: string, privateKeyPem: string): ApprovalToken {
+  const canonical = canonicalizeForSigning(body);
+  const sig = edSign(null, Buffer.from(canonical, "utf8"), privateKeyPem);
+  return { version: ED25519_VERSION, token: sig.toString("base64url") };
+}
+
+/** Verify a v3 token against the body using the configured public key. */
+function verifyEd25519(body: string, tokenB64url: string): boolean {
+  if (APPROVAL_PUBLIC_KEY_PEM === null) return false;
+  const canonical = canonicalizeForSigning(body);
+  let sig: Buffer;
+  try {
+    sig = Buffer.from(tokenB64url, "base64url");
+  } catch {
+    return false;
+  }
+  if (sig.length === 0) return false;
+  try {
+    return edVerify(null, Buffer.from(canonical, "utf8"), APPROVAL_PUBLIC_KEY_PEM, sig);
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Generate a fresh Ed25519 keypair for first-run provisioning. Returns PEM
+ * strings: the private key goes to the operator's keyfile (never the runtime),
+ * the public key into runtime config.
+ */
+export function generateApprovalKeypair(): { publicKeyPem: string; privateKeyPem: string } {
+  const { publicKey, privateKey } = generateKeyPairSync("ed25519");
+  return {
+    publicKeyPem: publicKey.export({ type: "spki", format: "pem" }) as string,
+    privateKeyPem: privateKey.export({ type: "pkcs8", format: "pem" }) as string,
+  };
+}
+
+/**
  * Parse a token string of the form `vN:<token>` into its parts. Returns
  * null on shape mismatch — caller surfaces a clear error to the operator.
  */
@@ -128,6 +224,32 @@ export function verifyApprovalToken(body: string, rawToken: string): ApprovalVer
   if (parsed.version === "v0") {
     return { ok: false, reason: `approval version 'v0' is reserved` };
   }
+
+  // v3 — asymmetric Ed25519 (the secured-mode credential). Verify the signature
+  // with the configured public key; the private key never reaches this path.
+  if (parsed.version === ED25519_VERSION) {
+    if (verifyEd25519(body, parsed.token)) {
+      return { ok: true, token: parsed };
+    }
+    return {
+      ok: false,
+      reason: APPROVAL_PUBLIC_KEY_PEM === null
+        ? `approval signature cannot be verified — no approval public key is configured`
+        : `approval signature is invalid — the body was edited since approval, or signed with a different key; re-approve via the dashboard`,
+    };
+  }
+
+  // Secured mode accepts v3 ONLY. Every symmetric (forgeable) scheme is
+  // REJECTED, not merely superseded — accepting a v1 if present leaves the
+  // crc32 forgery path open.
+  if (SECURED_MODE) {
+    return {
+      ok: false,
+      reason: `approval token version '${parsed.version}' is not accepted in secured mode — re-approve via the dashboard (a signed approval is required)`,
+    };
+  }
+
+  // Unsecured / legacy — symmetric recompute-and-compare (v1 crc32, adopter v2+).
   const fn = APPROVAL_FNS.get(parsed.version);
   if (!fn) {
     return {
@@ -188,12 +310,19 @@ export function evaluateApprovalGate(body: string): ApprovalVerification {
     return { ok: false, reason: `skill status is 'Disabled' — execution refused` };
   }
   if (extracted.status === "Draft") {
-    return { ok: false, reason: `skill status is 'Draft' — approve via dashboard before executing` };
-  }
-  if (extracted.approvalToken === null) {
     return {
       ok: false,
-      reason: `skill is Approved but missing approval token — re-approve via dashboard to stamp '# Status: Approved v1:<token>'`,
+      reason: SECURED_MODE
+        ? `skill status is 'Draft' — this is an intentional safety gate, not an error to work around. A human must review and approve it via the dashboard before it can execute. Preview it with mechanical mode, or keep iterating as a Draft.`
+        : `skill status is 'Draft' — approve via dashboard before executing`,
+    };
+  }
+  if (extracted.approvalToken === null) {
+    // Mode-aware, and deliberately does NOT disclose the token format (an
+    // attacker who learns `vN:<token>` gets the exact shape to forge).
+    return {
+      ok: false,
+      reason: `skill is marked Approved but carries no valid approval signature — re-approve via the dashboard`,
     };
   }
   return verifyApprovalToken(body, extracted.approvalToken);
@@ -217,7 +346,22 @@ export function evaluateApprovalGate(body: string): ApprovalVerification {
  */
 export function stampApprovalToken(body: string, version?: string): string {
   const v = version ?? PREFERRED_VERSION;
-  const token = computeApprovalToken(body, v);
+  return writeApprovedStatusLine(body, computeApprovalToken(body, v));
+}
+
+/**
+ * Stamp `# Status: Approved v3:<sig>` into a body, signing with the operator's
+ * Ed25519 private key. The approve-flow (dashboard/CLI) equivalent of
+ * `stampApprovalToken` for the asymmetric scheme — APPROVE-TIME ONLY.
+ */
+export function stampApprovalEd25519(body: string, privateKeyPem: string): string {
+  return writeApprovedStatusLine(body, signApprovalEd25519(body, privateKeyPem));
+}
+
+/** Write `# Status: Approved <version>:<token>` into the header block, replacing
+ * an existing header `# Status:` line or inserting after `# Skill:`. Shared by
+ * both the symmetric and asymmetric stampers. */
+function writeApprovedStatusLine(body: string, token: ApprovalToken): string {
   const line = `# Status: Approved ${token.version}:${token.token}`;
   const headerStatusLine = findHeaderStatusLine(body);
   if (headerStatusLine !== null) {

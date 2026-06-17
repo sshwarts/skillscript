@@ -134,7 +134,8 @@ describe("v0.9.0 — approval gate", () => {
     it("rejects naked Approved (no token)", () => {
       const g = evaluateApprovalGate(HELLO_DRAFT.replace("Draft", "Approved"));
       expect(g.ok).toBe(false);
-      if (!g.ok) expect(g.reason).toMatch(/missing approval token/);
+      // v1.0 Gate #7 — message reworded to not disclose the token format.
+      if (!g.ok) expect(g.reason).toMatch(/no valid approval signature/);
     });
 
     it("accepts a stamped Approved body", () => {
