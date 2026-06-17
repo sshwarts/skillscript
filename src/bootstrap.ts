@@ -22,9 +22,11 @@
 // The public `bootstrap()` function here will continue to work for default
 // deployments and is part of the v0.7.x+ stable public surface.
 
-import { existsSync, readFileSync, writeFileSync, mkdirSync } from "node:fs";
-import { dirname } from "node:path";
+import { existsSync, readFileSync, writeFileSync, mkdirSync, chmodSync } from "node:fs";
+import { dirname, join as pathJoin } from "node:path";
+import { homedir } from "node:os";
 import { resolveRuntimeConfigFromEnv, pickEnvOptionalOption } from "./runtime-env-resolver.js";
+import { generateApprovalKeypair, setApprovalPublicKey, setSecuredMode } from "./approval.js";
 
 import { Registry } from "./connectors/registry.js";
 import { FilesystemSkillStore } from "./connectors/skill-store.js";
@@ -115,6 +117,21 @@ export interface BootstrapOpts {
    * 3. `{ "forceAlwaysDraft": true }` in `skillscript.config.json`
    */
   forceAlwaysDraft?: boolean;
+  /**
+   * v1.0 Gate #7 — the approval boundary. When on, only v3-signed (operator-
+   * approved) skills execute effectfully; effects in unapproved/source/Draft
+   * bodies are refused at the dispatch choke. Cascade: opt > env
+   * (`SKILLSCRIPT_SECURED_MODE`) > config.json > default (currently OFF; the
+   * on-by-default flip ships once migration + approve-flow land).
+   */
+  securedMode?: boolean;
+  /** Path to the operator's Ed25519 PRIVATE key (approve flow only; the runtime
+   * never loads it). Default: `~/.skillscript/approval.key`. Keep it OUTSIDE
+   * SKILLSCRIPT_HOME / agent read access. */
+  approvalKeyFile?: string;
+  /** Path to the Ed25519 PUBLIC key (non-secret; runtime verifies v3 tokens with
+   * it). Default: `~/.skillscript/approval.pub`. */
+  approvalPublicKeyFile?: string;
   /** When set, scheduler-driven fires record traces via the result's traceStore. */
   trace?: TraceConfig;
   /**
@@ -332,6 +349,42 @@ export function defaultRegistry(opts: DefaultRegistryOpts): { registry: Registry
  *   3. Mount any additional surfaces (e.g., `DashboardServer`) on top of
  *      `result.mcpServer`.
  */
+/**
+ * v1.0 Gate #7 — default location for the operator's Ed25519 PRIVATE key.
+ * Operator-scoped (`~/.skillscript/`), deliberately OUTSIDE SKILLSCRIPT_HOME —
+ * the agent's accessible dir (skills/data) — so a co-resident agent doesn't get
+ * the forging secret by default (Perry's location requirement: location, not
+ * just perms). For full isolation, run the runtime under a uid that cannot read
+ * this path; the managed-custody backend (post-1.0) closes the same-uid case.
+ */
+function defaultApprovalKeyFile(): string {
+  return pathJoin(homedir(), ".skillscript", "approval.key");
+}
+/** Default location for the PUBLIC key (non-secret; runtime reads it to verify). */
+function defaultApprovalPublicKeyFile(): string {
+  return pathJoin(homedir(), ".skillscript", "approval.pub");
+}
+
+/**
+ * First-run provisioning. Ensures an Ed25519 keypair exists; generates one when
+ * the PUBLIC key is absent (private written `0600`). Returns the public PEM. If
+ * only the public key is present (server moved, private kept on the operator's
+ * approve machine), it's read and returned — verification needs only the public
+ * key, so a relocated runtime keeps verifying existing signatures with no keygen.
+ */
+function ensureApprovalKeys(privatePath: string, publicPath: string): string {
+  if (existsSync(publicPath)) {
+    return readFileSync(publicPath, "utf8");
+  }
+  const { publicKeyPem, privateKeyPem } = generateApprovalKeypair();
+  mkdirSync(dirname(privatePath), { recursive: true });
+  mkdirSync(dirname(publicPath), { recursive: true });
+  writeFileSync(privatePath, privateKeyPem, { mode: 0o600 });
+  chmodSync(privatePath, 0o600); // enforce 0600 regardless of umask
+  writeFileSync(publicPath, publicKeyPem, "utf8");
+  return publicKeyPem;
+}
+
 export function bootstrap(opts: BootstrapOpts): BootstrapResult {
   // v0.19.1 — centralized env-resolver per adopter CR `f2549ddf` +
   // follow-up `aeccddac`. Pre-v0.19.1 each env→option translation lived
@@ -396,6 +449,23 @@ export function bootstrap(opts: BootstrapOpts): BootstrapResult {
   const resolvedForceAlwaysDraft = opts.forceAlwaysDraft !== undefined
     ? opts.forceAlwaysDraft
     : envCfg.forceAlwaysDraft;
+
+  // v1.0 Gate #7 — arm (or disarm) the approval boundary. Default OFF for now;
+  // the on-by-default flip ships once migration + approve-flow are in place
+  // (the plan's sequencing). When on: ensure the keypair exists (first-run
+  // provisioning), load the PUBLIC key for verification, and set secured mode.
+  // The runtime never loads the private key — only the public key is read here.
+  const resolvedSecuredMode = opts.securedMode !== undefined
+    ? opts.securedMode
+    : envCfg.securedMode ?? false;
+  if (resolvedSecuredMode) {
+    const keyFile = opts.approvalKeyFile ?? envCfg.approvalKeyFile ?? defaultApprovalKeyFile();
+    const pubFile = opts.approvalPublicKeyFile ?? envCfg.approvalPublicKeyFile ?? defaultApprovalPublicKeyFile();
+    setApprovalPublicKey(ensureApprovalKeys(keyFile, pubFile));
+    setSecuredMode(true);
+  } else {
+    setSecuredMode(false);
+  }
   const resolvedPollIntervalSeconds = pickEnvOptionalOption(opts.pollIntervalSeconds, envCfg.pollIntervalSeconds);
   const resolvedAbsoluteTimeoutMs = pickEnvOptionalOption(opts.absoluteTimeoutMs, envCfg.absoluteTimeoutMs);
   const resolvedMaxRecursionDepth = pickEnvOptionalOption(opts.maxRecursionDepth, envCfg.maxRecursionDepth);

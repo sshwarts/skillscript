@@ -48,6 +48,10 @@ export interface RuntimeEnvConfig {
   // Event ingress
   eventIngressEnabled?: boolean;
   eventIngressAuthToken?: string;
+  // Gate #7 approval boundary
+  securedMode?: boolean;
+  approvalKeyFile?: string;
+  approvalPublicKeyFile?: string;
 }
 
 /**
@@ -128,6 +132,22 @@ export function resolveRuntimeConfigFromEnv(env: NodeJS.ProcessEnv = process.env
   // SKILLSCRIPT_EVENT_INGRESS_AUTH_TOKEN — string (any non-empty value)
   const tokenRaw = env["SKILLSCRIPT_EVENT_INGRESS_AUTH_TOKEN"];
   if (typeof tokenRaw === "string" && tokenRaw !== "") config.eventIngressAuthToken = tokenRaw;
+
+  // SKILLSCRIPT_SECURED_MODE — boolean. The Gate #7 approval boundary: when on,
+  // only v3-signed skills execute effectfully.
+  const securedRaw = env["SKILLSCRIPT_SECURED_MODE"];
+  if (securedRaw === "true") config.securedMode = true;
+  else if (securedRaw === "false") config.securedMode = false;
+
+  // SKILLSCRIPT_APPROVAL_KEY_FILE — path to the operator's Ed25519 PRIVATE key
+  // (read only by the approve flow; the runtime never loads it).
+  const keyFileRaw = env["SKILLSCRIPT_APPROVAL_KEY_FILE"];
+  if (typeof keyFileRaw === "string" && keyFileRaw !== "") config.approvalKeyFile = keyFileRaw;
+
+  // SKILLSCRIPT_APPROVAL_PUBLIC_KEY_FILE — path to the Ed25519 PUBLIC key
+  // (non-secret; the runtime reads it to verify v3 tokens).
+  const pubFileRaw = env["SKILLSCRIPT_APPROVAL_PUBLIC_KEY_FILE"];
+  if (typeof pubFileRaw === "string" && pubFileRaw !== "") config.approvalPublicKeyFile = pubFileRaw;
 
   return config;
 }
