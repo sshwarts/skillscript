@@ -89,8 +89,9 @@ describe("skillfile CLI", () => {
       const seeded = path.join(home, "skills", `${demo}.skill.md`);
       expect(fs.existsSync(seeded), `init should seed skills/${demo}.skill.md`).toBe(true);
       const body = fs.readFileSync(seeded, "utf8");
-      // Bundled demos ship pre-stamped + Approved — runnable immediately.
-      expect(body, `${demo} must be Approved + token-stamped after init`).toMatch(/^# Status: Approved v1:[0-9a-f]+/m);
+      // v1.0 Gate #7 — demos ship Draft; init locally approves them (unsecured
+      // → bare `# Status: Approved`, no token; v1 retired). Runnable immediately.
+      expect(body, `${demo} must be Approved (bare, unkeyed) after init`).toMatch(/^# Status: Approved\s*$/m);
     }
   });
 

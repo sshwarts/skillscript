@@ -82,7 +82,9 @@ export interface ApprovalToken {
 }
 
 export type ApprovalVerification =
-  | { ok: true; token: ApprovalToken }
+  // `token` is present for a KEYED approval (verified v3 signature); absent for
+  // an UNKEYED unsecured approval (bare `# Status: Approved`, no signature).
+  | { ok: true; token?: ApprovalToken }
   | { ok: false; reason: string };
 
 /**
@@ -295,11 +297,24 @@ export function extractStatusFromBody(body: string): { status: "Draft" | "Approv
 /**
  * Universal execution-time gate. Called at every dispatch entry point
  * (scheduler.dispatchSkill, MCP execute_skill handler, in-skill
- * `$ execute_skill` op, compile-time `&` data-skill inline). Returns ok
- * iff status is Approved AND the body's stamped token re-computes correctly.
+ * `$ execute_skill` op, compile-time `&` data-skill inline).
  *
- * v0.9.0 — supersedes the v0.8.x "status === Approved" check; that check
- * remains the first gate, but a stamped + verified token is now required.
+ * The Draft-vs-Approved status gate applies in BOTH modes — only an Approved
+ * skill runs. The mode decides whether that approval must be KEYED:
+ *
+ *   • unsecured — approval is UNKEYED. A bare `# Status: Approved` header is
+ *     sufficient: a co-located human/agent marked it Approved, with no
+ *     signature. (No tamper-evidence — that's the cost of running keyless;
+ *     adopters who want tamper-evidence run secured mode.)
+ *   • secured — approval must be a valid v3 signature minted by the operator's
+ *     key. A bare, unsigned, or legacy (v1) Approved is refused → re-approve
+ *     with the key (`skillfile approve` / the dashboard).
+ *
+ * v1.0 Gate #7 — supersedes the v0.9.0 "stamped v1 token required in both
+ * modes" model. v1 hash-stamps are retired: unsecured no longer mints or
+ * requires them; secured requires v3. (Pre-1.0, the only v1 skills are our own
+ * harness + examples, so there's no install base to preserve — `reapprove`
+ * re-blesses any that move into a secured runtime.)
  */
 export function evaluateApprovalGate(body: string): ApprovalVerification {
   const extracted = extractStatusFromBody(body);
@@ -317,9 +332,14 @@ export function evaluateApprovalGate(body: string): ApprovalVerification {
         : `skill status is 'Draft' — approve via dashboard before executing`,
     };
   }
+  // Approved. Unsecured: unkeyed approval — the status header alone is enough.
+  if (!SECURED_MODE) {
+    return { ok: true };
+  }
+  // Secured: a valid v3 signature is required.
   if (extracted.approvalToken === null) {
-    // Mode-aware, and deliberately does NOT disclose the token format (an
-    // attacker who learns `vN:<token>` gets the exact shape to forge).
+    // Deliberately does NOT disclose the token format (an attacker who learns
+    // `vN:<token>` gets the exact shape to forge).
     return {
       ok: false,
       reason: `skill is marked Approved but carries no valid approval signature — re-approve via the dashboard`,

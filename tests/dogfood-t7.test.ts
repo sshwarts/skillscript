@@ -179,28 +179,23 @@ describe("T7 — examples directory", () => {
     }
   });
 
-  it("14. every bundled .skill.md has a valid `# Status: Approved v1:<token>` stamp matching its body (v0.15.0 structural guard)", async () => {
-    // v0.15.0 — bundled skills ship pre-stamped (so adopters can `cp` them
-    // into `$SKILLSCRIPT_HOME/skills/` and execute_skill({name}) immediately
-    // without a skill_write round-trip). Token = computeApprovalToken(body, "v1")
-    // = CRC32 over body-minus-status-line. If anyone edits a body without
-    // re-running `node scripts/stamp-bundled-skills.mjs`, this guard catches
-    // the drift on every `pnpm test`. Run the script to fix; do NOT modify
-    // the token by hand. Sibling structural-guard to #1 (hardcoded version)
-    // and #7 (LOC ceiling).
-    const { computeApprovalToken, extractStatusFromBody } = await import("../src/approval.js");
+  it("14. every bundled .skill.md ships as Draft, carrying NO approval token (v1.0 Gate #7 structural guard)", async () => {
+    // v1.0 Gate #7 — bundled skills ship `# Status: Draft` (honest: unreviewed
+    // by the adopter's operator). A shipped approval token could never validate
+    // on someone else's install (v3 is signed per-install; v1 is retired), so
+    // shipping one would only mislead. `skillfile init` locally approves the
+    // seeded demos with this machine's authority. This guard catches any
+    // re-introduction of a stamped/Approved bundled body. Sibling structural-
+    // guard to #1 (hardcoded version) and #7 (LOC ceiling).
+    const { extractStatusFromBody } = await import("../src/approval.js");
     const skillscriptsDir = join(REPO_ROOT, "examples", "skillscripts");
     const files = execSync(`ls ${skillscriptsDir}/*.skill.md`, { encoding: "utf8" }).trim().split("\n");
     for (const f of files) {
       const body = readFileSync(f, "utf8");
       const extracted = extractStatusFromBody(body);
       expect(extracted, `bundled skill ${f} missing # Status: header`).not.toBeNull();
-      // Bundled skills must ship Approved + stamped. Draft / Disabled
-      // entries are author-internal state, not shippable.
-      expect(extracted!.status, `bundled skill ${f} must be Approved (got ${extracted!.status})`).toBe("Approved");
-      expect(extracted!.approvalToken, `bundled skill ${f} must carry a v1:<token> stamp`).not.toBeNull();
-      const { version, token } = computeApprovalToken(body, "v1");
-      expect(extracted!.approvalToken, `bundled skill ${f} stamp drift — run \`node scripts/stamp-bundled-skills.mjs\``).toBe(`${version}:${token}`);
+      expect(extracted!.status, `bundled skill ${f} must ship Draft (got ${extracted!.status})`).toBe("Draft");
+      expect(extracted!.approvalToken, `bundled skill ${f} must NOT carry an approval token`).toBeNull();
     }
   });
 });

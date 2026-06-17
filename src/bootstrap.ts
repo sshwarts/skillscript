@@ -363,11 +363,11 @@ export function defaultRegistry(opts: DefaultRegistryOpts): { registry: Registry
  * just perms). For full isolation, run the runtime under a uid that cannot read
  * this path; the managed-custody backend (post-1.0) closes the same-uid case.
  */
-function defaultApprovalKeyFile(): string {
+export function defaultApprovalKeyFile(): string {
   return pathJoin(homedir(), ".skillscript", "approval.key");
 }
 /** Default location for the PUBLIC key (non-secret; runtime reads it to verify). */
-function defaultApprovalPublicKeyFile(): string {
+export function defaultApprovalPublicKeyFile(): string {
   return pathJoin(homedir(), ".skillscript", "approval.pub");
 }
 
@@ -378,7 +378,7 @@ function defaultApprovalPublicKeyFile(): string {
  * approve machine), it's read and returned — verification needs only the public
  * key, so a relocated runtime keeps verifying existing signatures with no keygen.
  */
-function ensureApprovalKeys(privatePath: string, publicPath: string): string {
+export function ensureApprovalKeys(privatePath: string, publicPath: string): string {
   if (existsSync(publicPath)) {
     return readFileSync(publicPath, "utf8");
   }

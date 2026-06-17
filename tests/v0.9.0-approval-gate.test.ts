@@ -21,6 +21,10 @@ import {
   registerApprovalFn,
   registeredApprovalVersions,
   extractStatusFromBody,
+  generateApprovalKeypair,
+  stampApprovalEd25519,
+  setSecuredMode,
+  setApprovalPublicKey,
 } from "../src/approval.js";
 import { Registry } from "../src/connectors/registry.js";
 import { McpServer } from "../src/mcp-server.js";
@@ -131,11 +135,12 @@ describe("v0.9.0 — approval gate", () => {
       if (!g.ok) expect(g.reason).toMatch(/no `# Status:`/);
     });
 
-    it("rejects naked Approved (no token)", () => {
+    it("accepts naked Approved in unsecured mode (unkeyed — status header is sufficient)", () => {
+      // v1.0 Gate #7 — unsecured approval is unkeyed: a bare `# Status: Approved`
+      // runs (no token required; v1 retired). Secured-mode refusal of naked
+      // Approved is covered in v1.0-approval-ed25519.test.ts.
       const g = evaluateApprovalGate(HELLO_DRAFT.replace("Draft", "Approved"));
-      expect(g.ok).toBe(false);
-      // v1.0 Gate #7 — message reworded to not disclose the token format.
-      if (!g.ok) expect(g.reason).toMatch(/no valid approval signature/);
+      expect(g.ok).toBe(true);
     });
 
     it("accepts a stamped Approved body", () => {
@@ -169,14 +174,15 @@ describe("v0.9.0 — approval gate", () => {
     });
     afterEach(() => rmSync(dir, { recursive: true, force: true }));
 
-    it("update_status(_, 'Approved') stamps a valid v1 token", async () => {
+    it("update_status(_, 'Approved') yields a runnable bare Approved (unkeyed, no token)", async () => {
+      // v1.0 Gate #7 — unsecured approval is unkeyed: the transition sets a bare
+      // `# Status: Approved` and mints NO token (v1 retired). The gate accepts it.
       await store.store("hello", HELLO_DRAFT);
       await store.update_status("hello", "Approved");
       const loaded = await store.load("hello");
       const ext = extractStatusFromBody(loaded.source);
       expect(ext?.status).toBe("Approved");
-      expect(ext?.approvalToken).toMatch(/^v1:[a-f0-9]{8}$/);
-      // The stamped token must verify cleanly
+      expect(ext?.approvalToken).toBeNull();
       expect(evaluateApprovalGate(loaded.source).ok).toBe(true);
     });
 
@@ -203,7 +209,11 @@ describe("v0.9.0 — approval gate", () => {
       registry.registerSkillStore("primary", store);
       mcpServer = new McpServer({ skillStore: store, registry });
     });
-    afterEach(() => rmSync(dir, { recursive: true, force: true }));
+    afterEach(() => {
+      setSecuredMode(false);
+      setApprovalPublicKey(null);
+      rmSync(dir, { recursive: true, force: true });
+    });
 
     it("MCP execute_skill refuses Draft", async () => {
       // The test setup hook only auto-stamps Approved bodies; Draft bodies
@@ -213,17 +223,17 @@ describe("v0.9.0 — approval gate", () => {
       expect((r["errors"] as Array<{ class: string }>).some((e) => e.class === "ApprovalRejectedError")).toBe(true);
     });
 
-    it("MCP execute_skill refuses tampered body", async () => {
-      // Test setup hook stamps `Approved` automatically. Then we corrupt
-      // the body on disk to simulate a post-approval edit.
-      await store.store("victim", HELLO_DRAFT.replace("Draft", "Approved"));
-      const loaded = await store.load("victim");
-      const tampered = loaded.source.replace("Hello,", "MALICIOUS,");
-      // Bypass `store()` (which would re-stamp) — write the corrupted body
-      // directly via update_status with no transition, OR through the file.
-      // Easiest: store again with the same approved-status header (the hook
-      // stamps a fresh token over the new body, so we have to invalidate
-      // explicitly). Use the FS path.
+    it("MCP execute_skill refuses a tampered body (secured mode — keyed tamper-evidence)", async () => {
+      // v1.0 Gate #7 — tamper-evidence is a SECURED-mode property (the v3
+      // signature breaks when the body changes). Unsecured mode is unkeyed by
+      // design, so we arm secured + a keypair, store a v3-signed victim, then
+      // corrupt the body on disk → the signature no longer verifies → refused.
+      const { publicKeyPem, privateKeyPem } = generateApprovalKeypair();
+      setApprovalPublicKey(publicKeyPem);
+      setSecuredMode(true);
+      const signed = stampApprovalEd25519(HELLO_DRAFT.replace("Draft", "Approved"), privateKeyPem);
+      await store.store("victim", signed, { status: "Approved" });
+      const tampered = signed.replace("Hello,", "MALICIOUS,");
       const fs = await import("node:fs/promises");
       await fs.writeFile(join(dir, "victim.skill.md"), tampered, "utf8");
       const r = await callTool(mcpServer, "execute_skill", { skill_name: "victim" });

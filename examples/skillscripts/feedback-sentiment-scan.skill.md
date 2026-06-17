@@ -1,5 +1,5 @@
 # Skill: feedback-sentiment-scan
-# Status: Approved v1:2b4868c1
+# Status: Draft
 # Description: Each night, scan the previous 24h of customer feedback records, classify sentiment via the local model, and surface entries that read 'frustrated' or 'blocking' so the team sees them at start-of-day.
 # Triggers: cron: 0 3 * * *
 # Vars: SCAN_LIMIT=50

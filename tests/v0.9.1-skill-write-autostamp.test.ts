@@ -1,9 +1,11 @@
 /**
- * v0.9.1 — `skill_write` auto-stamp (P0.4).
+ * v0.9.1 / v1.0 Gate #7 — `skill_write` Approved landing (unkeyed).
  *
  * Closes the headless-adopter unblock: bodies declaring `# Status: Approved`
- * land in the SkillStore with a valid v1:<token> stamp automatically.
- * No dashboard round-trip needed. Per thread `dec3ca8a` R8 minion #6.
+ * land runnable in the SkillStore with no dashboard round-trip. As of v1.0
+ * Gate #7 the unsecured path is UNKEYED — a bare `# Status: Approved` is stored
+ * (no v1 token minted; v1 retired), and the gate accepts it. Keyed approval
+ * (v3 signature) is the secured-mode path.
  */
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { mkdtempSync, rmSync, readFileSync } from "node:fs";
@@ -44,7 +46,7 @@ describe("v0.9.1 — skill_write auto-stamp", () => {
   });
   afterEach(() => rmSync(dir, { recursive: true, force: true }));
 
-  it("store() auto-stamps body declaring bare `# Status: Approved`", async () => {
+  it("store() lands bare `# Status: Approved` runnable (unkeyed, no token minted)", async () => {
     const body = `# Skill: auto-stamp-test
 # Status: Approved
 
@@ -59,8 +61,8 @@ default: go
     const loaded = await store.load("auto-stamp-test");
     const extracted = extractStatusFromBody(loaded.source);
     expect(extracted?.status).toBe("Approved");
-    expect(extracted?.approvalToken).toMatch(/^v1:[a-f0-9]{8}$/);
-    expect(evaluateApprovalGate(loaded.source).ok).toBe(true);
+    expect(extracted?.approvalToken).toBeNull(); // v1 retired — no token minted
+    expect(evaluateApprovalGate(loaded.source).ok).toBe(true); // runs unsecured
   });
 
   it("store() does NOT stamp Draft bodies", async () => {
@@ -116,7 +118,7 @@ default: go
     expect((meta["approval"] as { gate_ok: boolean }).gate_ok).toBe(true);
   });
 
-  it("store() re-stamps when body already carries a token (idempotent)", async () => {
+  it("store() strips an incoming (stale/forged) token — unsecured lands bare Approved", async () => {
     const body = `# Skill: pre-stamped
 # Status: Approved v1:deadbeef
 
@@ -128,13 +130,13 @@ default: go
     await store.store("pre-stamped", body);
     const loaded = await store.load("pre-stamped");
     const extracted = extractStatusFromBody(loaded.source);
-    // Stamped fresh; the deadbeef token gets replaced with the actual CRC32
-    expect(extracted?.approvalToken).toMatch(/^v1:[a-f0-9]{8}$/);
-    expect(extracted?.approvalToken).not.toBe("v1:deadbeef");
+    // v1 retired: the incoming token is stripped, not re-minted — bare Approved.
+    expect(extracted?.status).toBe("Approved");
+    expect(extracted?.approvalToken).toBeNull();
     expect(evaluateApprovalGate(loaded.source).ok).toBe(true);
   });
 
-  it("file on disk matches the stamped body (write-through)", async () => {
+  it("file on disk matches the stored body (write-through, bare Approved)", async () => {
     const body = `# Skill: disk-check
 # Status: Approved
 
@@ -145,6 +147,6 @@ default: go
 `;
     await store.store("disk-check", body);
     const raw = readFileSync(join(dir, "skills", "disk-check.skill.md"), "utf8");
-    expect(raw).toMatch(/^# Status: Approved v1:[a-f0-9]{8}$/m);
+    expect(raw).toMatch(/^# Status: Approved\s*$/m);
   });
 });

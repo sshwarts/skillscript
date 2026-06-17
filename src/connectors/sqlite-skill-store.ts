@@ -19,7 +19,7 @@ import {
   VersionNotFoundError,
   StorageConflictError,
 } from "../errors.js";
-import { extractStatusFromBody, stampApprovalToken } from "../approval.js";
+import { extractStatusFromBody } from "../approval.js";
 import { parse as parseSkillSource } from "../parser.js";
 
 const CONTRACT_VERSION = "1.0.0";
@@ -344,14 +344,12 @@ export class SqliteSkillStore implements SkillStore {
     if (name.length === 0) {
       throw new StorageConflictError(name, "name must not be empty", "SqliteSkillStore");
     }
-    // Auto-stamp approval token if body declares Approved without a valid
-    // token. Matches FilesystemSkillStore behavior so headless adopters get
-    // a runnable Approved state without a dashboard round-trip.
-    let bodyToWrite = source;
+    // v1.0 Gate #7 — unsecured approval is UNKEYED: a bare `# Status: Approved`
+    // header is sufficient and no token is minted (v1 hash-stamps retired).
+    // Matches FilesystemSkillStore. (Secured-mode v3 enforcement lives on the
+    // filesystem store, the primary substrate; sqlite is unsecured-only today.)
+    const bodyToWrite = source;
     const extracted = extractStatusFromBody(source);
-    if (extracted !== null && extracted.status === "Approved") {
-      bodyToWrite = stampApprovalToken(source);
-    }
     const content_hash = hashSource(bodyToWrite);
     const version = shortHash(content_hash);
     const status = metadata?.status ?? extracted?.status ?? "Draft";
@@ -450,10 +448,9 @@ export class SqliteSkillStore implements SkillStore {
     const row = this.skillRow(name);
     const previous_status = row["status"] as SkillStatus;
     const source = row["source"] as string;
-    // Transitions to Approved stamp the token; transitions away strip it.
-    const updated = status === "Approved"
-      ? stampApprovalToken(rewriteStatusHeader(source, "Approved"))
-      : rewriteStatusHeader(source, status);
+    // v1.0 Gate #7 — unkeyed unsecured approval: just set the status header
+    // (no token minted on the Approved transition).
+    const updated = rewriteStatusHeader(source, status);
     const content_hash = hashSource(updated);
     const version = shortHash(content_hash);
     const nowSec = Math.floor(Date.now() / 1000);

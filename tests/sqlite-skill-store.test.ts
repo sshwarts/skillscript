@@ -182,11 +182,11 @@ describe("SqliteSkillStore — update_status", () => {
     expect(v.previous_status).toBe("Draft");
   });
 
-  it("auto-stamps approval token on Approved transition", async () => {
+  it("Approved transition lands a bare header (unkeyed; v1 retired)", async () => {
     await store.store("hello", SAMPLE_SKILL);
     await store.update_status("hello", "Approved");
     const src = await store.load("hello");
-    expect(src.source).toMatch(/^# Status: Approved v\d+:/m);
+    expect(src.source).toMatch(/^# Status: Approved\s*$/m);
   });
 
   it("strips approval token on transition away from Approved", async () => {
@@ -261,10 +261,10 @@ describe("SqliteSkillStore — auto-stamp on store()", () => {
   beforeEach(() => { store = new SqliteSkillStore({ dbPath: ":memory:" }); });
   afterEach(() => store.close());
 
-  it("stamps approval token when body declares # Status: Approved", async () => {
+  it("lands a bare Approved header when body declares # Status: Approved (unkeyed; v1 retired)", async () => {
     await store.store("hello", APPROVED_SKILL);
     const src = await store.load("hello");
-    expect(src.source).toMatch(/^# Status: Approved v\d+:/m);
+    expect(src.source).toMatch(/^# Status: Approved\s*$/m);
     expect(src.metadata.status).toBe("Approved");
   });
 

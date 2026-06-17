@@ -1,5 +1,5 @@
 # Skill: youtrack-morning-sweep
-# Status: Approved v1:d4c872d9
+# Status: Draft
 # Description: Pull recent YouTrack issues via a configured RemoteMcpConnector + dotted field access on parsed JSON + foreach over the issues array. Requires a `youtrack` connector configured in connectors.json (RemoteMcpConnector class, mcp-remote bridge, newline framing) with allowed_tools including search_issues + get_current_user.
 
 fetch_me:

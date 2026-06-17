@@ -21,14 +21,14 @@ import type { ProvenanceBlock } from "./provenance.js";
 import { renderSidecarProvenance } from "./provenance.js";
 import { Registry } from "./connectors/registry.js";
 import { FilesystemSkillStore } from "./connectors/skill-store.js";
-import { setApprovalPublicKey, setSecuredMode, stampApprovalEd25519, evaluateApprovalGate } from "./approval.js";
+import { setApprovalPublicKey, setSecuredMode, isSecuredMode, stampApprovalEd25519, evaluateApprovalGate } from "./approval.js";
 import { OllamaLocalModel } from "./connectors/local-model.js";
 import { SqliteDataStore } from "./connectors/data-store.js";
 import { parse, type SkillOp } from "./parser.js";
 import { FilesystemTraceStore } from "./trace.js";
 import { healthMetrics } from "./metrics.js";
 import { DashboardServer } from "./dashboard/server.js";
-import { bootstrap, defaultRegistry, wireDeclarativeTriggers } from "./bootstrap.js";
+import { bootstrap, defaultRegistry, wireDeclarativeTriggers, ensureApprovalKeys, defaultApprovalKeyFile, defaultApprovalPublicKeyFile } from "./bootstrap.js";
 import { loadSkillscriptConfig } from "./runtime-config.js";
 import { loadEnvFile } from "./dotenv-loader.js";
 import { createHash } from "node:crypto";
@@ -370,15 +370,19 @@ async function cmdInit(): Promise<number> {
   // v0.15.1 — seed the three Phase 1 demos directly into `skills/` (where the
   // FilesystemSkillStore reads) so `execute_skill({skill_name: "hello-world"})`
   // works immediately after init — no manual `cp` from node_modules required.
-  // All three ship pre-stamped (`# Status: Approved v1:<token>`). Adopters
+  // v1.0 Gate #7 — demos ship as `# Status: Draft` (honest: unreviewed-by-this-
+  // operator; a bundled token could never validate on someone else's install).
+  // init locally APPROVES them below with this machine's authority. Adopters
   // who want them as browsable references can also find them under
   // `node_modules/skillscript-runtime/examples/skillscripts/`.
-  for (const demo of ["hello-world", "skill-store-roundtrip", "data-store-roundtrip"]) {
+  const demoNames = ["hello-world", "skill-store-roundtrip", "data-store-roundtrip"];
+  for (const demo of demoNames) {
     await copyScaffoldFile(
       join(scaffoldRoot, "skills", `${demo}.skill.md`),
       join(SKILLS_DIR, `${demo}.skill.md`),
     );
   }
+  const demoApproval = await approveSeededDemos(demoNames);
   await copyScaffoldFile(join(scaffoldRoot, "connectors.json"), join(HOME_DIR, "connectors.json"));
   // v0.17.4 — seed `.env.example` so adopters discover the dotenv
   // surface without grepping the source. We write `.env.example` (not
@@ -388,7 +392,7 @@ async function cmdInit(): Promise<number> {
 
   process.stdout.write(`Initialized ${HOME_DIR}
   skills/         ${SKILLS_DIR}
-                  └─ hello-world, skill-store-roundtrip, data-store-roundtrip (Approved, ready to execute)
+                  └─ hello-world, skill-store-roundtrip, data-store-roundtrip (${demoApproval}, ready to execute)
   examples/       ${EXAMPLES_DIR}
   plugins/        ${PLUGINS_DIR}
   config.toml     ${join(HOME_DIR, "config.toml")}
@@ -404,6 +408,46 @@ Next:
   #     | jq -r '.result.content[0].text' | jq
 `);
   return 0;
+}
+
+/**
+ * v1.0 Gate #7 — locally approve the seeded demos at init time. The demos ship
+ * as Draft (no bundled token can validate on someone else's install); init is
+ * the operator at THIS terminal, choosing to install our bundled examples, so
+ * it blesses them with this machine's authority:
+ *   • secured — provision a keypair if absent + v3-SIGN each demo with the
+ *     operator's private key (the runtime never holds it; this is the approve
+ *     flow, same as `skillfile approve`).
+ *   • unsecured — store each as bare `# Status: Approved` (unkeyed approval).
+ * Returns a short word for the init summary line. Best-effort: a failure leaves
+ * the demo Draft (still browsable + approvable later via `skillfile approve`).
+ */
+async function approveSeededDemos(demoNames: string[]): Promise<string> {
+  const envConfig = resolveRuntimeConfigFromEnv();
+  const store = new FilesystemSkillStore(SKILLS_DIR);
+  try {
+    if (envConfig.securedMode === true) {
+      const keyFile = envConfig.approvalKeyFile ?? defaultApprovalKeyFile();
+      const pubFile = envConfig.approvalPublicKeyFile ?? defaultApprovalPublicKeyFile();
+      setApprovalPublicKey(ensureApprovalKeys(keyFile, pubFile));
+      setSecuredMode(true);
+      const priv = await readFile(keyFile, "utf8");
+      for (const demo of demoNames) {
+        const loaded = await store.load(demo);
+        await store.store(demo, stampApprovalEd25519(loaded.source, priv), { status: "Approved" });
+      }
+      return "Approved, v3-signed";
+    }
+    // Unsecured — flip the seeded Draft to a bare `# Status: Approved` via the
+    // status-transition API (rewrites the body header; no token, v1 retired).
+    for (const demo of demoNames) {
+      await store.update_status(demo, "Approved");
+    }
+    return "Approved";
+  } catch (err) {
+    process.stderr.write(`[init] could not auto-approve seeded demos (${(err as Error).message}); they remain Draft — approve with \`skillfile approve <name>\`\n`);
+    return "Draft";
+  }
 }
 
 async function cmdRun(args: string[]): Promise<number> {
@@ -445,8 +489,23 @@ async function cmdRun(args: string[]): Promise<number> {
     // CLI-auto-vs-programmatic-explicit class as the v0.19.1 env-resolver
     // structural fix (memory 9d969eb1) — apply the unified resolver here too.
     const envConfig = resolveRuntimeConfigFromEnv();
+    // v1.0 Gate #7 — the CLI execute path must honor secured mode or it's a side
+    // door around the boundary: an unapproved skill running effects via the CLI
+    // (the env resolved `securedMode` but nothing armed it, so isSecuredMode()
+    // stayed false and the effect gate was dormant). Arm secured mode + the
+    // verifier from env, then mint the effect capability ONLY for a body that
+    // passes the approval gate — the same formula the scheduler + composition
+    // use. Unsecured → true (gate dormant); secured + unapproved → false →
+    // every effectful op refused at dispatch, "regardless of method".
+    if (envConfig.securedMode === true) {
+      setSecuredMode(true);
+      const pubFile = envConfig.approvalPublicKeyFile ?? join(homedir(), ".skillscript", "approval.pub");
+      if (existsSync(pubFile)) setApprovalPublicKey(await readFile(pubFile, "utf8"));
+    }
+    const effectsAuthorized = !isSecuredMode() || evaluateApprovalGate(source).ok;
     const result = await execute(compiled.parsed, compiled.resolvedVariables, compiled.targetOrder, {
       registry,
+      effectsAuthorized,
       ...(opts.mechanical ? { mechanical: true } : {}),
       ...(traceMode !== undefined ? { trace: { mode: traceMode } } : {}),
       ...(traceStore !== undefined ? { traceStore } : {}),

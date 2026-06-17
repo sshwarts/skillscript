@@ -56,9 +56,12 @@ describe("v3 Ed25519 — sign / verify roundtrip", () => {
 });
 
 describe("v3 — tamper-evidence + forgery resistance", () => {
+  // v1.0 — tamper-evidence + forgery resistance are SECURED-mode properties
+  // (keyed approval); unsecured mode is unkeyed by design, so these arm secured.
   it("editing the body after signing invalidates the signature", () => {
     const { publicKeyPem, privateKeyPem } = generateApprovalKeypair();
     setApprovalPublicKey(publicKeyPem);
+    setSecuredMode(true);
     const stamped = stampApprovalEd25519(SKILL, privateKeyPem);
     const tampered = stamped.replace('hello   world', 'malicious');
     expect(evaluateApprovalGate(tampered).ok).toBe(false);
@@ -68,6 +71,7 @@ describe("v3 — tamper-evidence + forgery resistance", () => {
     const a = generateApprovalKeypair();
     const b = generateApprovalKeypair();
     setApprovalPublicKey(a.publicKeyPem); // runtime trusts key A
+    setSecuredMode(true);
     const stampedWithB = stampApprovalEd25519(SKILL, b.privateKeyPem); // attacker signs with B
     expect(evaluateApprovalGate(stampedWithB).ok).toBe(false);
   });
@@ -75,6 +79,7 @@ describe("v3 — tamper-evidence + forgery resistance", () => {
   it("v3 verification fails gracefully when no public key is configured", () => {
     const { privateKeyPem } = generateApprovalKeypair();
     setApprovalPublicKey(null);
+    setSecuredMode(true);
     const stamped = stampApprovalEd25519(SKILL, privateKeyPem);
     const r = evaluateApprovalGate(stamped);
     expect(r.ok).toBe(false);
@@ -112,6 +117,10 @@ describe("mode-aware messaging", () => {
   });
 
   it("missing-token message does NOT leak the token format", () => {
+    // A naked Approved is only REFUSED in secured mode (unsecured = unkeyed,
+    // accepted); the no-leak guard is on that secured refusal message.
+    setApprovalPublicKey(generateApprovalKeypair().publicKeyPem);
+    setSecuredMode(true);
     const naked = SKILL.replace("# Status: Draft", "# Status: Approved");
     const r = evaluateApprovalGate(naked);
     expect(r.ok).toBe(false);

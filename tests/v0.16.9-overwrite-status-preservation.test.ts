@@ -102,16 +102,17 @@ describe("v0.16.9 — overwrite-status preservation (FilesystemSkillStore)", () 
     expect(meta.status).toBe("Approved");
   });
 
-  it("Approved body on overwrite — approval token is re-stamped when persisted Approved (existing auto-stamp path preserved)", async () => {
+  it("Approved body on overwrite — stays Approved as a bare header (unkeyed; v1 retired)", async () => {
     const dir = mkdtempSync(join(tmpdir(), "v0169-approved-stamp-preserved-"));
     const store = new FilesystemSkillStore(dir);
     await store.store("p7", APPROVED_BODY);
     // Overwrite with same Approved body. Persisted stays Approved (preserved);
-    // approval token re-stamped on the rewritten body so hash matches.
+    // v1.0 Gate #7 — unsecured approval is unkeyed, so it's a bare header, no
+    // token minted.
     const info = await store.store("p7", APPROVED_BODY);
     expect(info.status).toBe("Approved");
     const loaded = await store.load("p7");
-    expect(loaded.source).toMatch(/^# Status: Approved v\d+:[a-f0-9]+/m);
+    expect(loaded.source).toMatch(/^# Status: Approved\s*$/m);
   });
 
   it("Disabled status preserved across overwrite (symmetric — applies to all transition directions)", async () => {

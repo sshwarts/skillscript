@@ -1,5 +1,5 @@
 # Skill: classify-support-ticket
-# Status: Approved v1:ae27d3f9
+# Status: Draft
 # Autonomous: true
 # Description: Read an incoming support ticket and route it: severity-1 tickets get paged to ops-channel, billing tickets get tagged for finance review, everything else gets a draft reply queued for human review
 # Vars: TICKET_TEXT, TICKET_ID

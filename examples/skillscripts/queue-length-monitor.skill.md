@@ -1,5 +1,5 @@
 # Skill: queue-length-monitor
-# Status: Approved v1:c6bc06df
+# Status: Draft
 # Description: Count pending items in a queue and alert when the count exceeds threshold. Requires `cat` on the operator's shell allowlist (default-deny: a non-allowlisted binary is refused).
 # Vars: QUEUE_PATH=/var/queue/pending.json, THRESHOLD=10
 # Triggers: cron: */5 * * * *

@@ -14,7 +14,7 @@ import type {
 } from "./types.js";
 import { VALID_SKILL_STATUSES, isSkillStatus } from "./types.js";
 import { SkillNotFoundError, VersionNotFoundError, StorageConflictError, ApprovalRejectedError } from "../errors.js";
-import { stampApprovalToken, extractStatusFromBody, isSecuredMode, evaluateApprovalGate } from "../approval.js";
+import { extractStatusFromBody, isSecuredMode, evaluateApprovalGate } from "../approval.js";
 import { parse } from "../parser.js";
 
 const CONTRACT_VERSION = "1.0.0";
@@ -254,13 +254,12 @@ export class FilesystemSkillStore implements SkillStore {
         }
         // else: body carries a valid v3 signature → keep Approved as-is (no stamp).
       } else {
-        // Unsecured (legacy) — v0.9.1 v1 auto-stamp. Ensure the header says
-        // Approved (caller may have passed metadata.status with a Draft body),
-        // then stamp the v1 token onto the canonical body shape.
-        if (finalExtracted === null || finalExtracted.status !== "Approved") {
-          bodyToWrite = rewriteStatusHeader(bodyToWrite, "Approved");
-        }
-        bodyToWrite = stampApprovalToken(bodyToWrite);
+        // Unsecured — approval is UNKEYED (v1.0 Gate #7): store a bare
+        // `# Status: Approved` header. The gate accepts it, no token is minted,
+        // and any incoming token is stripped (v1 hash-stamps are retired; a
+        // stray token would only mislead). rewriteStatusHeader with no token
+        // arg produces the bare header.
+        bodyToWrite = rewriteStatusHeader(bodyToWrite, "Approved");
       }
     }
 
@@ -386,7 +385,9 @@ export class FilesystemSkillStore implements SkillStore {
         }
         updated = source; // already validly signed + Approved — keep as-is
       } else {
-        updated = stampApprovalToken(rewriteStatusHeader(source, "Approved"));
+        // Unsecured — approval is unkeyed (v1.0 Gate #7): a bare
+        // `# Status: Approved` header is sufficient; no token minted.
+        updated = rewriteStatusHeader(source, "Approved");
       }
     } else {
       updated = rewriteStatusHeader(source, status);
