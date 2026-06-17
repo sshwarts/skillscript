@@ -136,3 +136,45 @@ pre.skill-source { white-space: pre-wrap; word-break: break-word; }
   border-left-color: #c4cad0;
 }
 .security-signals small { color: #6c757d; }
+
+/* v1.0 Gate #7 — secured-mode banner + approval queue */
+#secured-banner:empty { display: none; }
+.banner {
+  margin: 0 24px 16px;
+  padding: 10px 14px;
+  border-radius: 6px;
+  font-size: 13px;
+  line-height: 1.5;
+}
+.banner code { background: rgba(0,0,0,0.06); padding: 1px 5px; border-radius: 3px; }
+.banner-secured { background: #eef4ff; border: 1px solid #b9ccf0; color: #1a3a6b; }
+.banner-error   { background: #fdecea; border: 1px solid #f0b4ad; color: #8b1d1d; }
+
+.approve-panel {
+  background: #f6f8fa;
+  border: 1px solid #e6e8eb;
+  border-radius: 6px;
+  padding: 12px 14px;
+  margin-top: 4px;
+  max-width: 640px;
+}
+.approve-panel-head { font-weight: 600; margin-bottom: 4px; }
+.approve-panel p { margin: 4px 0 8px; color: #4a5158; font-size: 0.92em; }
+.approve-cmd {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 4px;
+}
+.approve-cmd code {
+  background: #1a1d21;
+  color: #e6e8eb;
+  padding: 6px 10px;
+  border-radius: 4px;
+  font-size: 12px;
+  flex: 0 1 auto;
+}
+.copy-btn {
+  font-size: 11px;
+  padding: 4px 8px;
+}

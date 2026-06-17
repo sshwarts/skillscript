@@ -18,7 +18,7 @@ import {
 } from "./composition.js";
 import { helpResponse } from "./help-content.js";
 import { RUNTIME_VERSION } from "./version.js";
-import { evaluateApprovalGate } from "./approval.js";
+import { evaluateApprovalGate, isSecuredMode, hasApprovalPublicKey } from "./approval.js";
 import { forceDraftStatus } from "./connectors/skill-store-mcp.js";
 
 /**
@@ -620,7 +620,7 @@ export class McpServer {
             type: "array",
             items: {
               type: "string",
-              enum: ["localModels", "mcpConnectors", "mcpConnectorClasses", "dataStores", "skillStores", "agentConnectors", "shellExecution", "runtimeVersion", "runtimeMode", "triggersFilePath"],
+              enum: ["localModels", "mcpConnectors", "mcpConnectorClasses", "dataStores", "skillStores", "agentConnectors", "shellExecution", "securedApproval", "runtimeVersion", "runtimeMode", "triggersFilePath"],
             },
             description: "Filter which categories to return. Omit for all.",
           },
@@ -1119,6 +1119,20 @@ export class McpServer {
       out["mcpConnectorClasses"] = listKnownConnectorClasses();
     }
     if (want("agentConnectors")) out["agentConnectors"] = reg ? await Promise.all(reg.listAgentConnectors().map((e) => describeEntry(e))) : [];
+    if (want("securedApproval")) {
+      // v1.0 Gate #7 — secured-mode state for the dashboard approval queue.
+      // When `enabled`, the runtime cannot grant approval itself (it holds no
+      // private key); approval is an out-of-band operator action via
+      // `skillfile approve`. The dashboard surfaces the review queue + command
+      // rather than an in-page approve button (the server-as-signer model is
+      // deliberately off the table — privilege separation keeps the key off the
+      // network-facing process). `public_key_present` tells the UI whether a
+      // verifier is wired (armed) vs secured-but-unkeyed (misconfiguration).
+      out["securedApproval"] = {
+        enabled: isSecuredMode(),
+        public_key_present: hasApprovalPublicKey(),
+      };
+    }
     if (want("shellExecution")) {
       // v0.19.12 — accurate allowlist reporting (closes Perry's
       // `7395b8af` discovery-surface bug). Pre-v0.19.12 this surface

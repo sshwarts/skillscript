@@ -13,6 +13,8 @@ const state = {
   metrics: null,
   capabilities: null,
   blockedShellAttempts: null,
+  // v1.0 Gate #7 — { enabled, public_key_present } or null (pre-Gate-#7 server).
+  securedApproval: null,
   lastUpdate: null,
 };
 
@@ -50,7 +52,7 @@ async function refresh() {
       callTool("skill_list", { filter: { audience: "all" } }),
       callTool("list_triggers", {}),
       callTool("health_metrics", {}),
-      callTool("runtime_capabilities", { include: ["mcpConnectors", "mcpConnectorClasses", "localModels", "dataStores", "skillStores", "agentConnectors", "runtimeVersion"] }),
+      callTool("runtime_capabilities", { include: ["mcpConnectors", "mcpConnectorClasses", "localModels", "dataStores", "skillStores", "agentConnectors", "securedApproval", "runtimeVersion"] }),
       // v0.18.9 — blocked shell attempts for the Security view's
       // observe→promote loop. Graceful: pre-v0.18.9 servers don't have
       // this tool; catch returns null and the Security view degrades.
@@ -64,8 +66,11 @@ async function refresh() {
     state.triggers = triggers;
     state.metrics = metrics;
     state.capabilities = capabilities;
+    // v0.9.0+ servers may omit securedApproval (pre-Gate-#7) → null = "unsecured".
+    state.securedApproval = capabilities?.securedApproval ?? null;
     state.blockedShellAttempts = blocked;
     state.lastUpdate = ts;
+    renderSecuredBanner();
     document.getElementById("poll-status").textContent = `last updated ${ts.toLocaleTimeString()}`;
     renderCurrentView();
   } catch (err) {
@@ -78,7 +83,141 @@ function startPolling() {
   pollTimer = setInterval(refresh, POLL_INTERVAL_MS);
 }
 
+// ─── Secured mode (v1.0 Gate #7) ────────────────────────────────────────────
+// When the runtime runs in secured mode it holds no approval private key — it
+// can VERIFY approvals (public key) but cannot GRANT them. Approval is an
+// out-of-band operator action: `skillfile approve <name>` reads the operator's
+// private key at the terminal and signs. The dashboard is a REVIEW surface, not
+// a SIGNING surface (privilege separation keeps the key off this process).
+
+function securedModeOn() {
+  return state.securedApproval?.enabled === true;
+}
+
+// The exact command an operator runs to approve a skill. Kept in one place so
+// the queue and the detail view stay consistent.
+function approveCommand(name) {
+  return `skillfile approve ${shellQuote(name)}`;
+}
+function shellQuote(s) {
+  return /^[A-Za-z0-9._-]+$/.test(s) ? s : `'${String(s).replace(/'/g, "'\\''")}'`;
+}
+
+function renderSecuredBanner() {
+  const el = document.getElementById("secured-banner");
+  if (!el) return;
+  const sa = state.securedApproval;
+  if (sa?.enabled !== true) { el.innerHTML = ""; return; }
+  if (sa.public_key_present === false) {
+    // Secured but no verifier wired — a misconfiguration: every effectful op is
+    // refused and no approval can verify. Loud, because nothing will run.
+    el.innerHTML = `<div class="banner banner-error">
+      <strong>Secured mode is ON but no approval public key is wired.</strong>
+      Every effectful op is refused and no skill can be approved. Set
+      <code>SKILLSCRIPT_APPROVAL_PUBLIC_KEY_FILE</code> (and provision a keypair)
+      then restart the runtime.
+    </div>`;
+    return;
+  }
+  el.innerHTML = `<div class="banner banner-secured">
+    <strong>🔒 Secured mode</strong> — unapproved skills cannot execute any
+    effectful op. Approval requires the operator's key:
+    <code>skillfile approve &lt;name&gt;</code> at the terminal. The dashboard
+    reviews; it does not sign.
+  </div>`;
+}
+
 // ─── Views ──────────────────────────────────────────────────────────────────
+
+// v1.0 Gate #7 — the approval queue. Surfaces every Draft skill awaiting
+// operator approval, each with a glance of its security signals so the operator
+// can triage WHAT to review before opening the body. The "approve" action is
+// deliberately a copyable command, not a button: signing happens at the
+// terminal where the operator's private key lives, never on this process.
+async function renderApprovals() {
+  const secured = securedModeOn();
+  // The pending-approval set is Draft skills. NOTE: the shared `state.skills`
+  // poll uses skill_list's default status=Approved filter, so Drafts never land
+  // there — the queue must query them explicitly (audience:all + status:Draft).
+  let drafts = [];
+  try {
+    const catalog = await callTool("skill_list", { filter: { audience: "all", status: "Draft" } });
+    drafts = [...(catalog.receives ?? []), ...(catalog.skills ?? []), ...(catalog.headless ?? [])];
+  } catch (err) {
+    return `<h2>Approvals</h2><section><div class="empty">Failed to load the approval queue: ${esc(err.message)}</div></section>`;
+  }
+  const intro = secured
+    ? `<p>Secured mode is <strong>ON</strong>. Each Draft below is inert — no
+       effectful op will run until it is approved. Review the source, then run
+       the command at a terminal that can read your approval key.</p>`
+    : `<p>Secured mode is <strong>OFF</strong> — Draft skills can be approved
+       in-page from their detail view (the runtime self-stamps). Turn on secured
+       mode (<code>SKILLSCRIPT_SECURED_MODE=true</code>) to require key-signed
+       approval. The queue below still shows what's pending review.</p>`;
+  if (drafts.length === 0) {
+    return `<h2>Approvals</h2><section>${intro}<div class="empty">No skills awaiting approval — every skill is Approved or Disabled.</div></section>`;
+  }
+  // Fetch each draft's source so we can show its security-signal summary inline.
+  // skill_read may fail (load() throws) — degrade that row to "source N/A".
+  const sources = await Promise.all(
+    drafts.map((s) => callTool("skill_read", { name: s.name }).then((r) => r?.source ?? null).catch(() => null)),
+  );
+  const rows = drafts.map((s, i) => {
+    const src = sources[i];
+    const sig = src ? collectSecuritySignals(src) : null;
+    const sigBadges = sig ? approvalSignalBadges(sig) : `<span class="empty">source N/A</span>`;
+    const cmd = approveCommand(s.name);
+    return `
+      <tr>
+        <td><a href="#skill/${encodeURIComponent(s.name)}"><strong>${esc(s.name)}</strong></a><br>
+            <span style="color:#6c757d;font-size:0.85em;">${esc(s.description ?? "—")}</span></td>
+        <td>${sigBadges}</td>
+        <td>
+          <a href="#skill/${encodeURIComponent(s.name)}">Review →</a>
+          ${secured ? `<div class="approve-cmd"><code>${esc(cmd)}</code><button class="copy-btn" onclick="copyText('${esc(cmd).replace(/'/g, "\\'")}', this)">copy</button></div>` : ""}
+        </td>
+      </tr>`;
+  }).join("");
+  return `
+    <h2>Approvals (${drafts.length})</h2>
+    <section>
+      ${intro}
+      <table>
+        <thead><tr><th>Skill</th><th>Security signals</th><th>Action</th></tr></thead>
+        <tbody>${rows}</tbody>
+      </table>
+    </section>
+  `;
+}
+
+// Compact security-signal badges for the queue triage column.
+function approvalSignalBadges(sig) {
+  const b = [];
+  if (sig.writeOps > 0) b.push(`<span class="badge error" title="mutation ops">${sig.writeOps} write</span>`);
+  if (sig.unsafeShell > 0) b.push(`<span class="badge error" title="unsafe bash">${sig.unsafeShell} unsafe</span>`);
+  if (sig.approvedOps > 0) b.push(`<span class="badge error" title="per-op author authorization">${sig.approvedOps} approved=</span>`);
+  if (sig.autonomous) b.push(`<span class="badge error" title="bypasses human-in-loop"># Autonomous</span>`);
+  if (sig.shellOps > 0) b.push(`<span class="badge Draft" title="shell ops${sig.shellBinaries.length ? `: ${sig.shellBinaries.join(", ")}` : ""}">${sig.shellOps} shell</span>`);
+  if (sig.wakeAddresses > 0) b.push(`<span class="badge Draft" title="@session wake">${sig.wakeAddresses} wake</span>`);
+  if (sig.cronTriggers > 0) b.push(`<span class="badge" title="autonomous cron fire">${sig.cronTriggers} cron</span>`);
+  return b.length ? b.join(" ") : `<span class="badge ok">no signals</span>`;
+}
+
+window.copyText = function (text, btn) {
+  const done = () => { if (btn) { const o = btn.textContent; btn.textContent = "copied"; setTimeout(() => { btn.textContent = o; }, 1200); } };
+  if (navigator.clipboard?.writeText) {
+    navigator.clipboard.writeText(text).then(done).catch(() => fallbackCopy(text, done));
+  } else {
+    fallbackCopy(text, done);
+  }
+};
+function fallbackCopy(text, done) {
+  const ta = document.createElement("textarea");
+  ta.value = text; ta.style.position = "fixed"; ta.style.opacity = "0";
+  document.body.appendChild(ta); ta.select();
+  try { document.execCommand("copy"); done(); } catch { /* no-op */ }
+  document.body.removeChild(ta);
+}
 
 function renderOverview() {
   const m = state.metrics;
@@ -198,13 +337,7 @@ async function renderSkillDetail(name) {
         <h2>Status</h2>
         <p>${esc(metadata.description ?? "(no description)")}</p>
         ${approvalBanner}
-        <div style="margin-top: 12px; display: flex; gap: 8px;">
-          ${["Draft", "Approved", "Disabled"].filter((s) => s !== metadata.status || (s === "Approved" && approval && !approval.gate_ok)).map((s) => `
-            <button class="${s === "Disabled" ? "danger" : ""}" onclick="updateStatus('${esc(name)}','${s}')">
-              ${s === "Approved" && metadata.status === "Approved" ? "Re-approve (refresh token)" : `Transition to ${s}`}
-            </button>
-          `).join("")}
-        </div>
+        ${renderStatusActions(name, metadata, approval)}
       </section>
 
       ${source ? renderSecuritySignalsPanel(source) : ""}
@@ -293,6 +426,46 @@ async function renderSkillDetail(name) {
   } catch (err) {
     return `<h2>Skill: ${esc(name)}</h2><section><div class="empty">Failed to load: ${esc(err.message)}</div></section>`;
   }
+}
+
+// Status-transition controls for the skill detail view. The subtlety is
+// Approved: in SECURED mode the runtime can't self-stamp (skill_status →
+// Approved throws ApprovalRejectedError — the key lives at the operator's
+// terminal, not on this process), so we surface the `skillfile approve`
+// command instead of a button that would only error. Draft/Disabled never
+// grant effects, so they stay one-click in both modes.
+function renderStatusActions(name, metadata, approval) {
+  const secured = securedModeOn();
+  const status = metadata.status;
+  const staleApproved = status === "Approved" && approval && !approval.gate_ok;
+
+  // Non-approval transitions (revoke / demote) — always plain buttons.
+  const buttons = ["Draft", "Disabled"]
+    .filter((s) => s !== status)
+    .map((s) => `<button class="${s === "Disabled" ? "danger" : ""}" onclick="updateStatus('${esc(name)}','${esc(s)}')">Transition to ${s}</button>`)
+    .join("");
+
+  // The Approved action. Shown when not-yet-Approved OR stale (needs re-stamp).
+  const needsApprove = status !== "Approved" || staleApproved;
+  let approveBlock = "";
+  if (needsApprove) {
+    if (secured) {
+      const cmd = approveCommand(name);
+      approveBlock = `
+        <div class="approve-panel">
+          <div class="approve-panel-head">${staleApproved ? "Re-approve (body changed since signing)" : "Approve this skill"}</div>
+          <p>Secured mode: approval is signed with the operator's key at a terminal — not from this dashboard. Review the source below, then run:</p>
+          <div class="approve-cmd"><code>${esc(cmd)}</code><button class="copy-btn" onclick="copyText('${esc(cmd).replace(/'/g, "\\'")}', this)">copy</button></div>
+        </div>`;
+    } else {
+      approveBlock = `<button onclick="updateStatus('${esc(name)}','Approved')">${staleApproved ? "Re-approve (refresh token)" : "Transition to Approved"}</button>`;
+    }
+  }
+
+  return `<div style="margin-top: 12px; display: flex; gap: 8px; flex-wrap: wrap; align-items: flex-start;">
+    ${buttons}
+    ${!secured ? approveBlock : ""}
+  </div>${secured ? approveBlock : ""}`;
 }
 
 function renderTriggers() {
@@ -787,6 +960,11 @@ async function renderCurrentView() {
   }
 
   currentView = hash;
+  if (hash === "approvals") {
+    main.innerHTML = "Loading…";
+    main.innerHTML = await renderApprovals();
+    return;
+  }
   switch (hash) {
     case "overview":   main.innerHTML = renderOverview(); break;
     case "skills":     main.innerHTML = renderSkills(); break;
