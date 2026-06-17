@@ -242,7 +242,12 @@ const CORE_PATHS = [
 // runtime_capabilities.shellExecution accurate-reporting rewrite
 // (Perry's `7395b8af` discovery-surface bug). Surface-correctness fixes
 // where new code is structural (try/catch wrappers + small helper closure).
-const NARROW_MAX_LOC = 11500;
+// v1.0-gate7: nudged narrow ceiling 11500 → 11800 for the approval security
+// boundary (Ed25519 v3 credential + complete-mediation capability gate +
+// caller-mint + self-approval/status closure + config/provisioning). Clear,
+// security-critical code; headroom for the Phase-2 approve flow. Per the
+// signal-not-budget rule: nudge for clear code rather than compress to fit.
+const NARROW_MAX_LOC = 11800;
 const NARROW_MAX_FILES = 23;
 const BROAD_INFO_LOC = 9500;
 const BROAD_INFO_FILES = 28;

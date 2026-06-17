@@ -754,16 +754,25 @@ function extractOpConnector(op: SkillOp): string | undefined {
 }
 
 /**
- * v1.0 Gate #7 — the complete effectful (egress/mutation) op set the capability
- * gate covers. `$` = all external MCP dispatch (connector / data_write / data_read
- * / llm); `shell` = process spawn; `file_write` = local mutation; `notify` = agent
- * delivery. Excluded (no egress/mutation): `$set`/`$append` (local vars), `?`/`emit`
- * (transcript), `foreach`/`if` (control flow — their nested ops are each checked),
- * `inline` (compile-resolved + gated at compile), `file_read` (local read).
+ * v1.0 Gate #7 — the complete effectful op set the capability gate covers. The
+ * principle: an unapproved skill must not touch EXTERNAL STATE at all — neither
+ * egress/mutation NOR ingress (a read it can then `emit` back to the caller is an
+ * exfiltration channel; the file_read-then-emit of the operator's private key is
+ * the canonical attack). So every op that crosses the process boundary is gated:
+ *   `$`         — all external MCP dispatch (connector / data_read / data_write / llm)
+ *   `shell`     — process spawn
+ *   `file_read` — reads any host file the runtime can (exfil source) [v1.0 add]
+ *   `file_write`— local mutation
+ *   `notify`    — agent delivery
  * Output-routing delivery is gated separately at the execute() tail.
+ * Excluded (pure compute / transcript, no boundary crossing): `$set`/`$append`
+ * (local vars), `?`/`emit` (transcript of already-known values), `foreach`/`if`
+ * (control flow — nested ops each traverse this check), `inline` (compile-resolved
+ * + gated at compile). Note `emit` stays ungated: emitting a COMPUTED value is
+ * harmless; the exfil risk was the READ feeding it, which is now gated.
  */
 function isEffectfulOpKind(kind: SkillOp["kind"]): boolean {
-  return kind === "$" || kind === "shell" || kind === "file_write" || kind === "notify";
+  return kind === "$" || kind === "shell" || kind === "file_read" || kind === "file_write" || kind === "notify";
 }
 
 async function execOpInner(

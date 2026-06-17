@@ -75,12 +75,12 @@ describe("T7 — distributed code surface", () => {
     expect(out.trim(), `found AMP identifiers: ${out}`).toBe("");
   });
 
-  it("7. narrow-core LOC ceiling holds (< 11500 / 23 files; ..., v0.7.0 → 7150, v0.7.1 → 7250, v0.7.2 → 7550, v0.8.0 → 8200, v0.9.4 → 8300, v0.9.6 → 8550, v0.9.8 → 8650, v0.10 → 9300, v0.13 → 9550, v0.14.1 → 9700, v0.15.0 → 9900, v0.16.x → 10400, v0.17.4 → 10500, v0.18.2 → 10600, v0.18.5 → 10800, v0.18.8 → 11100, v0.19.4 → 11250, v0.19.10 → 11400, v0.19.12 → 11500)", () => {
+  it("7. narrow-core LOC ceiling holds (< 11500 / 23 files; ..., v0.7.0 → 7150, v0.7.1 → 7250, v0.7.2 → 7550, v0.8.0 → 8200, v0.9.4 → 8300, v0.9.6 → 8550, v0.9.8 → 8650, v0.10 → 9300, v0.13 → 9550, v0.14.1 → 9700, v0.15.0 → 9900, v0.16.x → 10400, v0.17.4 → 10500, v0.18.2 → 10600, v0.18.5 → 10800, v0.18.8 → 11100, v0.19.4 → 11250, v0.19.10 → 11400, v0.19.12 → 11500, v1.0-gate7 → 11800)", () => {
     const out = execSync("node scripts/loc-ceiling.mjs", { cwd: REPO_ROOT, encoding: "utf8" });
     const match = /CORE\s+(\d+) LOC across (\d+) files/.exec(out);
     expect(match).not.toBeNull();
     const [, locStr, filesStr] = match!;
-    expect(Number(locStr)).toBeLessThan(11500);
+    expect(Number(locStr)).toBeLessThan(11800);
     expect(Number(filesStr)).toBeLessThan(23);
   });
 
