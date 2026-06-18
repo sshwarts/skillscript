@@ -15,6 +15,8 @@ const state = {
   blockedShellAttempts: null,
   // v1.0 Gate #7 — { enabled, public_key_present } or null (pre-Gate-#7 server).
   securedApproval: null,
+  // v0.20.2 — true when the dashboard can sign in-browser (passcode unlock wired).
+  dashboardSigning: false,
   lastUpdate: null,
 };
 
@@ -68,6 +70,8 @@ async function refresh() {
     state.capabilities = capabilities;
     // v0.9.0+ servers may omit securedApproval (pre-Gate-#7) → null = "unsecured".
     state.securedApproval = capabilities?.securedApproval ?? null;
+    // v0.20.2 — can the dashboard sign in-browser? (passcode unlock wired)
+    state.dashboardSigning = await fetch("/signing-status").then((r) => r.json()).then((j) => j?.enabled === true).catch(() => false);
     state.blockedShellAttempts = blocked;
     state.lastUpdate = ts;
     renderSecuredBanner();
@@ -188,7 +192,9 @@ async function renderApprovals() {
         <td>${sigBadges}</td>
         <td>
           <a href="#skill/${encodeURIComponent(s.name)}">Review →</a>
-          ${secured ? `<div class="approve-cmd"><code>${esc(cmd)}</code><button class="copy-btn" onclick="copyText('${esc(cmd).replace(/'/g, "\\'")}', this)">copy</button></div>` : ""}
+          ${!secured ? "" : (state.dashboardSigning
+            ? `<button class="primary" onclick="approveInBrowser('${esc(s.name).replace(/'/g, "\\'")}')">Approve</button>`
+            : `<div class="approve-cmd"><code>${esc(cmd)}</code><button class="copy-btn" onclick="copyText('${esc(cmd).replace(/'/g, "\\'")}', this)">copy</button></div>`)}
         </td>
       </tr>`;
   }).join("");
@@ -216,6 +222,38 @@ function approvalSignalBadges(sig) {
   if (sig.cronTriggers > 0) b.push(`<span class="badge" title="autonomous cron fire">${sig.cronTriggers} cron</span>`);
   return b.length ? b.join(" ") : `<span class="badge ok">no signals</span>`;
 }
+
+// v0.20.2 — in-browser approval. Click Approve → POST /approve. If the session
+// isn't unlocked, prompt for the passcode once (POST /unlock), then retry. The
+// unlock is session-scoped server-side, so subsequent approvals don't re-prompt.
+async function postJson(path, body) {
+  return fetch(path, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
+}
+
+window.approveInBrowser = async function (name) {
+  try {
+    let res = await postJson("/approve", { name });
+    if (res.status === 401) {
+      const body = await res.json().catch(() => ({}));
+      if (body.needs_passcode) {
+        const pass = window.prompt(`Enter the approval passcode to sign '${name}'.\n(Unlocks signing for ~15 min — you can approve more without re-entering.)`);
+        if (!pass) return;
+        const unlock = await postJson("/unlock", { passcode: pass });
+        if (unlock.status !== 200) { alert("Incorrect passcode."); return; }
+        res = await postJson("/approve", { name });
+      }
+    }
+    const out = await res.json().catch(() => ({}));
+    if (res.status === 200 && out.approved) {
+      await refresh();
+      renderCurrentView();
+    } else {
+      alert(`Approve failed: ${out.error || ("HTTP " + res.status)}`);
+    }
+  } catch (err) {
+    alert(`Approve failed: ${err.message}`);
+  }
+};
 
 window.copyText = function (text, btn) {
   const done = () => { if (btn) { const o = btn.textContent; btn.textContent = "copied"; setTimeout(() => { btn.textContent = o; }, 1200); } };
@@ -463,7 +501,15 @@ function renderStatusActions(name, metadata, approval) {
   const needsApprove = status !== "Approved" || staleApproved;
   let approveBlock = "";
   if (needsApprove) {
-    if (secured) {
+    if (secured && state.dashboardSigning) {
+      // v0.20.2 — in-browser signing wired: click to approve (passcode-unlocked).
+      approveBlock = `
+        <div class="approve-panel">
+          <div class="approve-panel-head">${staleApproved ? "Re-approve (body changed since signing)" : "Approve this skill"}</div>
+          <p>Signs with the operator's key after a one-time passcode unlock (review the source below first).</p>
+          <button class="primary" onclick="approveInBrowser('${esc(name).replace(/'/g, "\\'")}')">Approve</button>
+        </div>`;
+    } else if (secured) {
       const cmd = approveCommand(name);
       approveBlock = `
         <div class="approve-panel">

@@ -29,6 +29,10 @@ beforeAll(() => {
     globalThis.renderStatusActions = renderStatusActions;
     globalThis.approvalSignalBadges = approvalSignalBadges;
     globalThis.renderApprovals = renderApprovals;
+    globalThis.approveInBrowser = approveInBrowser;
+    // Make the refresh/render side-effects of approveInBrowser inert in tests.
+    refresh = async () => {};
+    renderCurrentView = () => {};
   `;
   (0, eval)(src + epilogue);
 });
@@ -149,5 +153,60 @@ describe("renderApprovals — queue = Drafts + stale Approved (gate_ok:false)", 
     expect(html).toMatch(/Approvals \(2\)/);
     expect(html).toContain("re-approval needed"); // the stale-Approved badge
     expect(html).toContain("skillfile approve legacy-v1");
+  });
+});
+
+describe("approveInBrowser — passcode session-unlock flow (v0.20.2)", () => {
+  it("happy path: POSTs /approve and succeeds when already unlocked (no prompt)", async () => {
+    const calls: string[] = [];
+    let prompted = false;
+    g.window.prompt = () => { prompted = true; return "sesame"; };
+    g.window.alert = () => {};
+    g.fetch = async (url: string, opts: { body: string }) => {
+      calls.push(url);
+      if (url === "/approve") {
+        return { status: 200, json: async () => ({ approved: true, name: JSON.parse(opts.body).name, version: "abc" }) };
+      }
+      return { status: 200, json: async () => ({}) };
+    };
+    await g.approveInBrowser("danger");
+    expect(calls).toEqual(["/approve"]);
+    expect(prompted, "should NOT prompt when already unlocked").toBe(false);
+  });
+
+  it("needs-passcode path: 401 → prompt → /unlock → retry /approve", async () => {
+    const calls: Array<{ url: string; body: unknown }> = [];
+    g.window.prompt = () => "sesame";
+    g.window.alert = () => {};
+    let approveCount = 0;
+    g.fetch = async (url: string, opts: { body: string }) => {
+      calls.push({ url, body: JSON.parse(opts.body) });
+      if (url === "/approve") {
+        approveCount += 1;
+        if (approveCount === 1) return { status: 401, json: async () => ({ approved: false, needs_passcode: true }) };
+        return { status: 200, json: async () => ({ approved: true, version: "v" }) };
+      }
+      if (url === "/unlock") return { status: 200, json: async () => ({ unlocked: true }) };
+      return { status: 200, json: async () => ({}) };
+    };
+    await g.approveInBrowser("danger");
+    expect(calls.map((c) => c.url)).toEqual(["/approve", "/unlock", "/approve"]);
+    expect((calls[1].body as { passcode: string }).passcode).toBe("sesame");
+  });
+
+  it("wrong passcode: /unlock 401 → alerts, does NOT retry approve", async () => {
+    const calls: string[] = [];
+    let alerted = false;
+    g.window.prompt = () => "wrong";
+    g.window.alert = () => { alerted = true; };
+    g.fetch = async (url: string) => {
+      calls.push(url);
+      if (url === "/approve") return { status: 401, json: async () => ({ needs_passcode: true }) };
+      if (url === "/unlock") return { status: 401, json: async () => ({ unlocked: false }) };
+      return { status: 200, json: async () => ({}) };
+    };
+    await g.approveInBrowser("danger");
+    expect(calls).toEqual(["/approve", "/unlock"]); // no second /approve
+    expect(alerted).toBe(true);
   });
 });
