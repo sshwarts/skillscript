@@ -9,8 +9,15 @@
  */
 import type { SkillCatalog, SkillEntry, SkillListFilter, SkillStore } from "./connectors/types.js";
 import { parse } from "./parser.js";
-import type { TriggerDecl, OutputDecl } from "./parser.js";
+import type { ParsedSkill, TriggerDecl, OutputDecl } from "./parser.js";
 import { evaluateApprovalGate } from "./approval.js";
+import { extractEffectfulFootprint } from "./skill-surface.js";
+
+/** Empty effectful footprint — the parse-fail fallback (no AST to walk). */
+const EMPTY_FOOTPRINT: SkillEntry["effectful_footprint"] = {
+  connectors: [], builtins: [], shell_binaries: [],
+  unsafe_shell: 0, file_writes: 0, file_reads: 0, notifies: 0,
+};
 
 const DEFAULT_AUDIENCE: SkillListFilter["audience"] = "agent";
 const DEFAULT_STATUS = "Approved";
@@ -81,6 +88,9 @@ export async function buildSkillCatalog(
         vars: [],
         output: [],
         triggers: [],
+        returns: [],
+        requires: [],
+        effectful_footprint: EMPTY_FOOTPRINT,
         ...(meta.author !== undefined ? { author: meta.author } : { author: null }),
       });
       continue;
@@ -110,7 +120,7 @@ export function buildEntry(
   name: string,
   description: string,
   status: SkillEntry["status"],
-  parsed: { outputs: OutputDecl[]; triggers: TriggerDecl[]; vars: Array<{ name: string; default?: string; required?: boolean }> },
+  parsed: ParsedSkill,
   author?: string,
 ): SkillEntry {
   return {
@@ -124,6 +134,12 @@ export function buildEntry(
     vars: renderVars(parsed.vars),
     output: renderOutputs(parsed.outputs),
     triggers: renderTriggers(parsed.triggers),
+    // v0.21.0 — preflight contract mirror. returns/requires straight off the
+    // frontmatter; effectful_footprint walks the AST (same op enumeration the
+    // capability gate uses). All free — the source is already parsed.
+    returns: parsed.returns,
+    requires: parsed.requires,
+    effectful_footprint: extractEffectfulFootprint(parsed),
     // v0.18.6 — surface author when the substrate populated it; null
     // when not (substrate-neutral graceful degradation).
     author: author ?? null,

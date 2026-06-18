@@ -265,6 +265,49 @@ describe("v0.9.8 — audience filter + empty-group stability", () => {
   });
 });
 
+describe("v0.21.0 — preflight contract mirror on skill_list entries", () => {
+  let dir: string;
+  let store: FilesystemSkillStore;
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), "v021-mirror-"));
+    store = new FilesystemSkillStore(join(dir, "skills"));
+  });
+  afterEach(() => rmSync(dir, { recursive: true, force: true }));
+
+  it("returns / requires / effectful_footprint land on the entry (parity with skill_preflight)", async () => {
+    // An effectful skill: declares an input + an export + a capability need, and
+    // touches a connector + a file_write + a bare builtin.
+    await store.store("gather",
+      "# Skill: gather\n# Status: Approved\n# Vars: AREA\n# Returns: SUMMARY\n# Requires: user-var:API_TOKEN -> TOKEN\n" +
+      "run:\n    $ youtrack.search query=\"x\" -> R\n    file_write(path=\"/tmp/x\", content=\"y\", approved=\"a\")\n    $ data_write key=\"k\" value=\"v\"\n    $set SUMMARY = \"ok\"\ndefault: run\n");
+    const catalog = await buildSkillCatalog(store);
+    // No agent/template output + no triggers → inference branch puts it in `skills`.
+    const entry = catalog.skills?.find((e) => e.name === "gather");
+    expect(entry).toBeDefined();
+    expect(entry!.vars.map((v) => v.name)).toEqual(["AREA"]);
+    expect(entry!.returns).toEqual(["SUMMARY"]);
+    expect(entry!.requires).toEqual([
+      { namespace: "user-var", key: "API_TOKEN", target: "TOKEN", fallback: null, raw: "user-var:API_TOKEN -> TOKEN" },
+    ]);
+    expect(entry!.effectful_footprint.connectors).toEqual(["youtrack"]);
+    expect(entry!.effectful_footprint.builtins).toEqual(["data_write"]);
+    expect(entry!.effectful_footprint.file_writes).toBe(1);
+  });
+
+  it("a pure skill reports empty contract facets (no returns/requires, zero footprint)", async () => {
+    await store.store("pure", "# Skill: pure\n# Status: Approved\nt:\n    emit(text=\"hi\")\ndefault: t\n");
+    const catalog = await buildSkillCatalog(store);
+    const entry = catalog.skills?.find((e) => e.name === "pure");
+    expect(entry).toBeDefined();
+    expect(entry!.returns).toEqual([]);
+    expect(entry!.requires).toEqual([]);
+    expect(entry!.effectful_footprint).toEqual({
+      connectors: [], builtins: [], shell_binaries: [],
+      unsafe_shell: 0, file_writes: 0, file_reads: 0, notifies: 0,
+    });
+  });
+});
+
 describe("v0.9.8 — Q2 footnote: invocation is independent of grouping", () => {
   it("agent-invokable Augmenting still surfaces in `receives` (output-kind-driven)", async () => {
     const dir = mkdtempSync(join(tmpdir(), "v098-q2-"));

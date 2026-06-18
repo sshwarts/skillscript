@@ -386,6 +386,31 @@ export interface SkillEntry {
     | { kind: "cron"; expression: string }
     | { kind: "event"; event_name: string }
   >;
+  /**
+   * v0.21.0 — preflight contract mirror. The same three contract facets
+   * `skill_preflight` reports, surfaced on every catalog entry so an agent
+   * reads a skill's full I/O + capability + effect contract from ONE
+   * `skill_list` pass, without a per-skill `skill_preflight` round-trip. The
+   * source is already loaded + parsed to build the entry, so computing these
+   * is free.
+   *
+   * `returns` — exported vars (`# Returns:`), spread onto a caller's scope on
+   * `execute_skill`. `requires` — capability requirements (`# Requires:`).
+   * `effectful_footprint` — the static "what does it touch" summary (distinct
+   * MCP connectors, built-in `$` ops, shell binaries; counts of unsafe-shell /
+   * file-write / file-read / notify ops). Derived from the AST, no execution.
+   */
+  returns: string[];
+  requires: Array<{ namespace: "user-var" | "system-var"; key: string; target: string; fallback: string | null; raw: string }>;
+  effectful_footprint: {
+    connectors: string[];
+    builtins: string[];
+    shell_binaries: string[];
+    unsafe_shell: number;
+    file_writes: number;
+    file_reads: number;
+    notifies: number;
+  };
 }
 
 export interface SkillListFilter {
