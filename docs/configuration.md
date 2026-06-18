@@ -54,14 +54,20 @@ The CLI auto-loads `$SKILLSCRIPT_HOME/.env` at startup and populates `process.en
 | `SKILLSCRIPT_HOME` | Config root (default `~/.skillscript`) | shell-set only — read before `.env` loads |
 | `SKILLSCRIPT_FORCE_ALWAYS_DRAFT=true` | Force outside-MCP `skill_write` to Draft; closes the agent-self-approval path | env > config > default `false` |
 | `SKILLSCRIPT_ENABLE_UNSAFE_SHELL=true` | Permit `shell(unsafe=true)` ops (syntax-scope axis) | env > config > default `false` |
-| `SKILLSCRIPT_SHELL_ALLOWLIST=curl,git,jq` | Comma-separated list of binaries reachable via `shell(...)` ops (binary-scope axis). **Default-deny** when unset — BREAKING from v0.18.7. Run `skillfile shell-audit` pre-upgrade to discover your corpus's set. v0.18.9 — honored on both CLI and programmatic-`bootstrap()` paths; explicit `bootstrap({ shellAllowlist: [...] })` (including `[]` deny-all) wins over env. See [adopter-playbook](adopter-playbook.md) § "Programmatic bootstrap path" for the precedence table. | `bootstrap()` opt > env > config > default-deny |
+| `SKILLSCRIPT_SHELL_ALLOWLIST=curl,git,jq` | Comma-separated list of binaries reachable via `shell(...)` ops (binary-scope axis). **Default-deny** when unset — run `skillfile shell-audit` to discover your corpus's set. Honored on both CLI and programmatic-`bootstrap()` paths; explicit `bootstrap({ shellAllowlist: [...] })` (including `[]` deny-all) wins over env. See [adopter-playbook](adopter-playbook.md) § "Programmatic bootstrap path" for the precedence table. | `bootstrap()` opt > env > config > default-deny |
+| `SKILLSCRIPT_FS_ALLOWLIST=/srv/work,/var/events` | Comma-separated roots under which `file_read` / `file_write` may operate (path-scope axis). **Default-deny** when unset — every file op refused. Canonicalized before the check, so `..` / symlink escapes are closed. **Keep secret / key directories OUT.** | env > config > default-deny |
+| `SKILLSCRIPT_SECURED_MODE=true` | Enforce the approval boundary: only Ed25519-signed skills perform effectful ops; unapproved or tampered skills are refused regardless of dispatch path (CLI / cron / `/event` / MCP / composition). Default `false` — a bare `# Status: Approved` is sufficient (unkeyed). See [adopter-playbook](adopter-playbook.md) § "Approval + secured mode". | `bootstrap()` opt > env > config > default `false` |
+| `SKILLSCRIPT_APPROVAL_KEY_FILE=<path>` | Operator **private** signing key — read only by the approve flow, never on the execution hot path. Default `~/.config/skillscript/approval.key` (deliberately outside `SKILLSCRIPT_HOME`). Auto-provisioned `0600` on first secured-mode start if absent. | env > default |
+| `SKILLSCRIPT_APPROVAL_PUBLIC_KEY_FILE=<path>` | Operator **public** verification key (non-secret) — read by the runtime to verify signatures on every execution. Default `~/.config/skillscript/approval.pub`. | env > default |
+| `SKILLSCRIPT_APPROVAL_PASSCODE=<passcode>` | Opt into in-browser dashboard approval: when set, the dashboard signs server-side after a one-time passcode unlock (session-scoped, ~15-min idle TTL). Unset = dashboard is review-only; signing only via `skillfile approve` at a terminal. | env > default unset |
+| `SKILLSCRIPT_DASHBOARD_AUTH_TOKEN=<token>` | Gate the dashboard SPA + `/rpc` behind a token (`?token=` / cookie / `Authorization: Bearer`). Network hygiene for a dashboard reachable beyond localhost — not a forgery boundary. (`/event` keeps its own bearer gate.) | env > default unset |
 | `SKILLSCRIPT_PORT=8080` | Dashboard / serve HTTP port | `--port` flag > env > config > default `7878` |
 | `SKILLSCRIPT_HOST=0.0.0.0` | Bind address | `--host` flag > env > config > default `127.0.0.1` |
 | `SKILLSCRIPT_MCP_CALLER_IDENTITY_HEADER=X-Agent-Id` | Inbound caller-identity header name (multi-agent MCP hosts only — see [adopter playbook](adopter-playbook.md)) | env > config > default unset |
 | `SKILLSCRIPT_POLL_INTERVAL_SECONDS=30` | Scheduler tick / poll interval (seconds) | env > config > default `30` |
 | `SKILLSCRIPT_ABSOLUTE_TIMEOUT_MS=300000` | Runtime fallback timeout (ms) when no per-op / skill / connector default applies | env > config > default `300000` (5 min) |
 | `SKILLSCRIPT_MAX_RECURSION_DEPTH=10` | Composition recursion depth ceiling for `$ execute_skill` chains | env > config > default `10` |
-| `SKILLSCRIPT_EVENT_INGRESS_ENABLED=true` | Mount `POST /event` for v0.19.0 event-triggered skills. Default `false` — route returns 404 when not enabled. Shares `SKILLSCRIPT_PORT` with dashboard/RPC (one HTTP server). | env > default `false` |
+| `SKILLSCRIPT_EVENT_INGRESS_ENABLED=true` | Mount `POST /event` for event-triggered skills. Default `false` — route returns 404 when not enabled. Shares `SKILLSCRIPT_PORT` with dashboard/RPC (one HTTP server). | env > default `false` |
 | `SKILLSCRIPT_EVENT_INGRESS_AUTH_TOKEN=<token>` | Bearer-token auth for `POST /event`. When set, every event POST requires `Authorization: Bearer <token>`; 401 otherwise. Default unset = open-internally (still gated by bind address). | env > default unset |
 | `OLLAMA_BASE_URL=http://...` | Ollama endpoint for LocalModel (default `http://localhost:11434`) | env > built-in default |
 
@@ -325,7 +331,7 @@ Each entry needs:
 - **`"newline"`** — one JSON-RPC message per line, newline-delimited. **This is what `mcp-remote` (the npm package) and most spec-compliant MCP stdio servers use.** Recommended for almost all adopters.
 - **`"lsp"`** (legacy default) — `Content-Length: N\r\n\r\n<body>` per the LSP convention. Only set this if your specific MCP server explicitly uses LSP-style framing.
 
-With the wrong framing, the connector hangs to `init_timeout` because the child can't parse the request. **Set `framing` explicitly in your connector config to avoid the silent hang** — the v0.19.9 init-timeout error message now names framing as a likely cause, but the explicit setting is the durable fix.
+With the wrong framing, the connector hangs to `init_timeout` because the child can't parse the request. **Set `framing` explicitly in your connector config to avoid the silent hang** — the init-timeout error message names framing as a likely cause, but the explicit setting is the durable fix.
 
 ### Credential discipline
 
