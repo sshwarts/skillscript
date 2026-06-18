@@ -34,23 +34,24 @@ import { forceDraftStatus } from "./connectors/skill-store-mcp.js";
  * protocol conforms to MCP — real MCP clients (Claude Desktop, Cursor,
  * future tools) can consume the server unchanged.
  *
- * Surface: tools wrapping existing T6 primitives.
+ * Surface: tools wrapping existing T6 primitives, ordered by the cold-author
+ * workflow loop the descriptions teach (learn → discover → draft → commit →
+ * approve → run → automate → observe).
  *
- *   skill_list({filter?})          → SkillCatalog (v0.9.8 — pre-grouped by audience)
- *   skill_preflight({name})        → pre-execution contract check: takes/returns/requires/touches + approval + lifecycle (no source — see skill_read)
- *   skill_read({name, version?})   → {name, version, status, source} (v0.13.3 — symmetric peer to skill_write)
- *   data_read({id, store?})      → PortableData | null (v0.13.8 — direct lookup; no data_write MCP by design)
- *   skill_status({name, new_state})→ SkillStatus update (write)
- *   list_triggers({filter?})       → TriggerRegistration[]
- *   register_trigger({...})        → TriggerRegistration (write)
- *   unregister_trigger({trigger_id})→ boolean (write)
- *   health_metrics({filter?})      → HealthMetrics
- *   runtime_capabilities({include?})→ wired connectors + shell-exec mode (v0.2.1)
- *   lint_skill({source?|name})     → diagnostics across tiers (v0.2.3)
- *   compile_skill({source?|name, inputs?})→ rendered artifact + errors (v0.2.3)
- *   skill_write({name, source, overwrite?})→ commit to SkillStore (write, v0.2.3)
- *   execute_skill({skill_name, inputs?, mechanical?})→ run + return result (write, v0.2.8)
- *   help({topic?})                 → cold-agent language discovery (read, v0.2.8)
+ *   LEARN     help({topic?})                  → language quickstart + deep topics
+ *             runtime_capabilities({include?})→ wired connectors + shell-exec mode
+ *   DISCOVER  skill_list({filter?})           → SkillCatalog (grouped by audience; entries carry the full contract)
+ *             skill_preflight({name})         → one skill's contract: takes/returns/requires/touches + approval + lifecycle
+ *             skill_read({name, version?})    → {name, version, status, source} (the body itself)
+ *             data_read({id, store?})         → PortableData | null (direct lookup; no data_write MCP by design)
+ *   DRAFT     lint_skill({source?|name})      → tiered diagnostics (inner loop)
+ *             compile_skill({source?|name, inputs?})→ rendered artifact + errors + exec order (pre-commit)
+ *   COMMIT    skill_write({name, source, overwrite?})→ store the body (write; secured mode forces unsigned→Draft)
+ *   APPROVE   skill_status({name, new_state}) → Draft/Approved/Disabled (write; secured promote needs a signature)
+ *   RUN       execute_skill({name|source, inputs?, mechanical?})→ run + return result (write)
+ *   AUTOMATE  register_trigger / list_triggers / set_trigger_enabled / unregister_trigger → autonomous dispatch
+ *   OBSERVE   health_metrics({filter?})       → per-skill/connector aggregates
+ *             blocked_shell_attempts()        → allowlist-refused shell ops (observe→promote loop)
  */
 
 // ─── JSON-RPC 2.0 ──────────────────────────────────────────────────────────
@@ -310,7 +311,7 @@ export class McpServer {
 
     this.registerTool({
       name: "blocked_shell_attempts",
-      description: "v0.18.9 — list shell op dispatches refused by the binary allowlist gate. Queries the trace store cross-skill, filters to op records carrying `blocked_reason: \"binary-not-allowed\"`. Returns flat list ready for the dashboard's observe→promote loop (operator sees what binaries skills tried to invoke; decides whether to add any to `SKILLSCRIPT_SHELL_ALLOWLIST`).",
+      description: "List shell op dispatches refused by the binary allowlist gate. Queries the trace store cross-skill, filtering to op records carrying `blocked_reason: \"binary-not-allowed\"`. Returns a flat list for the dashboard's observe→promote loop: the operator sees what binaries skills tried to invoke, then decides whether to add any to `SKILLSCRIPT_SHELL_ALLOWLIST`. Read-only.",
       inputSchema: {
         type: "object",
         properties: {
@@ -368,7 +369,7 @@ export class McpServer {
 
     this.registerTool({
       name: "skill_preflight",
-      description: "PRE-EXECUTION CONTRACT CHECK — call this BEFORE executing or composing a skill to see what it takes, returns, requires, and touches: its inputs (vars), exported variables (returns), capability requirements, and effectful footprint (which connectors / shell binaries / write + notify ops it dispatches). Also reports whether it's cleared to run (approval-gate state) + version/lifecycle. The least-privilege checklist for a human approver, and the contract surface for a cold author composing against it. For the source body itself, call skill_read.",
+      description: "PRE-EXECUTION CONTRACT CHECK — call this BEFORE executing or composing a skill to see what it takes, returns, requires, and touches: its inputs (vars), exported variables (returns), capability requirements, and effectful footprint (which connectors / shell binaries / write + notify ops it dispatches). Also reports whether it's cleared to run (approval-gate state) + version/lifecycle. The least-privilege checklist for a human approver, and the contract surface for a cold author composing against it. Discover skills with skill_list (its entries already carry this same contract); call skill_preflight for one skill's contract plus version/lifecycle detail, or skill_read for the source body.",
       inputSchema: {
         type: "object",
         properties: {
@@ -469,7 +470,7 @@ export class McpServer {
 
     this.registerTool({
       name: "skill_status",
-      description: "Transition a skill's status. Valid states: Draft, Approved, Disabled. Write operation.",
+      description: "Transition a skill's lifecycle status: Draft, Approved, Disabled. Approved is the only status that executes and lets triggers fire; Draft is the editing state; Disabled retires a skill without deleting it (re-enable by transitioning back to Approved/Draft). In secured mode you CANNOT promote to Approved here without a valid signature — approve via the dashboard or `skillfile approve` (which signs the body); a bare status flip can't grant approval. Write operation.",
       inputSchema: {
         type: "object",
         properties: {
@@ -523,7 +524,7 @@ export class McpServer {
 
     this.registerTool({
       name: "list_triggers",
-      description: "List registered triggers. Optionally filter by skill name or trigger source.",
+      description: "List registered triggers — the autonomous-dispatch registry. Optionally filter by skill name or trigger source (cron / event). Read-only. Pairs with register_trigger / set_trigger_enabled / unregister_trigger to manage how Approved skills fire on their own.",
       inputSchema: {
         type: "object",
         properties: {
@@ -541,7 +542,7 @@ export class McpServer {
 
     this.registerTool({
       name: "register_trigger",
-      description: "Register a new trigger for a skill. Returns the registration. Write operation.",
+      description: "Register an autonomous-dispatch trigger for a skill — cron (time-based) or event (HTTP POST /event ingress, named). Only Approved skills fire; the scheduler re-verifies the approval gate at fire time, so registering a trigger never bypasses approval. Skills can also declare triggers inline via `# Triggers:` frontmatter (synced automatically on approval) — use this tool for imperative / dynamic registration. Returns the registration. Write operation.",
       inputSchema: {
         type: "object",
         properties: {
@@ -589,7 +590,7 @@ export class McpServer {
 
     this.registerTool({
       name: "unregister_trigger",
-      description: "Unregister a trigger by id. Returns boolean (true if removed, false if id not found). Write operation.",
+      description: "Remove a registered trigger by id (see list_triggers for ids). Returns true if removed, false if the id wasn't found. Write operation.",
       inputSchema: {
         type: "object",
         properties: { trigger_id: { type: "string" } },
@@ -603,7 +604,7 @@ export class McpServer {
 
     this.registerTool({
       name: "set_trigger_enabled",
-      description: "v0.9.0 — toggle a trigger's enabled state. Disabled triggers stay registered but the scheduler skips firing them (vacation / maintenance windows). State persists via the onTriggersChanged hook for imperative triggers. Returns the updated registration, or null if no trigger has that id. Write operation.",
+      description: "Toggle a trigger's enabled state without unregistering it — disabled triggers stay in the registry but the scheduler skips firing them (vacation / maintenance windows). State persists via the onTriggersChanged hook for imperative triggers. Returns the updated registration, or null if no trigger has that id. Write operation.",
       inputSchema: {
         type: "object",
         properties: {
@@ -665,7 +666,7 @@ export class McpServer {
 
     this.registerTool({
       name: "lint_skill",
-      description: "Run static lint against a skill source body or stored skill name. Returns diagnostics across tier-1 (errors that block compile), tier-2 (warnings), tier-3 (advisories). Read-only. Inner-loop affordance for cold authors iterating on a draft.",
+      description: "Run static lint against a skill source body or stored skill name. Returns diagnostics across tier-1 (errors that block compile), tier-2 (warnings), tier-3 (advisories). Read-only. The inner-loop affordance while drafting — lint as you iterate, then compile_skill for the full pre-commit check before skill_write.",
       inputSchema: {
         type: "object",
         properties: {
@@ -678,7 +679,7 @@ export class McpServer {
 
     this.registerTool({
       name: "compile_skill",
-      description: "Compile a skill source body or stored skill name. Returns the rendered artifact + parse/compile errors + resolved variables + topological execution order. Read-only. Pre-commit validation affordance.",
+      description: "Compile a skill source body or stored skill name. Returns the rendered artifact + parse/compile errors + resolved variables + topological execution order. Read-only. The pre-commit check after lint_skill passes and before skill_write — confirms the body compiles and shows the execution order without running effects (use execute_skill `mechanical: true` for a no-fire dispatch preview).",
       inputSchema: {
         type: "object",
         properties: {
@@ -696,7 +697,7 @@ export class McpServer {
 
     this.registerTool({
       name: "skill_write",
-      description: "Write a skill body into the configured SkillStore. Tier-1 lint runs at write time (SkillStore contract); throws on rejection. Returns version + content_hash. The `# Status:` header in the source body is honored — write with `# Status: Approved` and the skill lands Approved (otherwise defaults to Draft). Promote/demote later via skill_status. Write operation.",
+      description: "Write a skill body into the configured SkillStore. Tier-1 lint runs at write time (SkillStore contract) and throws on rejection — run lint_skill / compile_skill first to iterate cleanly. The `# Status:` header is honored: `# Status: Approved` lands Approved in unsecured mode, but in secured mode an unsigned body is forced to Draft (a write can't grant approval). Promote later via skill_status, or the dashboard / `skillfile approve` in secured mode. Returns version + content_hash. Write operation.",
       inputSchema: {
         type: "object",
         properties: {
