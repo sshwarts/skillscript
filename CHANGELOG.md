@@ -1,5 +1,27 @@
 # Changelog
 
+## 0.20.2 — 2026-06-18 — in-browser approval (passcode session-unlock)
+
+Click-to-approve in the dashboard, without putting standing signing power on the
+network surface.
+
+- When `SKILLSCRIPT_APPROVAL_PASSCODE` is set (+ secured mode + a readable key),
+  the dashboard mounts `POST /unlock` + `POST /approve` + `GET /signing-status`.
+  The approver enters the passcode **once per browser session** to unlock
+  signing; the dashboard then signs Approved skills with the operator's key.
+- The unlock is **in-memory, session-cookie-bound, and idle-expires (15 min)** —
+  the dashboard holds no *standing* signing power, only a live human-entered
+  passcode unlocks it. `/approve` without a live unlock returns `needs_passcode`.
+- The SPA shows a real **Approve** button (queue + skill detail) when signing is
+  wired; clicking prompts for the passcode on the first approval of a session,
+  then approves freely. Falls back to the copy-the-`skillfile approve`-command
+  UX when signing isn't enabled.
+- **Default off** (no passcode → routes 404, dashboard stays review-only).
+  SECURITY: enabling this gives the dashboard process read access to the private
+  key, so run it operator-side / isolated from the agent (the agent must have no
+  network path to it and must not be able to read the passcode). `.env` now;
+  vault/encrypted-key custody is the future hardening.
+
 ## 0.20.1 — 2026-06-17 — approval-migration UX + dashboard access gate
 
 Follow-ups that make the secured-mode migration legible, plus an optional

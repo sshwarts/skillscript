@@ -24,8 +24,8 @@ const REPO_ROOT = join(__dirname, "..");
 const PACKAGE_JSON = JSON.parse(readFileSync(join(REPO_ROOT, "package.json"), "utf8")) as Record<string, unknown>;
 
 describe("T7 — package.json polish", () => {
-  it("1. version is 0.20.1 (Gate #7 follow-ups: approval queue surfaces stale/legacy Approved skills via skill_list gate_ok, secured-mode startup warning for unsigned-Approved corpus, optional SKILLSCRIPT_DASHBOARD_AUTH_TOKEN access gate)", () => {
-    expect(PACKAGE_JSON["version"]).toBe("0.20.1");
+  it("1. version is 0.20.2 (in-browser approval: passcode session-unlock + /approve signing route + SPA Approve button; the dashboard signs operator-side with no standing signing power)", () => {
+    expect(PACKAGE_JSON["version"]).toBe("0.20.2");
   });
 
   it("2. main + types + bin + engines.node ≥ 22.5 declared", () => {
