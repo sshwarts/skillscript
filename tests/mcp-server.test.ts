@@ -89,7 +89,7 @@ describe("McpServer protocol", () => {
         "runtime_capabilities",
         "set_trigger_enabled",
         "skill_list",
-        "skill_metadata",
+        "skill_preflight",
         "skill_read",
         "skill_status",
         "skill_write",
@@ -133,7 +133,7 @@ describe("McpServer protocol", () => {
   });
 });
 
-describe("McpServer.skill_list / skill_metadata / skill_status", () => {
+describe("McpServer.skill_list / skill_preflight / skill_status", () => {
   it("skill_list returns empty SkillCatalog when store is empty (v0.9.8)", async () => {
     const { server, cleanup } = withServer();
     try {
@@ -181,18 +181,34 @@ describe("McpServer.skill_list / skill_metadata / skill_status", () => {
     }
   });
 
-  it("skill_metadata returns metadata + version history (no source — see skill_read)", async () => {
+  it("skill_preflight returns metadata + version history (no source — see skill_read)", async () => {
     const { server, skillStore, cleanup } = withServer();
     try {
       await skillStore.store("hello", "# Skill: hello\n# Status: Draft\nt:\n    emit(text=\"hi\")\ndefault: t\n");
-      const resp = await server.handle(rpc("tools/call", { name: "skill_metadata", arguments: { name: "hello" } }));
+      const resp = await server.handle(rpc("tools/call", { name: "skill_preflight", arguments: { name: "hello" } }));
       const result = parseToolResult<Record<string, unknown>>(resp);
       const meta = result["metadata"] as { name: string; status: string };
       expect(meta.name).toBe("hello");
       expect(meta.status).toBe("Draft");
       expect((result["versions"] as unknown[]).length).toBeGreaterThanOrEqual(1);
-      // v0.13.3 — source removed from skill_metadata; callers use skill_read instead.
+      // v0.13.3 — source removed from skill_preflight; callers use skill_read instead.
       expect(result).not.toHaveProperty("source");
+    } finally {
+      cleanup();
+    }
+  });
+
+  it("skill_preflight surfaces the contract: takes / returns / requires / effectful-footprint", async () => {
+    const { server, skillStore, cleanup } = withServer();
+    try {
+      await skillStore.store("brief", "# Skill: brief\n# Status: Approved\n# Vars: AREA, DAY=today\n# Returns: SUMMARY\nrun:\n    $ youtrack.search query=\"x\" -> R\n    file_write(path=\"/tmp/x\", content=\"y\", approved=\"a\")\n    $set SUMMARY = \"ok\"\ndefault: run\n");
+      const resp = await server.handle(rpc("tools/call", { name: "skill_preflight", arguments: { name: "brief" } }));
+      const result = parseToolResult<Record<string, unknown>>(resp);
+      const contract = result["contract"] as { vars: string[]; returns: string[]; effectful_footprint: { connectors: string[]; file_writes: number } };
+      expect(contract.vars).toEqual(["AREA", "DAY"]);
+      expect(contract.returns).toEqual(["SUMMARY"]);
+      expect(contract.effectful_footprint.connectors).toEqual(["youtrack"]);
+      expect(contract.effectful_footprint.file_writes).toBe(1);
     } finally {
       cleanup();
     }

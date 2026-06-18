@@ -32,7 +32,7 @@
 //     Approved). Allowing it in-skill would let an Autonomous parent both
 //     write Draft AND promote Approved in the same fire, defeating the
 //     Draft-default trust boundary below.
-//   - `skill_list` / `skill_metadata` — reads are doable but cold-author UX
+//   - `skill_list` / `skill_preflight` — reads are doable but cold-author UX
 //     is better via `skill_read` + introspection of the returned body.
 //
 // **Trust boundary — Draft-default for in-skill writes (v0.15.0).** Different

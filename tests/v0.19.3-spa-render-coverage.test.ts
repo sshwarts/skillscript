@@ -284,9 +284,9 @@ describe("v0.19.3 — graceful degradation against missing MCP tools", () => {
 
 describe("v0.19.3 — skill detail renders v0.18.9 security signals + highlighting (the broken surface)", () => {
   it("collectSecuritySignals + renderHighlightedSkillBody execute without error on a real skill body", async () => {
-    // Add skill_metadata + skill_read responses for the detail view.
+    // Add skill_preflight + skill_read responses for the detail view.
     const detailToolMap = {
-      skill_metadata: {
+      skill_preflight: {
         metadata: { name: "risky-skill", description: "demo", status: "Approved" },
         versions: [{ version: "abc123", status: "Approved", changed_at: 1779000000, content_hash: "abc123" }],
         recent_fires: [],

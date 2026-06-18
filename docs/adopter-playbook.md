@@ -1030,7 +1030,7 @@ curl -X POST http://localhost:7878/rpc \
 # Verify author was stamped from the header
 curl -X POST http://localhost:7878/rpc \
   -H "content-type: application/json" \
-  -d '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"skill_metadata","arguments":{"name":"smoke"}}}' \
+  -d '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"skill_preflight","arguments":{"name":"smoke"}}}' \
   | jq '.result.content[0].text | fromjson | .metadata.author'
 # Expected: "alice"
 ```

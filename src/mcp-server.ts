@@ -8,6 +8,7 @@ import { healthMetrics, type HealthMetrics } from "./metrics.js";
 import { lint } from "./lint.js";
 import { compile } from "./compile.js";
 import { parse as parseSkill } from "./parser.js";
+import { extractEffectfulFootprint } from "./skill-surface.js";
 import { listKnownConnectorClasses } from "./connectors/config.js";
 import { LintFailureError, MissingSkillReferenceError, OpError } from "./errors.js";
 import {
@@ -36,7 +37,7 @@ import { forceDraftStatus } from "./connectors/skill-store-mcp.js";
  * Surface: tools wrapping existing T6 primitives.
  *
  *   skill_list({filter?})          → SkillCatalog (v0.9.8 — pre-grouped by audience)
- *   skill_metadata({name})         → metadata + version history + recent_fires + approval (no source — see skill_read)
+ *   skill_preflight({name})        → pre-execution contract check: takes/returns/requires/touches + approval + lifecycle (no source — see skill_read)
  *   skill_read({name, version?})   → {name, version, status, source} (v0.13.3 — symmetric peer to skill_write)
  *   data_read({id, store?})      → PortableData | null (v0.13.8 — direct lookup; no data_write MCP by design)
  *   skill_status({name, new_state})→ SkillStatus update (write)
@@ -366,8 +367,8 @@ export class McpServer {
     });
 
     this.registerTool({
-      name: "skill_metadata",
-      description: "Get metadata + version history + recent fires + approval-gate state for a specific skill by name. For the source body itself, call skill_read.",
+      name: "skill_preflight",
+      description: "PRE-EXECUTION CONTRACT CHECK — call this BEFORE executing or composing a skill to see what it takes, returns, requires, and touches: its inputs (vars), exported variables (returns), capability requirements, and effectful footprint (which connectors / shell binaries / write + notify ops it dispatches). Also reports whether it's cleared to run (approval-gate state) + version/lifecycle. The least-privilege checklist for a human approver, and the contract surface for a cold author composing against it. For the source body itself, call skill_read.",
       inputSchema: {
         type: "object",
         properties: {
@@ -389,15 +390,28 @@ export class McpServer {
         // stale-Approved skills (body edited since approval, token no
         // longer verifies). `null` when the source isn't loadable.
         let approval: { gate_ok: boolean; reason?: string } | null = null;
+        // v0.21.0 — the contract surface: what the skill TAKES (vars, via the
+        // parser's frontmatter), RETURNS (exported vars), REQUIRES (capability
+        // clauses), and TOUCHES (effectful footprint). Derived statically from
+        // the body. Null when the source isn't loadable.
+        let contract: { vars: string[]; returns: string[]; requires: unknown[]; effectful_footprint: ReturnType<typeof extractEffectfulFootprint> } | null = null;
         if (loaded?.source !== undefined) {
           const g = evaluateApprovalGate(loaded.source);
           approval = g.ok ? { gate_ok: true } : { gate_ok: false, reason: g.reason };
+          const parsed = parseSkill(loaded.source);
+          contract = {
+            vars: parsed.vars.map((v) => v.name),
+            returns: parsed.returns,
+            requires: parsed.requires,
+            effectful_footprint: extractEffectfulFootprint(parsed),
+          };
         }
         return {
           metadata,
+          contract,
+          approval,
           versions,
           recent_fires,
-          approval,
         };
       },
     });
@@ -723,7 +737,7 @@ export class McpServer {
   private async executeSkill(args: Record<string, unknown>, callerCtx: McpRequestCtx = {}): Promise<Record<string, unknown>> {
     // v0.15.2 — `name` is the canonical kwarg; `skill_name` is a silent
     // back-compat alias. Aligns the surface with the other skill_* tools
-    // (skill_read / skill_metadata / skill_status / skill_write all take
+    // (skill_read / skill_preflight / skill_status / skill_write all take
     // `name`). Per Perry signoff (thread 75abc8c0): silent alias — no
     // tier-3 advisory, no deprecation warn. If both are supplied with
     // different values, that's ambiguous; reject so the caller picks one.

@@ -100,7 +100,7 @@ describe("T6b dogfood — dashboard end-to-end", () => {
     expect(names).toEqual([
       "blocked_shell_attempts", "compile_skill", "data_read", "execute_skill", "health_metrics", "help", "lint_skill",
       "list_triggers", "register_trigger", "runtime_capabilities", "set_trigger_enabled",
-      "skill_list", "skill_metadata", "skill_read", "skill_status", "skill_write", "unregister_trigger",
+      "skill_list", "skill_preflight", "skill_read", "skill_status", "skill_write", "unregister_trigger",
     ]);
   });
 
@@ -119,9 +119,9 @@ describe("T6b dogfood — dashboard end-to-end", () => {
     expect(catalog.headless[0]!.status).toBe("Draft");
   });
 
-  it("4. skill_metadata returns full skill detail with version history", async () => {
+  it("4. skill_preflight returns full skill detail with version history", async () => {
     const detail = await rpcCall<{ metadata: { name: string; status: string }; versions: unknown[] }>(
-      ctx.baseUrl, "skill_metadata", { name: "heartbeat" },
+      ctx.baseUrl, "skill_preflight", { name: "heartbeat" },
     );
     expect(detail.metadata.name).toBe("heartbeat");
     expect(detail.metadata.status).toBe("Draft");

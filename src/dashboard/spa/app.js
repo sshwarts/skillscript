@@ -363,11 +363,11 @@ function renderSkills() {
 
 async function renderSkillDetail(name) {
   try {
-    // v0.13.3 — source moved out of skill_metadata into dedicated skill_read.
+    // v0.13.3 — source moved out of skill_preflight into dedicated skill_read.
     // Call both in parallel; skill_read may fail if the skill name doesn't
     // resolve (load() throws), so guard it to keep the detail view rendering.
     const [meta, readResult] = await Promise.all([
-      callTool("skill_metadata", { name }),
+      callTool("skill_preflight", { name }),
       callTool("skill_read", { name }).catch(() => null),
     ]);
     const { metadata, versions, recent_fires, approval } = meta;
@@ -957,7 +957,7 @@ async function loadComposeContract(detailsEl) {
   panel.dataset.loaded = "true";
   const [kind, name] = detailsEl.dataset.composeRef.split(":");
   try {
-    const meta = await callTool("skill_metadata", { name });
+    const meta = await callTool("skill_preflight", { name });
     const m = meta.metadata;
     // For inline (data-only), also fetch the body since it bakes at
     // compile time — reviewer sees what literally lands in the

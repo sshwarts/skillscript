@@ -427,7 +427,7 @@ export class FilesystemSkillStore implements SkillStore {
     const author = await this.readFirstVersionAuthor(name);
     // v0.18.0 — populate vars + returns from parsed source so the
     // contract surface (what the skill takes + gives back) is visible
-    // via skill_metadata for dashboard composition expansion + adopter
+    // via skill_preflight for dashboard composition expansion + adopter
     // introspection. Pre-v0.18.0, only description was populated even
     // though the SkillMeta interface declared the broader surface.
     const parsed = parse(source);

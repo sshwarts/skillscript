@@ -8,6 +8,8 @@ coverage/
 .env.local
 *.log
 .claude/
+# Per-developer MCP wiring — local dev runtime endpoint, ports vary.
+.mcp.json
 # Source/compiled split — `.skill.md` is the authored/committed source;
 # `.skill` is the compiled artifact (prompt text emitted by compile), paired
 # with `.skill.provenance.json`. Both compiled outputs are derived and

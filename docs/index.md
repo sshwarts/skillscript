@@ -369,7 +369,7 @@ The runtime exposes its tools over MCP (HTTP at `/rpc`) for cold-client authorin
 
 | Category | Tools |
 |---|---|
-| Skill management | `skill_list`, `skill_metadata`, `skill_read`, `skill_status`, `skill_write` |
+| Skill management | `skill_list`, `skill_preflight`, `skill_read`, `skill_status`, `skill_write` |
 | Data | `data_read` |
 | Authoring | `lint_skill`, `compile_skill` |
 | Composition | `execute_skill` |

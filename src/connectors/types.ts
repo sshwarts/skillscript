@@ -242,7 +242,7 @@ export interface SkillMeta {
    * The output-side mirror of `vars` (input surface). Empty array when
    * the skill has no `# Returns:` header declared (default — caller
    * sees only `outputs`/`transcript`/execution metadata, no exports
-   * from `final_vars`). Surfaces through `skill_metadata` MCP for
+   * from `final_vars`). Surfaces through `skill_preflight` MCP for
    * dashboard contract display + adopter introspection.
    */
   returns?: string[];

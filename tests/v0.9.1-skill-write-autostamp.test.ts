@@ -114,7 +114,7 @@ default: go
     expect((r["transcript"] as string[]).join("\n")).toMatch(/headless adopter can run this/);
 
     // Confirm metadata.approval reports gate_ok
-    const meta = await callTool(mcpServer, "skill_metadata", { name: "headless-flow" });
+    const meta = await callTool(mcpServer, "skill_preflight", { name: "headless-flow" });
     expect((meta["approval"] as { gate_ok: boolean }).gate_ok).toBe(true);
   });
 
