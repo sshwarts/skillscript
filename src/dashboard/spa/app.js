@@ -385,7 +385,7 @@ async function renderSkillDetail(name) {
       callTool("skill_preflight", { name }),
       callTool("skill_read", { name }).catch(() => null),
     ]);
-    const { metadata, versions, recent_fires, approval } = meta;
+    const { metadata, versions, recent_fires, approval, contract } = meta;
     const source = readResult?.source ?? null;
     const metrics = state.metrics?.perSkill?.[name];
     const triggersForSkill = state.triggers.filter((t) => t.skillName === name);
@@ -411,6 +411,8 @@ async function renderSkillDetail(name) {
         ${approvalBanner}
         ${renderStatusActions(name, metadata, approval)}
       </section>
+
+      ${renderEffectfulFootprintPanel(contract?.effectful_footprint)}
 
       ${source ? renderSecuritySignalsPanel(source) : ""}
 
@@ -641,6 +643,49 @@ function renderHighlightedSkillBody(source) {
 // showing aggregated counts so a reviewer knows WHAT to look for before
 // scanning the body. Pairs with renderHighlightedSkillBody() (the
 // WHERE).
+// v0.21.0 — the authoritative "what does it touch" least-privilege checklist
+// for the human approver. Unlike renderSecuritySignalsPanel (regex over the
+// source), this is the AST-derived effectful_footprint from skill_preflight —
+// the SAME op enumeration the capability gate authorizes — so it's the truth of
+// what the skill can do when signed, not a textual approximation. Surfaced right
+// at the approve action so the operator sees the surface they're signing off.
+function renderEffectfulFootprintPanel(fp) {
+  if (!fp) return ""; // source not loadable / parse failed → no contract to show
+  const items = [];
+  if (fp.connectors.length > 0) {
+    items.push(`<li class="sig-medium-text">Dispatches to ${fp.connectors.length} MCP connector${fp.connectors.length === 1 ? "" : "s"}: ${fp.connectors.map((c) => `<code>${esc(c)}</code>`).join(", ")}</li>`);
+  }
+  if (fp.builtins.length > 0) {
+    items.push(`<li class="sig-info-text">Uses ${fp.builtins.length} built-in op${fp.builtins.length === 1 ? "" : "s"}: ${fp.builtins.map((b) => `<code>${esc(b)}</code>`).join(", ")}</li>`);
+  }
+  if (fp.file_writes > 0) {
+    items.push(`<li class="sig-high-text">${fp.file_writes} <code>file_write</code> op${fp.file_writes === 1 ? "" : "s"} <small>(writes to the filesystem allowlist)</small></li>`);
+  }
+  if (fp.file_reads > 0) {
+    items.push(`<li class="sig-medium-text">${fp.file_reads} <code>file_read</code> op${fp.file_reads === 1 ? "" : "s"}</li>`);
+  }
+  if (fp.unsafe_shell > 0) {
+    items.push(`<li class="sig-high-text">${fp.unsafe_shell} unsafe (full-bash) shell op${fp.unsafe_shell === 1 ? "" : "s"}</li>`);
+  }
+  const safeShellBins = fp.shell_binaries.filter((b) => b !== "bash" || fp.unsafe_shell === 0);
+  if (safeShellBins.length > 0) {
+    items.push(`<li class="sig-medium-text">Runs shell ${safeShellBins.length === 1 ? "binary" : "binaries"}: ${safeShellBins.map((b) => `<code>${esc(b)}</code>`).join(", ")} <small>(allowlist-gated)</small></li>`);
+  }
+  if (fp.notifies > 0) {
+    items.push(`<li class="sig-medium-text">${fp.notifies} <code>notify</code> agent-wake op${fp.notifies === 1 ? "" : "s"}</li>`);
+  }
+  const body = items.length === 0
+    ? `<p class="empty">Pure — no connector, shell, file, or notify ops. Nothing effectful to authorize.</p>`
+    : `<ul class="security-signals">${items.join("")}</ul>
+       <p><small>This is the AST-derived footprint the capability gate authorizes — the surface this skill can touch once approved. Confirm every line is least-privilege before signing.</small></p>`;
+  return `
+    <section>
+      <h2>What this skill touches</h2>
+      ${body}
+    </section>
+  `;
+}
+
 function renderSecuritySignalsPanel(source) {
   const sig = collectSecuritySignals(source);
   const items = [];

@@ -312,4 +312,54 @@ describe("v0.19.3 — skill detail renders v0.18.9 security signals + highlighti
     // Aggregated counts mention shell ops
     expect(html).toMatch(/shell op/);
   });
+
+  it("v0.21.0 — the effectful-footprint approver checklist renders from skill_preflight's contract", async () => {
+    const detailToolMap = {
+      skill_preflight: {
+        metadata: { name: "gather", description: "demo", status: "Draft" },
+        versions: [],
+        recent_fires: [],
+        approval: { gate_ok: false, reason: "Draft" },
+        contract: {
+          vars: ["AREA"],
+          returns: ["SUMMARY"],
+          requires: [],
+          effectful_footprint: {
+            connectors: ["youtrack"], builtins: ["data_write"], shell_binaries: ["curl"],
+            unsafe_shell: 0, file_writes: 1, file_reads: 0, notifies: 0,
+          },
+        },
+      },
+      skill_read: { name: "gather", version: "v", status: "Draft", source: "# Skill: gather\n# Status: Draft\nrun:\n    emit(text=\"x\")\ndefault: run\n" },
+    };
+    const fixture = await loadSpa(detailToolMap);
+    await fixture.triggerRefresh();
+    await fixture.navigateTo("#skill/gather");
+    const html = fixture.document.getElementById("main")!.innerHTML;
+    expect(html).toContain("What this skill touches");
+    expect(html).toContain("youtrack");   // connector
+    expect(html).toContain("data_write"); // builtin
+    expect(html).toContain("curl");       // shell binary
+    expect(html).toMatch(/file_write/);   // file write op
+  });
+
+  it("v0.21.0 — a pure skill shows the 'nothing effectful to authorize' footprint", async () => {
+    const detailToolMap = {
+      skill_preflight: {
+        metadata: { name: "pure", description: "demo", status: "Approved" },
+        versions: [], recent_fires: [], approval: { gate_ok: true },
+        contract: {
+          vars: [], returns: [], requires: [],
+          effectful_footprint: { connectors: [], builtins: [], shell_binaries: [], unsafe_shell: 0, file_writes: 0, file_reads: 0, notifies: 0 },
+        },
+      },
+      skill_read: { name: "pure", version: "v", status: "Approved", source: "# Skill: pure\n# Status: Approved\nt:\n    emit(text=\"hi\")\ndefault: t\n" },
+    };
+    const fixture = await loadSpa(detailToolMap);
+    await fixture.triggerRefresh();
+    await fixture.navigateTo("#skill/pure");
+    const html = fixture.document.getElementById("main")!.innerHTML;
+    expect(html).toContain("What this skill touches");
+    expect(html).toContain("Nothing effectful to authorize");
+  });
 });
