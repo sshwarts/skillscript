@@ -98,6 +98,15 @@ describe("renderStatusActions — secured vs unsecured approve UX", () => {
     expect(html).not.toContain("skillfile approve");
     expect(html).toContain("updateStatus('demo','Draft')"); // demote still offered
   });
+
+  it("a Disabled skill shows a Re-enable affordance, not 'Approve'", () => {
+    g.state.securedApproval = { enabled: true, public_key_present: true };
+    g.state.dashboardSigning = true;
+    const html = g.renderStatusActions("demo", { name: "demo", status: "Disabled" }, null);
+    expect(html).toContain("Re-enable this skill");
+    expect(html).toMatch(/>Re-enable</);
+    g.state.dashboardSigning = false; // reset for other cases
+  });
 });
 
 describe("approvalSignalBadges — queue triage column", () => {

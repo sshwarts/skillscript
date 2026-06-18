@@ -47,11 +47,14 @@ async function refresh() {
   const ts = new Date();
   document.getElementById("poll-status").textContent = `polling…`;
   try {
-    const [catalog, triggers, metrics, capabilities, blocked] = await Promise.all([
-      // v0.9.8 — skill_list returns SkillCatalog (pre-grouped by audience).
-      // Dashboard wants the full picture (all categories); flatten the
-      // groups into a single array for the existing rendering code.
-      callTool("skill_list", { filter: { audience: "all" } }),
+    const [draftCat, apprCat, disabledCat, triggers, metrics, capabilities, blocked] = await Promise.all([
+      // v0.20.2 — fetch ALL statuses so the Skills view shows Draft + Approved +
+      // Disabled (skill_list defaults to Approved-only, which hid Disabled skills
+      // entirely — you couldn't find one to re-enable). Three calls + merge since
+      // skill_list has no "all-statuses" filter.
+      callTool("skill_list", { filter: { audience: "all", status: "Draft" } }),
+      callTool("skill_list", { filter: { audience: "all", status: "Approved" } }),
+      callTool("skill_list", { filter: { audience: "all", status: "Disabled" } }),
       callTool("list_triggers", {}),
       callTool("health_metrics", {}),
       callTool("runtime_capabilities", { include: ["mcpConnectors", "mcpConnectorClasses", "localModels", "dataStores", "skillStores", "agentConnectors", "securedApproval", "runtimeVersion"] }),
@@ -60,11 +63,9 @@ async function refresh() {
       // this tool; catch returns null and the Security view degrades.
       callTool("blocked_shell_attempts", { limit: 100 }).catch(() => null),
     ]);
-    state.skills = [
-      ...(catalog.receives ?? []),
-      ...(catalog.skills ?? []),
-      ...(catalog.headless ?? []),
-    ];
+    const flatCatalog = (c) => [...(c?.receives ?? []), ...(c?.skills ?? []), ...(c?.headless ?? [])];
+    // Approved first, then Draft, then Disabled — grouped by lifecycle.
+    state.skills = [...flatCatalog(apprCat), ...flatCatalog(draftCat), ...flatCatalog(disabledCat)];
     state.triggers = triggers;
     state.metrics = metrics;
     state.capabilities = capabilities;
@@ -123,11 +124,12 @@ function renderSecuredBanner() {
     </div>`;
     return;
   }
+  const approvalLine = state.dashboardSigning
+    ? `Approve in-browser after a one-time passcode unlock (or <code>skillfile approve &lt;name&gt;</code> at a terminal).`
+    : `Approval requires the operator's key: <code>skillfile approve &lt;name&gt;</code> at the terminal — the dashboard reviews, it does not sign.`;
   el.innerHTML = `<div class="banner banner-secured">
     <strong>🔒 Secured mode</strong> — unapproved skills cannot execute any
-    effectful op. Approval requires the operator's key:
-    <code>skillfile approve &lt;name&gt;</code> at the terminal. The dashboard
-    reviews; it does not sign.
+    effectful op. ${approvalLine}
   </div>`;
 }
 
@@ -161,10 +163,13 @@ async function renderApprovals() {
     return `<h2>Approvals</h2><section><div class="empty">Failed to load the approval queue: ${esc(err.message)}</div></section>`;
   }
   const staleCount = pending.filter((s) => s._why === "stale").length;
+  const signLine = state.dashboardSigning
+    ? `Review the source, then click <strong>Approve</strong> (a one-time passcode unlocks signing for this session).`
+    : `Review the source, then sign at a terminal that can read your approval key.`;
   const intro = secured
     ? `<p>Secured mode is <strong>ON</strong>. Each skill below is inert — no
-       effectful op will run until it is approved. ${staleCount > 0 ? `${staleCount} carry a stale/legacy approval (e.g. a pre-secured v1 stamp) and need re-signing — the fastest path is <code>skillfile reapprove --apply</code> at a terminal.` : ""}
-       Review the source, then sign at a terminal that can read your approval key.</p>`
+       effectful op will run until it is approved. ${staleCount > 0 ? `${staleCount} carry a stale/legacy approval (e.g. a pre-secured v1 stamp) and need re-signing${state.dashboardSigning ? "" : ` — the fastest path is <code>skillfile reapprove --apply</code> at a terminal`}.` : ""}
+       ${signLine}</p>`
     : `<p>Secured mode is <strong>OFF</strong> — Draft skills can be approved
        in-page from their detail view (the runtime self-stamps). Turn on secured
        mode (<code>SKILLSCRIPT_SECURED_MODE=true</code>) to require key-signed
@@ -498,27 +503,32 @@ function renderStatusActions(name, metadata, approval) {
     .join("");
 
   // The Approved action. Shown when not-yet-Approved OR stale (needs re-stamp).
+  // v0.20.2 — a Disabled skill is "re-enabled" (the user's mental model); in
+  // secured mode re-enabling = re-signing, since disabling stripped the token.
+  const isDisabled = status === "Disabled";
   const needsApprove = status !== "Approved" || staleApproved;
+  const headText = isDisabled ? "Re-enable this skill" : (staleApproved ? "Re-approve (body changed since signing)" : "Approve this skill");
+  const btnText = isDisabled ? "Re-enable" : "Approve";
   let approveBlock = "";
   if (needsApprove) {
     if (secured && state.dashboardSigning) {
       // v0.20.2 — in-browser signing wired: click to approve (passcode-unlocked).
       approveBlock = `
         <div class="approve-panel">
-          <div class="approve-panel-head">${staleApproved ? "Re-approve (body changed since signing)" : "Approve this skill"}</div>
+          <div class="approve-panel-head">${headText}</div>
           <p>Signs with the operator's key after a one-time passcode unlock (review the source below first).</p>
-          <button class="primary" onclick="approveInBrowser('${esc(name).replace(/'/g, "\\'")}')">Approve</button>
+          <button class="primary" onclick="approveInBrowser('${esc(name).replace(/'/g, "\\'")}')">${btnText}</button>
         </div>`;
     } else if (secured) {
       const cmd = approveCommand(name);
       approveBlock = `
         <div class="approve-panel">
-          <div class="approve-panel-head">${staleApproved ? "Re-approve (body changed since signing)" : "Approve this skill"}</div>
-          <p>Secured mode: approval is signed with the operator's key at a terminal — not from this dashboard. Review the source below, then run:</p>
+          <div class="approve-panel-head">${headText}</div>
+          <p>Secured mode: ${isDisabled ? "re-enabling re-signs the skill" : "approval is signed"} with the operator's key at a terminal — not from this dashboard. Review the source below, then run:</p>
           <div class="approve-cmd"><code>${esc(cmd)}</code><button class="copy-btn" onclick="copyText('${esc(cmd).replace(/'/g, "\\'")}', this)">copy</button></div>
         </div>`;
     } else {
-      approveBlock = `<button onclick="updateStatus('${esc(name)}','Approved')">${staleApproved ? "Re-approve (refresh token)" : "Transition to Approved"}</button>`;
+      approveBlock = `<button onclick="updateStatus('${esc(name)}','Approved')">${isDisabled ? "Re-enable" : (staleApproved ? "Re-approve (refresh token)" : "Transition to Approved")}</button>`;
     }
   }
 

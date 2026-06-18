@@ -120,9 +120,17 @@ async function loadSpa(toolOverrides: Partial<Record<string, unknown>> = {}): Pr
     if (!url.endsWith("/rpc")) {
       return new Response("not found", { status: 404 });
     }
-    const body = init?.body !== undefined ? JSON.parse(init.body as string) as { method: string; id: number; params?: { name?: string } } : { method: "", id: 0 };
+    const body = init?.body !== undefined ? JSON.parse(init.body as string) as { method: string; id: number; params?: { name?: string; arguments?: { filter?: { status?: string } } } } : { method: "", id: 0 };
     if (body.method === "tools/call") {
       const toolName = body.params?.name;
+      // v0.20.2 — the SPA poll now calls skill_list per-status (Draft/Approved/
+      // Disabled). The canned skills are Approved, so only the Approved call
+      // returns them; Draft/Disabled return empty (else state.skills triples).
+      if (toolName === "skill_list" && toolOverrides["skill_list"] === undefined) {
+        const status = body.params?.arguments?.filter?.status;
+        const cat = status === undefined || status === "Approved" ? CANNED_CATALOG : { receives: [], skills: [], headless: [] };
+        return new Response(JSON.stringify({ jsonrpc: "2.0", id: body.id, result: { content: [{ type: "text", text: JSON.stringify(cat) }] } }), { status: 200, headers: { "content-type": "application/json" } });
+      }
       if (toolName !== undefined && toolName in toolMap) {
         return new Response(JSON.stringify({
           jsonrpc: "2.0",
