@@ -493,6 +493,24 @@ export class McpServer {
             name,
           );
         }
+        // v0.21.0 — store-agnostic secured-mode closure (red-team 33bf53d3).
+        // skill_status cannot GRANT approval in secured mode: promotion to
+        // Approved is refused unless the stored body already carries a valid v3
+        // signature. The per-store guard (FilesystemSkillStore/SqliteSkillStore)
+        // didn't cover custom adopter stores (e.g. AMP-backed), so an agent could
+        // flip Draft→Approved with no signature — a forgeable trust-state lie.
+        // Enforce HERE, at the ingress, regardless of substrate.
+        if (newState === "Approved" && isSecuredMode()) {
+          const loaded = await this.deps.skillStore.load(name).catch(() => null);
+          if (loaded === null || !evaluateApprovalGate(loaded.source).ok) {
+            throw new OpError(
+              `cannot promote '${name}' to Approved in secured mode — the skill carries no valid signature. Approve it via the dashboard or \`skillfile approve\` (which signs the body); a status change alone cannot grant approval.`,
+              "skill_status",
+              `Sign the skill with the operator's key, then it can be Approved.`,
+              name,
+            );
+          }
+        }
         const result = await this.deps.skillStore.update_status(name, newState);
         // v0.19.1 — sync declarative triggers on status transition.
         // Approved → register the skill's declared triggers; Draft or
@@ -1024,7 +1042,20 @@ export class McpServer {
     // posture (every write requires explicit human promotion regardless
     // of body claim) opt in via the flag at runtime startup. Per Perry's
     // `787b6b95` Option A.
-    const bodyToStore = this.deps.forceAlwaysDraft === true ? forceDraftStatus(source) : source;
+    // v0.21.0 — store-agnostic secured-mode closure (red-team 33bf53d3).
+    // skill_write cannot GRANT approval: if the body claims Approved without a
+    // valid v3 signature, force Draft — regardless of the SkillStore impl. The
+    // per-store guard didn't cover custom adopter stores (AMP-backed), letting an
+    // agent write status=Approved with no signature (a forgeable trust-state lie
+    // that misleads skill_list / skill_preflight / the dashboard). evaluateApproval
+    // -Gate is not-ok for any Draft OR unsigned-Approved body, so a genuine
+    // approve-flow write (signed body) is honored; everything else lands Draft.
+    let bodyToStore = source;
+    if (this.deps.forceAlwaysDraft === true) {
+      bodyToStore = forceDraftStatus(source);
+    } else if (isSecuredMode() && !evaluateApprovalGate(source).ok) {
+      bodyToStore = forceDraftStatus(source);
+    }
     // v0.17.0 — thread host-attested caller identity into `store({author})`
     // so MCP-authored skills stamp `SkillMeta.author = <calling agent>`,
     // not the runtime's wiring identity. When ctx.callerIdentity is
