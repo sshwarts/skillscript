@@ -1,5 +1,44 @@
 # Changelog
 
+## 0.21.0 — 2026-06-18 — preflight contract surface + store-agnostic approval closure
+
+The pre-execution contract is now first-class: an agent reads what a skill takes,
+returns, requires, and *touches* before running it, and the human approver sees the
+same effect footprint before signing.
+
+- **`skill_metadata` renamed to `skill_preflight`** (clean rename, no alias — pre-
+  adoption window). The name teaches the timing: call it BEFORE executing or
+  composing. Its response carries the full contract — `vars` / `returns` /
+  `requires` + the effectful footprint (connectors, builtins, shell binaries,
+  file-write / file-read / unsafe-shell / notify counts) — plus approval-gate
+  state and version/lifecycle.
+- **The same contract mirrors onto every `skill_list` entry** (`returns`,
+  `requires`, `effectful_footprint`), so an agent reads a skill's whole I/O +
+  effect contract from one discovery call, no per-skill round-trip. Free — the
+  source is already parsed to build the entry.
+- **Dashboard "What this skill touches" approver checklist.** The skill detail
+  view renders the AST-derived effectful footprint — the same op enumeration the
+  capability gate authorizes — right at the approve action, so the operator sees
+  the surface they're signing, not a regex guess.
+- **Secured-mode approval closure moved to the MCP handler (store-agnostic).** The
+  "skill_write / skill_status can't grant approval without a valid signature"
+  guard now fires at the handler ingress, regardless of SkillStore substrate — a
+  custom adopter store can no longer persist a forged `Approved` status. Closes a
+  red-team finding (the per-store guard missed custom stores). The execute gate
+  always backstopped it; this stops the *store* from lying.
+- **Adopter-finding fixes:** one shared approval-key resolver (provisioning +
+  signing can't diverge); a loud stderr boot-log line when secured mode + passcode
+  are set but signing is unwired (reaches headless adopters who never open the
+  dashboard); gate-aware Skills-view badges; runtime version shown in the dashboard.
+- **Workflow-teaching pass across the MCP tool descriptions** — each tool teaches
+  where it sits in the author loop (learn → discover → draft → commit → approve →
+  run → automate → observe) and what comes next.
+- **Docs overhaul:** in-browser approval + footprint checklist in the playbook;
+  the approval/secured-mode env-var surface added to the configuration reference;
+  retired-v1-token and shipped-strict-filter corrections in the connector-contract
+  and sqlite-skill-store references; ARCHITECTURE rewritten to current reality;
+  README + index quickstart + default-deny config fixes.
+
 ## 0.20.2 — 2026-06-18 — in-browser approval (passcode session-unlock)
 
 Click-to-approve in the dashboard, without putting standing signing power on the

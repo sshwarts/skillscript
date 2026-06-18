@@ -24,8 +24,8 @@ const REPO_ROOT = join(__dirname, "..");
 const PACKAGE_JSON = JSON.parse(readFileSync(join(REPO_ROOT, "package.json"), "utf8")) as Record<string, unknown>;
 
 describe("T7 — package.json polish", () => {
-  it("1. version is 0.20.2 (in-browser approval: passcode session-unlock + /approve signing route + SPA Approve button; the dashboard signs operator-side with no standing signing power)", () => {
-    expect(PACKAGE_JSON["version"]).toBe("0.20.2");
+  it("1. version is 0.21.0 (preflight contract surface: skill_metadata→skill_preflight + returns/requires/effectful-footprint mirrored onto skill_list + dashboard footprint checklist; store-agnostic secured-mode approval closure at the MCP handler)", () => {
+    expect(PACKAGE_JSON["version"]).toBe("0.21.0");
   });
 
   it("2. main + types + bin + engines.node ≥ 22.5 declared", () => {
