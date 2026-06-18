@@ -34,6 +34,10 @@ Know your own skills so you reach for them instead of rebuilding a workflow.
 ### When a task smells routine
 If an existing skill fits, use it — don't re-reason the steps:
 
+- `skill_preflight({ name })` — see what a skill takes, returns, requires, and
+  *touches* (its effectful footprint) plus whether it's cleared to run, before
+  you invoke or compose it. (`skill_list` entries already carry this contract, so
+  often you won't need a separate call.)
 - `execute_skill({ name })` — run a stored skill end-to-end.
 - `compile_skill({ name })` — preview the rendered plan first, no side effects.
 
@@ -75,7 +79,7 @@ When the agent picks among skills, it reads each `# Description:`. "Handles erro
 Make sure your agent instructions distinguish these, so the agent doesn't try to manually fire a cron skill (or ignore a skill it should be invoking).
 
 ### Trust the approval gate
-Authored skills land as **Draft** and cannot fire via triggers or `execute_skill` until a human approves them (the status carries a stamped token; a naked "Approved" won't execute). This is the safety boundary: an agent can *write* a skill, but a human decides whether it ever *runs*. Tell your agent this explicitly so it doesn't expect a freshly-written skill to be immediately runnable.
+Every skill has a `Draft → Approved → Disabled` lifecycle, and only `Approved` skills run. **In secured mode** (`SKILLSCRIPT_SECURED_MODE=true` — the recommended posture for any agent-authored or multi-author deployment) approval is an operator's Ed25519 signature: a skill an agent `skill_write`s lands **Draft**, a naked `# Status: Approved` is forced to Draft, and only a human holding the operator key can sign it into a runnable state. That's the real safety boundary — an agent can *write* a skill, but a human decides whether it ever *runs*. In unsecured mode the status flag alone gates execution (a bare `# Status: Approved` runs, unkeyed) — convenient for a single trusted author, but it means a skill *you* write as Approved is immediately runnable. Either way, tell your agent to treat a freshly-written skill as not-yet-runnable until a human has approved it.
 
 ### Author against discovered capability, not assumptions
 Before writing a skill that needs a data store, a model, or an external tool, check `runtime_capabilities()`. A skill that assumes a connector that isn't wired fails at dispatch with a clear error — but it's better to author against what's actually present. Use `# Requires: <connector>.<feature>` in a skill to fail-fast at compile time when a needed capability is missing.
@@ -91,7 +95,8 @@ The tools your agent has when a Skillscript runtime is wired:
 
 | Tool | Use |
 |---|---|
-| `skill_list({ filter? })` | Discover skills, grouped by category. Filter by status / trigger_kind / name_prefix / author. |
+| `skill_list({ filter? })` | Discover skills, grouped by category. Filter by status / trigger_kind / name_prefix / author. Each entry carries the full contract (vars / returns / requires / effectful footprint) + approval state. |
+| `skill_preflight({ name })` | Pre-execution contract check for one skill: what it takes / returns / requires / touches (effectful footprint) + approval-gate state + version. Call before invoking or composing. |
 | `skill_read({ name })` | Read a skill's source body. |
 | `compile_skill({ name \| source, inputs? })` | Render the compiled plan + surface errors. Read-only — safe to preview. |
 | `lint_skill({ name \| source })` | Static diagnostics (tier-1 errors / tier-2 warnings / tier-3 advisories). |
@@ -129,7 +134,7 @@ And authoring a new one:
 ## 5. What *not* to put in your agent file
 
 - **Don't reference a specific backend.** No "query the X store" / "call the Y model" by product name. Skills name connectors by role; the operator maps roles to backends in config. Your agent reads roles via `runtime_capabilities()`.
-- **Don't tell the agent a freshly-authored skill is runnable.** It's Draft until a human approves.
+- **Don't tell the agent a freshly-authored skill is runnable.** In secured mode (the recommended posture) it lands Draft until a human approves; have the agent treat anything it just wrote as not-yet-runnable regardless.
 - **Don't have the agent manually fire autonomous skills.** Cron/event skills fire themselves; the agent maintains them.
 - **Don't hardcode tool/endpoint details into skill bodies.** That's tool territory; skills orchestrate, tools execute.
 
