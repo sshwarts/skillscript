@@ -368,7 +368,7 @@ Every skill carries a lifecycle status — `Draft → Approved → Disabled`. **
 
 Approval is an Ed25519 signature, not a shared secret:
 
-- **Private key** — held by the operator, read **only** by the approve flow (`skillfile approve`). The runtime never loads it. For full isolation, run the runtime under a uid that cannot read the private key — then a co-resident agent can't forge approvals even with full read access to the runtime process. Same-uid still works, but isn't fully isolated (a documented 1.0 precondition; managed custody closes it later).
+- **Private key** — held by the operator, read **only** by the approve flow. That flow is either `skillfile approve` at a terminal (the runtime process never loads the key) or, if you opt into in-browser approval, the dashboard's passcode-gated `/approve` — which reads the key only after a live human enters the session passcode, never on its own. For maximum isolation, keep signing terminal-side and run the runtime under a uid that cannot read the private key — then a co-resident agent can't forge approvals even with full read access to the runtime process. Same-uid (or in-browser signing) still works, but isn't fully isolated (a documented 1.0 precondition; managed custody closes it later).
 - **Public key** — non-secret; the runtime reads it to *verify* signatures on every execution. No hot-path secret is the point: verification needs only the public key.
 
 First-run provisioning is automatic — starting the runtime or `skillfile init` in secured mode generates the keypair if absent (private written `0600`, default `~/.config/skillscript/approval.{key,pub}`, deliberately outside `SKILLSCRIPT_HOME`, the agent-readable data dir).
@@ -377,11 +377,19 @@ First-run provisioning is automatic — starting the runtime or `skillfile init`
 
 | Action | How |
 |---|---|
-| Approve one skill (review the body, then sign) | `skillfile approve <name>` |
+| Approve one skill (review the body, then sign) | `skillfile approve <name>` at a terminal |
 | Batch-approve everything pending | `skillfile reapprove --apply` (dry-run preview: `skillfile reapprove`) |
-| Approve from the dashboard | the **Approvals** queue — review the body + security signals, then run the emitted command at your terminal |
+| Approve from the dashboard — terminal signing | the **Approvals** queue surfaces the pending set, each skill's security signals, and its effectful footprint; copy the emitted `skillfile approve` command and run it at your terminal |
+| Approve from the dashboard — in-browser | with `SKILLSCRIPT_APPROVAL_PASSCODE` set, the queue's **Approve** button signs server-side after a one-time passcode unlock |
 
-The dashboard is a **review** surface, not a signing surface: it surfaces the pending queue and per-skill security-signal summary, but signing happens at your terminal where the private key lives (the network-facing runtime never holds it). `skill_write` / `skill_status` **cannot** grant approval in secured mode — an agent-written or status-flipped skill lands `Draft` until a key-holder signs it. (In unsecured mode, `skill_status → Approved` is honored directly, unkeyed.)
+**Two signing paths, one custody rule: the private key stays operator-side.**
+
+- **Terminal signing.** With no passcode configured, the dashboard is a pure **review** surface — pending queue, per-skill security signals, effectful-footprint checklist — but `/approve` is disabled and signing happens at your terminal where the key lives. The right posture when the dashboard host and the key-holder's terminal are the same machine.
+- **In-browser signing.** With `SKILLSCRIPT_APPROVAL_PASSCODE` set, the dashboard can sign without a terminal round-trip, and holds **no standing signing power**: the first approve in a browser session prompts for the passcode (`POST /unlock`), unlocking signing for that session only (~15-minute idle TTL, server-side, cookie-bound). A live human with the passcode is in the loop for every session — the runtime never gains the ability to approve on its own. Pair it with `SKILLSCRIPT_DASHBOARD_AUTH_TOKEN` (network hygiene on the dashboard) when the dashboard is reachable beyond localhost.
+
+Either way, `skill_write` / `skill_status` **cannot** grant approval in secured mode — an agent-written or status-flipped skill lands `Draft` until a key-holder signs it, enforced at the MCP handler regardless of the SkillStore substrate. (In unsecured mode, `skill_status → Approved` is honored directly, unkeyed.)
+
+**Misconfiguration is loud.** If secured mode and a passcode are both set but signing isn't actually wired (no SkillStore reaches the dashboard, or no readable key), the dashboard surfaces the gap as a banner *and* a stderr boot-log line and stays review-only — skills remain inert (fail-closed) while you see and fix it. The boot-log is what reaches a headless / programmatic adopter who never opens the dashboard.
 
 ### Migrating an existing skill set
 
@@ -533,11 +541,12 @@ The dashboard SPA at `http://<host>:<port>` exposes two security-focused surface
 
 **Security view (`#security` route).** Cross-skill list of blocked shell attempts — `{skill, target, binary, body, timestamp}` per refused call. Aggregated by binary so you can see at a glance "what did skills try to invoke that I haven't allowlisted." Backed by the `blocked_shell_attempts` MCP tool, which filters trace records by `blocked_reason: "binary-not-allowed"`. Runtimes without the tool exposed degrade cleanly to an "unavailable" note.
 
-**Skill detail view — security signals + source highlighting.** Each skill's detail page (clicking a skill name from `#skills`) shows:
-- A **"Security signals"** panel at the top: aggregated counts of shell ops + binaries used, unsafe-shell count, `# Autonomous: true`, per-op `approved="..."` authorizations, mutation ops (`$ skill_write` / `$ data_write` / `file_write`), wake-class `@session` deliveries, cron triggers.
+**Skill detail view — footprint checklist + security signals + source highlighting.** Each skill's detail page (clicking a skill name from `#skills`) shows:
+- A **"What this skill touches"** panel right at the approve action: the skill's **effectful footprint** — the MCP connectors it dispatches to, built-in `$` ops, shell binaries, and counts of `file_write` / `file_read` / unsafe-shell / `notify` ops, or "nothing effectful to authorize" for a pure skill. This is AST-derived — the *same* op enumeration the capability gate authorizes — so it's the authoritative surface the skill can touch once signed, not a textual guess. The least-privilege checklist the approver reads before signing.
+- A **"Security signals"** panel: aggregated counts of shell ops + binaries used, unsafe-shell count, `# Autonomous: true`, per-op `approved="..."` authorizations, mutation ops (`$ skill_write` / `$ data_write` / `file_write`), wake-class `@session` deliveries, cron triggers. (A heuristic source scan — it adds risk-framing signals the footprint doesn't, e.g. the `approved=` bypass and the autonomous flag; the two panels complement each other.)
 - **Inline tinted highlighting** on the skill source `<pre>` body. Two tiers: **orange** for HIGH-tier signals (`unsafe=true`, `# Autonomous: true`, `approved="..."`, mutation ops); **yellow** for MEDIUM-tier signals (`shell(...)` calls, `notify(agent="X@session", ...)` wake-class deliveries). Reviewers scan-prioritize: orange = review carefully; yellow = worth noting.
 
-The two surfaces compose: summary panel tells you WHAT to look for; highlights tell you WHERE to look.
+The surfaces compose: the footprint says WHAT the skill can do, the security-signals panel says WHAT to scrutinize, the highlights say WHERE to look. The same footprint rides every `skill_list` entry and the `skill_preflight` contract, so an agent composing against a skill reads the same truth the human approver does.
 
 ### Future direction
 
