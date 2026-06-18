@@ -1,5 +1,5 @@
 import { createServer } from "node:http";
-import { timingSafeEqual } from "node:crypto";
+import { timingSafeEqual, randomBytes } from "node:crypto";
 import type { IncomingMessage, ServerResponse, Server } from "node:http";
 import { readFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
@@ -7,8 +7,10 @@ import { extname, join, resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { McpServer, JsonRpcRequest } from "../mcp-server.js";
 import type { Scheduler } from "../scheduler.js";
+import type { SkillStore } from "../connectors/types.js";
 import { EventNotFoundError, EventParamMismatchError } from "../errors.js";
 import { resolveRuntimeConfigFromEnv, pickEnvOptionalOption } from "../runtime-env-resolver.js";
+import { stampApprovalEd25519, isSecuredMode } from "../approval.js";
 
 /**
  * Dashboard HTTP server (T6b Phase 2). Bundles the SPA assets + a
@@ -101,7 +103,29 @@ export interface DashboardServerConfig {
    * key. Falls back to `SKILLSCRIPT_DASHBOARD_AUTH_TOKEN`.
    */
   authToken?: string;
+  /**
+   * v0.20.2 — in-browser approval (passcode session-unlock). When BOTH a
+   * `skillStore` and `approvalPasscode` are wired (and secured mode is on), the
+   * dashboard mounts `POST /unlock` + `POST /approve`. The approver enters the
+   * passcode once per browser session (`/unlock`) to unlock signing; `/approve`
+   * then signs the named skill with the operator's private key and stores it
+   * Approved. The unlock is in-memory, session-cookie-bound, and expires
+   * (default 15 min idle) — the dashboard holds no STANDING signing power, only
+   * a live human-entered passcode unlocks it.
+   *
+   * SECURITY: enabling this gives the dashboard process read access to the
+   * private key. Run it only where the agent can't reach it (operator-side /
+   * isolated uid). Default unset → no `/approve`, dashboard stays review-only.
+   */
+  skillStore?: SkillStore;
+  /** Path to the operator's Ed25519 private key (signing). Defaults via env. */
+  approvalKeyFile?: string;
+  /** Passcode gating in-browser signing. Falls back to `SKILLSCRIPT_APPROVAL_PASSCODE`. */
+  approvalPasscode?: string;
 }
+
+/** v0.20.2 — idle lifetime of an in-browser approval unlock session. */
+const UNLOCK_TTL_MS = 15 * 60 * 1000;
 
 /** Constant-time token comparison (length-guarded so timingSafeEqual won't throw). */
 function tokensEqual(a: string, b: string): boolean {
@@ -129,6 +153,12 @@ export class DashboardServer {
   private readonly eventIngressAuthToken: string | undefined;
   private readonly scheduler: Scheduler | undefined;
   private readonly authToken: string | undefined;
+  // v0.20.2 — in-browser approval (passcode session-unlock).
+  private readonly skillStore: SkillStore | undefined;
+  private readonly approvalKeyFile: string | undefined;
+  private readonly approvalPasscode: string | undefined;
+  /** sessionId → expiry epoch-ms. An entry means "this session unlocked signing". */
+  private readonly unlockSessions = new Map<string, number>();
   private httpServer: Server | null = null;
 
   constructor(config: DashboardServerConfig) {
@@ -167,6 +197,21 @@ export class DashboardServer {
     }
     // v0.20.1 — dashboard auth gate. Empty string treated as unset.
     this.authToken = config.authToken ?? (process.env["SKILLSCRIPT_DASHBOARD_AUTH_TOKEN"] || undefined);
+    // v0.20.2 — in-browser approval wiring.
+    this.skillStore = config.skillStore;
+    this.approvalKeyFile = config.approvalKeyFile ?? (process.env["SKILLSCRIPT_APPROVAL_KEY_FILE"] || undefined);
+    this.approvalPasscode = config.approvalPasscode ?? (process.env["SKILLSCRIPT_APPROVAL_PASSCODE"] || undefined);
+  }
+
+  /** In-browser signing is available only when fully wired + secured. */
+  private signingEnabled(): boolean {
+    return (
+      isSecuredMode() &&
+      this.skillStore !== undefined &&
+      this.approvalPasscode !== undefined &&
+      this.approvalKeyFile !== undefined &&
+      existsSync(this.approvalKeyFile)
+    );
   }
 
   async start(): Promise<void> {
@@ -237,6 +282,29 @@ export class DashboardServer {
         await this.handleEvent(req, res);
         return;
       }
+      // v0.20.2 — in-browser approval (passcode session-unlock). Both routes
+      // 404 when signing isn't wired (dashboard stays review-only by default).
+      if (url.pathname === "/unlock" || url.pathname === "/approve") {
+        if (!this.signingEnabled()) {
+          res.statusCode = 404;
+          res.end("Not Found (in-browser approval not enabled)");
+          return;
+        }
+        if (req.method !== "POST") {
+          res.statusCode = 405;
+          res.end("Method Not Allowed");
+          return;
+        }
+        await (url.pathname === "/unlock" ? this.handleUnlock(req, res) : this.handleApprove(req, res));
+        return;
+      }
+      // v0.20.2 — lets the SPA decide whether to render in-browser approve UI.
+      if (url.pathname === "/signing-status") {
+        res.statusCode = 200;
+        res.setHeader("content-type", "application/json");
+        res.end(JSON.stringify({ enabled: this.signingEnabled() }));
+        return;
+      }
       if (req.method === "GET") {
         if (!this.mountSpa) {
           res.statusCode = 404;
@@ -288,6 +356,80 @@ export class DashboardServer {
     const auth = req.headers["authorization"];
     if (typeof auth === "string" && auth.startsWith("Bearer ")) return auth.slice(7);
     return undefined;
+  }
+
+  // ─── v0.20.2 — in-browser approval (passcode session-unlock) ─────────────────
+
+  /** Is this request's `skillscript_unlock` cookie a live (unexpired) session? */
+  private hasLiveUnlock(req: IncomingMessage): boolean {
+    const cookie = req.headers["cookie"];
+    if (typeof cookie !== "string") return false;
+    const m = /(?:^|;\s*)skillscript_unlock=([^;]+)/.exec(cookie);
+    if (!m || m[1] === undefined) return false;
+    const expiry = this.unlockSessions.get(m[1]);
+    if (expiry === undefined) return false;
+    if (Date.now() > expiry) { this.unlockSessions.delete(m[1]); return false; }
+    return true;
+  }
+
+  /** POST /unlock — verify the passcode, mint an in-memory unlock session. */
+  private async handleUnlock(req: IncomingMessage, res: ServerResponse): Promise<void> {
+    const chunks: Buffer[] = [];
+    for await (const chunk of req) chunks.push(chunk as Buffer);
+    let passcode: unknown;
+    try { passcode = (JSON.parse(Buffer.concat(chunks).toString("utf8")) as { passcode?: unknown }).passcode; }
+    catch { passcode = undefined; }
+    if (typeof passcode !== "string" || !tokensEqual(passcode, this.approvalPasscode!)) {
+      res.statusCode = 401;
+      res.setHeader("content-type", "application/json");
+      res.end(JSON.stringify({ unlocked: false, error: "incorrect passcode" }));
+      return;
+    }
+    // Mint a session (random id, in-memory, idle-TTL). The decrypted/plaintext
+    // key is NOT cached — signing reads it per-approve while the session lives.
+    const sessionId = randomBytes(18).toString("base64url");
+    this.unlockSessions.set(sessionId, Date.now() + UNLOCK_TTL_MS);
+    res.statusCode = 200;
+    res.setHeader("Set-Cookie", `skillscript_unlock=${sessionId}; HttpOnly; SameSite=Strict; Path=/`);
+    res.setHeader("content-type", "application/json");
+    res.end(JSON.stringify({ unlocked: true, ttl_seconds: UNLOCK_TTL_MS / 1000 }));
+  }
+
+  /** POST /approve {name} — sign the named skill with the operator's key + store
+   *  it Approved. Requires a live unlock session (passcode entered this session). */
+  private async handleApprove(req: IncomingMessage, res: ServerResponse): Promise<void> {
+    const json = (status: number, body: unknown): void => {
+      res.statusCode = status;
+      res.setHeader("content-type", "application/json");
+      res.end(JSON.stringify(body));
+    };
+    if (!this.hasLiveUnlock(req)) {
+      json(401, { approved: false, needs_passcode: true });
+      return;
+    }
+    const chunks: Buffer[] = [];
+    for await (const chunk of req) chunks.push(chunk as Buffer);
+    let name: unknown;
+    try { name = (JSON.parse(Buffer.concat(chunks).toString("utf8")) as { name?: unknown }).name; }
+    catch { name = undefined; }
+    if (typeof name !== "string" || name.length === 0) {
+      json(400, { approved: false, error: "missing skill name" });
+      return;
+    }
+    try {
+      const loaded = await this.skillStore!.load(name);
+      const priv = await readFile(this.approvalKeyFile!, "utf8");
+      const signed = stampApprovalEd25519(loaded.source, priv);
+      const info = await this.skillStore!.store(name, signed, { status: "Approved" });
+      if (info.status === "Approved") {
+        json(200, { approved: true, name, version: info.version });
+      } else {
+        // Public key didn't verify the signature → store forced Draft.
+        json(500, { approved: false, error: "signature did not verify against the configured public key" });
+      }
+    } catch (err) {
+      json(404, { approved: false, error: (err as Error).message });
+    }
   }
 
   /**

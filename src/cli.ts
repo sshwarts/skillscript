@@ -1215,6 +1215,10 @@ async function cmdRuntimeHost(args: string[], opts: { mode: "serve" | "dashboard
     eventIngressEnabled,
     ...(eventIngressAuthToken !== undefined ? { eventIngressAuthToken } : {}),
     ...(eventIngressEnabled ? { scheduler: wired.scheduler } : {}),
+    // v0.20.2 — in-browser approval (passcode session-unlock). Mounts /unlock +
+    // /approve only when SKILLSCRIPT_APPROVAL_PASSCODE is set + secured + keyed.
+    skillStore: wired.skillStore,
+    approvalKeyFile: process.env["SKILLSCRIPT_APPROVAL_KEY_FILE"] ?? defaultApprovalKeyFile(),
   });
   await server.start();
   const label = opts.mode === "dashboard" ? "dashboard" : "serve (headless)";

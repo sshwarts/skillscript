@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { McpServer } from "../src/mcp-server.js";
@@ -8,6 +8,7 @@ import { Scheduler } from "../src/scheduler.js";
 import { FilesystemSkillStore } from "../src/connectors/skill-store.js";
 import { FilesystemTraceStore } from "../src/trace.js";
 import { Registry } from "../src/connectors/registry.js";
+import { generateApprovalKeypair, setSecuredMode, setApprovalPublicKey } from "../src/approval.js";
 
 interface Ctx {
   server: DashboardServer;
@@ -202,5 +203,97 @@ describe("DashboardServer auth gate (v0.20.1)", () => {
       body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list" }),
     });
     expect(r.status).toBe(401);
+  });
+});
+
+describe("DashboardServer in-browser approval — passcode session-unlock (v0.20.2)", () => {
+  async function signingSetup(): Promise<{ baseUrl: string; skillStore: FilesystemSkillStore; cleanup: () => Promise<void> }> {
+    const home = mkdtempSync(join(tmpdir(), "skillscript-sign-"));
+    const skillStore = new FilesystemSkillStore(join(home, "skills"));
+    const traceStore = new FilesystemTraceStore(join(home, "traces"));
+    const scheduler = new Scheduler({ registry: new Registry(), skillStore, traceStore });
+    const mcpServer = new McpServer({ skillStore, scheduler, traceStore });
+    const { publicKeyPem, privateKeyPem } = generateApprovalKeypair();
+    const keyFile = join(home, "approval.key");
+    writeFileSync(keyFile, privateKeyPem);
+    // Arm secured + public key so signingEnabled() is true + the store honors v3.
+    setApprovalPublicKey(publicKeyPem);
+    setSecuredMode(true);
+    await skillStore.store("needs-approval", "# Skill: needs-approval\n# Status: Draft\nrun:\n    emit(text=\"hi\")\ndefault: run\n", { status: "Draft" });
+    const server = new DashboardServer({ mcpServer, port: 0, bindAddress: "127.0.0.1", skillStore, approvalKeyFile: keyFile, approvalPasscode: "sesame" });
+    await server.start();
+    return {
+      baseUrl: `http://127.0.0.1:${server.boundPort()}`,
+      skillStore,
+      cleanup: async () => { await server.stop(); setSecuredMode(false); setApprovalPublicKey(null); rmSync(home, { recursive: true, force: true }); },
+    };
+  }
+
+  let ctx: Awaited<ReturnType<typeof signingSetup>>;
+  beforeEach(async () => { ctx = await signingSetup(); });
+  afterEach(async () => { await ctx.cleanup(); });
+
+  const post = (path: string, body: unknown, cookie?: string) => fetch(`${ctx.baseUrl}${path}`, {
+    method: "POST",
+    headers: { "content-type": "application/json", ...(cookie ? { cookie } : {}) },
+    body: JSON.stringify(body),
+  });
+
+  it("GET /signing-status → enabled:true when wired", async () => {
+    const r = await fetch(`${ctx.baseUrl}/signing-status`);
+    expect(await r.json()).toEqual({ enabled: true });
+  });
+
+  it("/approve without an unlock session → 401 needs_passcode", async () => {
+    const r = await post("/approve", { name: "needs-approval" });
+    expect(r.status).toBe(401);
+    expect((await r.json() as { needs_passcode: boolean }).needs_passcode).toBe(true);
+  });
+
+  it("/unlock with the wrong passcode → 401", async () => {
+    const r = await post("/unlock", { passcode: "wrong" });
+    expect(r.status).toBe(401);
+  });
+
+  it("unlock → approve signs the skill v3 and stores it Approved", async () => {
+    const unlock = await post("/unlock", { passcode: "sesame" });
+    expect(unlock.status).toBe(200);
+    const cookie = (unlock.headers.get("set-cookie") ?? "").split(";")[0]!;
+    expect(cookie).toMatch(/skillscript_unlock=/);
+
+    const approve = await post("/approve", { name: "needs-approval" }, cookie);
+    expect(approve.status).toBe(200);
+    expect((await approve.json() as { approved: boolean }).approved).toBe(true);
+
+    const loaded = await ctx.skillStore.load("needs-approval");
+    expect(loaded.source).toMatch(/^# Status: Approved v3:/m);
+  });
+
+  it("a stale (expired/forged) unlock cookie is rejected", async () => {
+    const r = await post("/approve", { name: "needs-approval" }, "skillscript_unlock=forged-session-id");
+    expect(r.status).toBe(401);
+  });
+});
+
+describe("DashboardServer in-browser approval — disabled by default", () => {
+  it("/unlock + /approve + signing-status:false when no passcode is wired", async () => {
+    const home = mkdtempSync(join(tmpdir(), "skillscript-nosign-"));
+    const skillStore = new FilesystemSkillStore(join(home, "skills"));
+    const traceStore = new FilesystemTraceStore(join(home, "traces"));
+    const scheduler = new Scheduler({ registry: new Registry(), skillStore, traceStore });
+    const mcpServer = new McpServer({ skillStore, scheduler, traceStore });
+    const server = new DashboardServer({ mcpServer, port: 0, bindAddress: "127.0.0.1" });
+    await server.start();
+    try {
+      const base = `http://127.0.0.1:${server.boundPort()}`;
+      expect(await (await fetch(`${base}/signing-status`)).json()).toEqual({ enabled: false });
+      const u = await fetch(`${base}/unlock`, { method: "POST", headers: { "content-type": "application/json" }, body: "{}" });
+      expect(u.status).toBe(404);
+      const a = await fetch(`${base}/approve`, { method: "POST", headers: { "content-type": "application/json" }, body: "{}" });
+      expect(a.status).toBe(404);
+    } finally {
+      await server.stop();
+      rmSync(home, { recursive: true, force: true });
+    }
   });
 });
