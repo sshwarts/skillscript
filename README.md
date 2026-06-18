@@ -35,6 +35,7 @@
 - [Quickstart](#quickstart)
   - [A canonical autonomous skill](#a-canonical-autonomous-skill)
 - [Connector model](#connector-model)
+- [Configuration & security knobs](#configuration--security-knobs)
 - [CLI](#cli)
 - [MCP server surface](#mcp-server-surface)
 - [Examples](#examples)
@@ -99,6 +100,7 @@ Skillscript deliberately constrains expressiveness. It's not Turing complete. It
 - **Declarative legibility.** Skills are DAGs of typed dispatches. A human reading a skill sees exactly which tools get called, which data writes happen, which model prompts fire. The same source produces the same audit diagram every time.
 - **Connector-mediated capability.** Skills don't import packages, they invoke connectors, gated artifacts with curated tool surfaces. Python doesn't disappear from the system; it moves out of the agent's hands and into the connector implementations adopters write deliberately. The safety boundary moves to the connector edge.
 - **Static validation before admission.** A skill that fails the linter can't enter the library. Structural issues, missing dependencies, undeclared variables, mutation paths without confirmation gates are caught at authorship time, not at 3am.
+- **Signed approval before effect.** In secured mode, only skills carrying a valid operator signature perform effectful ops — an unapproved or tampered skill is inert no matter how it's dispatched (CLI, cron, `/event`, MCP, composition). Approval is an Ed25519 signature applied operator-side and verified on every execution; the runtime never holds the signing key.
 - **Asymmetric cost.** Routine work (classify, dispatch, transform) costs local-model tokens. The frontier model is reserved for the small fraction of work that actually needs frontier judgment.
 
 ## Why not just have the agent write a Skill?
@@ -251,21 +253,25 @@ mkdir -p ./skills && cat > ./skills/hello.skill.md <<'EOF'
 Hello, ${WHO}!
 EOF
 
-# Start the runtime + dashboard
-SKILLSCRIPT_HOME=./skills skillfile dashboard --port 7878
+# Point the runtime at this directory — it reads skills from $SKILLSCRIPT_HOME/skills/
+export SKILLSCRIPT_HOME=$(pwd)
 
-# In another terminal, run the skill
+# Run the skill
 skillfile execute hello
+# → Hello, world!
 
-# Open the dashboard
+# Start the runtime + dashboard, then open it
+skillfile dashboard --port 7878
 open http://localhost:7878
 ```
+
+The skill runs immediately because the runtime starts in **unsecured** mode, where a bare `# Status: Approved` is sufficient. For a deployment that should only run key-signed skills, set `SKILLSCRIPT_SECURED_MODE=true` and approve with `skillfile approve hello` (or from the dashboard) — see [Approval + secured mode](docs/adopter-playbook.md#approval--secured-mode).
 
 Or via Docker / GHCR:
 
 ```bash
-docker run -p 7878:7878 -v $(pwd)/skills:/skills \
-  -e SKILLSCRIPT_HOME=/skills \
+docker run -p 7878:7878 -v $(pwd)/skills:/data/skills \
+  -e SKILLSCRIPT_HOME=/data \
   ghcr.io/sshwarts/skillscript-runtime:latest
 ```
 
@@ -296,7 +302,7 @@ For stdio-only clients, bridge it the same way you'd bridge any HTTP MCP — via
 ```
 ### A canonical autonomous skill
 
-The hello example is a single static target. A more representative shape is a cron-fired skill that pulls data, processes it, and delivers via file. The example below uses only runtime-intrinsic ops (`shell`, `file_write`, `emit`) — no adopter-wired connectors required, so it runs against a fresh install:
+The hello example is a single static target. A more representative shape is a cron-fired skill that pulls data, processes it, and delivers via file. The example below uses only runtime-intrinsic ops (`shell`, `file_write`, `emit`) — no adopter-wired connectors. The runtime gates shell binaries and filesystem paths default-deny, so you allowlist exactly what this skill touches before it runs:
 
 ```
 # Skill: daily-disk-check
@@ -315,12 +321,21 @@ snapshot:
 default: snapshot
 ```
 
-Four things to notice:
+The `df` binary and the `/var/log/skillscript` path are both default-deny until the operator allowlists them:
+
+```bash
+export SKILLSCRIPT_SHELL_ALLOWLIST=df
+export SKILLSCRIPT_FS_ALLOWLIST=/var/log/skillscript
+skillfile execute daily-disk-check
+```
+
+Five things to notice:
 
 1. **`# Triggers: cron:"..."`** — the runtime registers the cron schedule at load time; no external scheduler.
 2. **`# Autonomous: true`** — the skill-author's declaration that mutation ops (here `file_write`) are authorized to fire without per-call confirmation. Without this header, mutation ops require an inline `approved="<reason>"` kwarg on each call site.
 3. **`${EVENT.fired_at_unix}` + `${NOW}`** — ambient refs the runtime substitutes per-fire. `EVENT.*` covers the trigger payload; `NOW` is the ISO timestamp at op dispatch. See [Language Reference §3](docs/language-reference.md) for the full ambient list.
 4. **Body text above `snapshot:` is the output template** — the runtime renders `Snapshot written for ${NOW}.` against final vars and publishes it as the skill's canonical output. No `emit()` ceremony needed for declarative outputs; see the adopter-playbook's "Output template" section.
+5. **Default-deny allowlists** — `shell` and `file_*` ops are refused until the operator allowlists the binary (`SKILLSCRIPT_SHELL_ALLOWLIST`) and path roots (`SKILLSCRIPT_FS_ALLOWLIST`). An operator boundary the skill author can't escape — see [Configuration & security knobs](#configuration--security-knobs).
 
 Swap in `$ ticketing_search`, `$ llm`, `$ data_write` once you've wired connectors, and the same skill shape becomes a real triage pipeline.
 
@@ -379,6 +394,18 @@ Two credential shapes:
 
 **Closed-set class registry:** the runtime ships a fixed list of `class:` values it recognizes. `RemoteMcpConnector` is the JSON-instantiable class for the stdio-bridged remote MCP pattern; `CallbackMcpConnector` is wired via embedder code only (not configurable from JSON). Plugin-style runtime-arbitrary class loading is deliberately out of scope. Use `runtime_capabilities({include:["mcpConnectorClasses"]})` to introspect the available set in your runtime.
 
+## Configuration & security knobs
+
+Operator settings come from `$SKILLSCRIPT_HOME/.env` (auto-loaded by the CLI), the shell environment, or `skillscript.config.json`. Three are **default-deny** boundaries you opt into, not out of — a skill can only do what the operator has permitted:
+
+| Knob | Default | Effect |
+|---|---|---|
+| `SKILLSCRIPT_SHELL_ALLOWLIST` | deny-all | which binaries `shell(...)` may invoke |
+| `SKILLSCRIPT_FS_ALLOWLIST` | deny-all | which path roots `file_read` / `file_write` may touch |
+| `SKILLSCRIPT_SECURED_MODE` | off | require an operator signature for any effectful op (unapproved skills inert) |
+
+`skillfile shell-audit` enumerates the binaries your skill corpus needs, ready to paste into the allowlist. The full env-var surface (ports, timeouts, identity headers, `/event` ingress, approval key paths, dashboard auth) lives in the **[Configuration reference](docs/configuration.md)**.
+
 ## CLI
 
 The CLI covers the full authoring + ops lifecycle:
@@ -409,7 +436,7 @@ The runtime exposes its tools over MCP (HTTP at `/rpc`) for cold-client authorin
 
 | Category | Tools |
 |---|---|
-| Skill management | `skill_list`, `skill_metadata`, `skill_read`, `skill_status`, `skill_write` |
+| Skill management | `skill_list`, `skill_preflight`, `skill_read`, `skill_status`, `skill_write` |
 | Data | `data_read` |
 | Authoring | `lint_skill`, `compile_skill` |
 | Composition | `execute_skill` |
@@ -417,7 +444,7 @@ The runtime exposes its tools over MCP (HTTP at `/rpc`) for cold-client authorin
 | Observability | `health_metrics`, `blocked_shell_attempts` |
 | Discovery | `runtime_capabilities`, `help` |
 
-This is the "agent reaches MCP" path — an external agent (Claude, GPT, anything that speaks MCP) can author, validate, and deploy skills entirely over the wire. `help()` is the entry point — call with no arguments for a ~500-token quickstart, or with `{topic: "ops" | "frontmatter" | "examples" | "connectors" | "lint-codes"}` for deeper sections. `execute_skill` runs a skill end-to-end against the runtime's connectors in either of two modes: `{name}` invokes a stored skill (subject to the hash-token approval gate); `{source}` runs an ad-hoc inline body that's never persisted (one-off scripting without polluting the store). Both modes honor `mechanical: true` for dispatch-graph preview, and enforce the mutation gate at runtime so `$ data_write` / `file_write` without `# Autonomous: true` / `??` / `approved=...` throw `UnconfirmedMutationError` regardless of which mode invoked them.
+This is the "agent reaches MCP" path — an external agent (Claude, GPT, anything that speaks MCP) can author, validate, and deploy skills entirely over the wire. `help()` is the entry point — call with no arguments for a ~500-token quickstart, or with `{topic: "ops" | "frontmatter" | "examples" | "connectors" | "lint-codes" | "composition"}` for deeper sections. `execute_skill` runs a skill end-to-end against the runtime's connectors in either of two modes: `{name}` invokes a stored skill (subject to the approval gate — in secured mode, an operator signature verified on every execution); `{source}` runs an ad-hoc inline body that's never persisted (one-off scripting without polluting the store). Both modes honor `mechanical: true` for dispatch-graph preview, and enforce the mutation gate at runtime so `$ data_write` / `file_write` without `# Autonomous: true` / `??` / `approved=...` throw `UnconfirmedMutationError` regardless of which mode invoked them.
 
 ## Examples
 
