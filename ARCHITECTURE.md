@@ -1,6 +1,6 @@
 # Architecture
 
-One-page map of the `skillscript-runtime` codebase. Per ERD §1, the *narrow core* (parser + compile + runtime + lint + connectors/) stays under the nudged LOC ceiling — currently 5650, tracked by `scripts/loc-ceiling.mjs` with full history in that file's header comment. Auxiliary surface (CLI, dashboard, MCP server, scheduler, observability) is reported but doesn't gate the build. Tests count separately.
+One-page map of the `skillscript-runtime` codebase. Per ERD §1, the *narrow core* (parser + compile + runtime + lint + connectors/) stays under a nudged LOC ceiling — currently **11800**, tracked by `scripts/loc-ceiling.mjs` (the full nudge history, one line per feature-driven bump, lives in that file's header comment). Auxiliary surface (CLI, dashboard, MCP server, scheduler, observability, config loaders) is reported but doesn't gate the build. Tests count separately.
 
 ## Top-level layout
 
@@ -10,84 +10,100 @@ src/
   cli.ts                — `skillfile` CLI entrypoint
   parser.ts             — source text → AST (NARROW CORE)
   compile.ts            — AST → resolved skill model → rendered artifact (NARROW CORE; owns toposort)
-  filters.ts            — pipe-filter implementations (NARROW CORE via connectors/; see notes)
+  filters.ts            — pipe-filter implementations (NARROW CORE)
   lint.ts               — structural validation (NARROW CORE)
   runtime.ts            — executor: walks compiled artifact, dispatches ops (NARROW CORE)
-  composition.ts        — `$ execute_skill` + `& invoke` runtime dispatch (v0.2.8)
-  version.ts            — single-source RUNTIME_VERSION from package.json (v0.2.12)
-  help-content.ts       — `help({topic})` MCP tool content
+  composition.ts        — `$ execute_skill` + `& invoke` runtime dispatch
+  dispatch-validate.ts  — shared qualified-dispatch validator (lint + runtime both call it)
+  mutation-gate.ts      — non-interactive mutation authorization (# Autonomous / approved= / ??)
+  approval.ts           — approval gate: status semantics + secured-mode Ed25519 sign/verify
+  safe-path.ts          — filesystem path allowlist: canonicalize (realpath) + under-root check
+  skill-surface.ts      — effectful-footprint extractor (skill_preflight + dashboard approver checklist)
+  skill-catalog.ts      — buildSkillCatalog: SkillStore metadata + parsed source → SkillCatalog
   errors.ts             — OpError class hierarchy + structured runtime errors
-  provenance.ts         — ProvenanceBlock + content_hash recording (Phase 3)
-  scheduler.ts          — trigger registry + cron scan + EVENT.* ambient population
+  provenance.ts         — ProvenanceBlock + content_hash recording
+  scheduler.ts          — trigger registry + cron scan + /event dispatch + EVENT.* ambient population
   audit.ts              — `skillfile audit` recompile-staleness detector
   trace.ts              — TraceBuilder + on-disk trace store
   metrics.ts            — health-metrics aggregator
   skill-manager.ts      — high-level skill lifecycle helpers
-  bootstrap.ts          — wires everything: SkillStore + Registry + MCP server + dashboard
-  mcp-server.ts         — JSON-RPC 2.0 MCP server (13 tools)
+  runtime-config.ts     — skillscript.config.json loader + ${ENV} substitution
+  runtime-env-resolver.ts — SKILLSCRIPT_* env-var resolution + precedence
+  dotenv-loader.ts      — .env file parsing
+  sqlite-warning-suppress.ts — silences the node:sqlite experimental warning
+  help-content.ts       — `help({topic})` MCP tool content
+  version.ts            — single-source RUNTIME_VERSION from package.json
+  bootstrap.ts          — wires everything: substrates + Registry + Scheduler + MCP server + dashboard
+  mcp-server.ts         — JSON-RPC 2.0 MCP server (17 tools)
   connectors/           — NARROW CORE
-    types.ts            — contracts: SkillStore, MemoryStore, LocalModel, McpConnector
-    agent.ts            — AgentConnector contract (Augmenting/Template delivery)
+    types.ts            — contracts: SkillStore, DataStore, LocalModel, McpConnector, AgentConnector
+    agent.ts            — AgentConnector contract (augment/template delivery + wake)
     agent-noop.ts       — default AgentConnector (no-op delivery)
     registry.ts         — per-kind instance registry + three-layer resolution
     skill-store.ts      — bundled default: filesystem at $SKILLSCRIPT_HOME/skills/
-    memory-store.ts     — bundled default: SQLite + FTS at $SKILLSCRIPT_HOME/memory.db
+    sqlite-skill-store.ts — bundled SQLite SkillStore (two-table versioned)
+    skill-store-mcp.ts  — SkillStore → MCP-surface bridge
+    data-store.ts       — bundled SQLite + FTS DataStore at $SKILLSCRIPT_HOME/data.db
+    data-store-mcp.ts   — DataStore → `$ data_read` bridge (filter-scope enforced)
+    filter-enforcement.ts — supported_filters validation → UnsupportedFilterError
     local-model.ts      — bundled default: Ollama at localhost:11434
-    mcp.ts              — bundled default: stub; no servers wired by default
-    config.ts           — connectors.json loader (v0.4.0+): parse + validate + ${ENV}/env-block-as-scope substitution + closed-set class registry + gitignore-detection (v0.4.1)
-    mcp-remote.ts       — RemoteMcpConnector (v0.4.1): child-process spawn + JSON-RPC stdio framing (lsp + newline) + initialize handshake + tool dispatch + lifecycle
+    local-model-mcp.ts  — LocalModel → `$ llm` bridge
+    mcp.ts              — bundled stub McpConnector (no servers wired by default)
+    mcp-remote.ts       — RemoteMcpConnector: stdio child-process MCP (lsp + newline framing)
+    http-mcp.ts         — HttpMcpConnector: direct Streamable HTTP MCP + identity propagation
+    config.ts           — connectors.json loader: parse + validate + ${ENV}/env-block-as-scope + closed-set class registry + gitignore-detect
     index.ts            — barrel re-exports
-  dashboard/            — Vite SPA + dashboard HTTP server (v0.2.7)
-  testing/              — test-only helpers shipped with the package
+  dashboard/            — Vite SPA + dashboard HTTP server (also hosts /rpc + /event + approval routes)
+  testing/              — test-only helpers (conformance suites) shipped with the package
 ```
-
-Narrow-core LOC history (nudges driven by language extensions):
-- 5000 (T7 baseline) → 5100 (v0.2.10 parser robustness) → 5200 (v0.2.12 lint coverage) → 5400 (v0.3.0 `$append` accumulator) → 5500 (v0.3.1 forward-reference deferred resolution) → 5650 (v0.3.2 and/or/not + filter chain + `|json_parse`) → 5700 (v0.3.3 `$ json_parse` op + lint advisory + Bug D parser-recovery; `|json_parse` filter removed) → 5750 (v0.3.4 conditional multi-filter chain + parse-error dedup + unified sink-scope recovery) → 6000 (v0.4.0 connectors.json loader + closed-set class registry + two new lint rules + credential discipline) → 6600 (v0.4.1 RemoteMcpConnector + allowed_tools allowlist + env-block-as-scope + framing config + gitignore-detect + lint auto-wire + foreach-over-parsed-JSON + kwarg coercion)
 
 ## What each narrow-core file owns
 
 | File | Responsibility |
 | --- | --- |
-| `parser.ts` | Tokenize and parse skill source. Header lines, target blocks, op grammar (`!`/`$`/`$set`/`$append`/`?`/`@`/`>`/`~`/`&`/`??`), `if`/`elif`/`else`/`foreach`, compound conditions (`and`/`or`/`not` + parens since v0.3.2). Produces AST. Recursive structural decomposition for compound conditions in `validateCondition`. Syntax errors only — semantic checks downstream. |
-| `compile.ts` | Three subsystems: (1) variable resolution against `# Requires:` cascade + caller inputs; (2) data-skill compile-time inlining; (3) topo-sort + render. Output formats: `prompt` (canonical), `prose`. Forward-reference deferral for missing `&` targets (v0.3.1). Produces compiled artifact + provenance sidecar. |
-| `filters.ts` | Pipe-filter implementations dispatched by `$(NAME\|filter)` syntax. v1 set: `url`, `shell`, `json`, `trim`, `length`. (`json_parse` was a v0.3.2 addition removed in v0.3.3 — use the `$ json_parse $(VAR) -> OUT` op instead, which binds structured shape.) Adding a new filter = adding a case to `applyFilter` + registering in `KNOWN_FILTERS` + documenting in `help-content.ts`. |
-| `lint.ts` | Structured diagnostics across 3 tiers. ~30 rules covering parse errors, var resolution, condition grammar, composition refs (`unknown-skill-reference` demoted to tier-2 in v0.3.1 with tier-3 `deferred-skill-reference` advisory), shell safety (`unsafe-shell-op`, `unsafe-shell-disabled`, `unsafe-shell-ambiguous-subst`), mutation safety (`unconfirmed-mutation`), accumulator safety (v0.3.0 `uninitialized-append`, `foreach-local-accumulator-target`, `append-to-non-list`), retrieval-arg validation, credential leak detection. |
-| `runtime.ts` | Executor that walks the compiled artifact and dispatches ops through connector instances. Owns `evalCondition` (compound + leaf shapes), `substituteRuntime` (filter-chain aware since v0.3.2), `resolveRef` (dotted + indexed field access). Handles error propagation, per-op timeout chain, `foreach` iteration with loop-local scope, target-level `else:` error handler, `# OnError:` skill fallback, mechanical-mode placeholders. |
-| `connectors/*` | The integration boundary — every external system (skill storage, memory, local model, MCP, agent delivery) plugs in through one of the typed contracts. Registry handles multi-instance + three-layer resolution: per-call override > skill-declared > primary default. |
+| `parser.ts` | Tokenize and parse skill source. Header lines, target blocks, op grammar (`!`/`$`/`$set`/`$append`/`?`/`@`/`>`/`~`/`&`/`??`), `if`/`elif`/`else`/`foreach`, compound conditions (`and`/`or`/`not` + parens). Produces AST; syntax errors only — semantic checks downstream. Never-throws-on-bad-input is a structural commitment (depth-cap + length-cap + non-backtracking regex). |
+| `compile.ts` | Three subsystems: (1) variable resolution against the `# Requires:` cascade + caller inputs; (2) data-skill compile-time inlining; (3) topo-sort + render. Output formats: `prompt` (canonical), `prose`. Forward-reference deferral for missing `&` targets. Produces compiled artifact + provenance sidecar. |
+| `filters.ts` | Pipe-filter implementations dispatched by `${NAME\|filter}` syntax: `url`, `shell`, `json`, `trim`, `length`, `contains:`, `fallback:`, and the chain machinery. Adding a filter = a case in `applyFilter` + registration in `KNOWN_FILTERS` + a `help-content.ts` entry. (Structured JSON parsing is the `$ json_parse … -> OUT` op, not a filter.) |
+| `lint.ts` | Structured diagnostics across 3 tiers (~30 rules): parse errors, var resolution, condition grammar, composition refs, shell safety (`unsafe-shell-op`, `unsafe-shell-disabled`, quote-trap), mutation safety (`unconfirmed-mutation`), accumulator safety, dispatch-shape (`connector-as-tool`, `disallowed-tool`, `unknown-tool-on-connector`), retrieval-arg validation, credential-leak detection. Lint is local advisory; the runtime is authoritative. |
+| `runtime.ts` | Executor that walks the compiled artifact and dispatches ops through connector instances. Owns `evalCondition`, filter-chain-aware `substituteRuntime`, `resolveRef` (dotted + indexed). Handles error propagation, per-op timeout chain, `foreach` loop-local scope, target-level `else:` handler, `# OnError:` fallback, mechanical-mode previews, and the secured-mode effect gate (refuses effectful ops when `effectsAuthorized !== true`). |
+| `connectors/*` | The integration boundary — every external system (skill storage, data, local model, MCP tools, agent delivery) plugs in through one typed contract. Registry handles multi-instance + three-layer resolution: per-call override > skill-declared > primary default. Bridges (`*-mcp.ts`) surface typed contracts as canonical `$`-dispatch. |
 
 ## Auxiliary surface (outside narrow core)
 
 | File | Responsibility |
 | --- | --- |
-| `cli.ts` | `skillfile` CLI entrypoint. Commands: `init`, `execute` (since v0.2.11; `run` alias dropped v0.2.12), `compile`, `audit`, `lint`, `list`, `fires`, `diagram`, `sign`, `verify`, `replay`, `health`, `serve`, `dashboard`. Per-command `--help`. Version from `src/version.ts`. |
-| `mcp-server.ts` | JSON-RPC 2.0 MCP server exposing 13 tools: `skill_list/metadata/status/write`, `list/register/unregister_trigger`, `health_metrics`, `runtime_capabilities`, `lint_skill`, `compile_skill`, `execute_skill`, `help`. Rolled-by-hand JSON-RPC handler (no `@modelcontextprotocol/sdk` dependency). |
-| `composition.ts` | In-skill composition primitive runtime. `$ execute_skill` intercept + recursion-depth guard (default 10). Distinct from data-skill `&` inlining which is compile-time. |
-| `scheduler.ts` | Trigger registry + cron firing + EVENT.* ambient auto-population (`fired_at`, `fired_at_unix`, `fired_at_plus_{1h,1d,7d}_unix`). Status-aware: skips Draft/Disabled at fire time. Persistent trigger registry on disk (v0.2.7). |
-| `bootstrap.ts` | Top-level wiring: takes `{skillsDir, traceDir, enableUnsafeShell?}` → returns `{registry, skillStore, scheduler, mcpServer, ...}`. The integration test entry point. |
-| `dashboard/` | Vite SPA + Express HTTP server. Skill list + status + trace viewer. Mounted under `/` when `skillfile dashboard` runs; serve-headless mode (`skillfile serve`) omits the SPA. |
-| `audit.ts` | `skillfile audit <provenance.json>` — detects stale compiled artifacts when source data-skills have been re-stored since compile. |
-| `trace.ts` | TraceBuilder + FilesystemTraceStore. Records per-op timing, dispatch, error chain. |
-| `metrics.ts` | Aggregates trace data into `health_metrics` MCP response (request counts, op latencies, error rates). |
-| `help-content.ts` | Static markdown content for the `help({topic})` MCP tool. Topics: `ops`, `frontmatter`, `examples`, `composition`, `connectors`, `lint-codes`. |
-| `version.ts` | Reads `package.json` at module load to single-source the runtime version (added v0.2.12 after a missed bump exposed the triple-source duplication). |
+| `cli.ts` | `skillfile` CLI. Commands: `init`, `execute`, `compile`, `audit`, `lint`, `list`, `fires`, `diagram`, `approve`, `reapprove`, `shell-audit`, `sign`, `verify`, `replay`, `health`, `serve`, `dashboard`. Per-command `--help`; version from `version.ts`. |
+| `mcp-server.ts` | JSON-RPC 2.0 MCP server, 17 tools: `skill_list` / `skill_preflight` / `skill_read` / `skill_status` / `skill_write`, `data_read`, `list_` / `register_` / `unregister_trigger` / `set_trigger_enabled`, `lint_skill`, `compile_skill`, `execute_skill`, `runtime_capabilities`, `health_metrics`, `blocked_shell_attempts`, `help`. Rolled-by-hand JSON-RPC handler (no `@modelcontextprotocol/sdk` dependency). Hosts the secured-mode approval closure (forces unsigned-Approved writes to Draft regardless of substrate). |
+| `approval.ts` | The approval boundary. Draft/Approved/Disabled status gate (both modes); secured mode adds asymmetric Ed25519 signing — private key signs at approve-time, public key verifies on every execution. `evaluateApprovalGate`, `stampApprovalEd25519`, `setSecuredMode`. |
+| `composition.ts` | In-skill composition runtime. `$ execute_skill` intercept + recursion-depth guard (default 10). Distinct from compile-time `&` inlining. |
+| `scheduler.ts` | Trigger registry + cron firing + `/event` dispatch + EVENT.* ambient auto-population. Both cron and event funnel through one `dispatchSkill` that re-verifies the approval signature before minting `effectsAuthorized`. |
+| `mutation-gate.ts` | Authorizes mutation ops (`$ data_write` / `$ skill_write` / `file_write` / mutating MCP tools) in non-interactive contexts via `# Autonomous: true`, a preceding `??` / `ask()`, or per-op `approved="reason"`. |
+| `safe-path.ts` | Filesystem path allowlist: realpath-canonicalizes target + roots before the under-root check, so `..` and symlink escapes can't pass. Default-deny. |
+| `skill-surface.ts` | AST-walks a parsed skill into its effectful footprint (connectors / builtins / shell binaries / file-write / file-read / unsafe-shell / notify). Feeds `skill_preflight`, every `skill_list` entry, and the dashboard's "what this skill touches" approver checklist. |
+| `bootstrap.ts` | Top-level wiring: resolves config + env → constructs substrates, Registry, Scheduler, MCP server, dashboard. The reference embedder + integration-test entry point. |
+| `dashboard/` | Vite SPA + HTTP server. Skill list / status / trace viewer + the approval queue (review signals + footprint; in-browser passcode signing when armed). Hosts `/rpc`, `/event`, and the approval routes; `skillfile serve` runs headless (no SPA). |
+| `audit.ts` | `skillfile audit` — detects stale compiled artifacts when source data-skills changed since compile. |
+| `trace.ts` / `metrics.ts` | TraceBuilder + FilesystemTraceStore (per-op timing, dispatch, error chain) → aggregated into the `health_metrics` response. |
+| `runtime-config.ts` / `runtime-env-resolver.ts` / `dotenv-loader.ts` | Config resolution: `skillscript.config.json` + `${ENV}` substitution, `SKILLSCRIPT_*` precedence, `.env` parsing. |
+| `help-content.ts` / `version.ts` | `help({topic})` content; single-sourced runtime version from `package.json`. |
 
 ## Non-source
 
 ```
-docs/                   — spec docs (ERD, Language Reference, README)
-examples/               — bundled example skills (5 worked examples, see help({topic:"examples"}))
-scripts/loc-ceiling.mjs — CI check; fails if narrow core exceeds budget. Header has full nudge history.
-tests/                  — vitest specs (39 files, 829 passing)
-tests/fixtures/harness/ — 66 cold-author skills + classified manifest (regression corpus)
-.github/workflows/      — CI: release.yml fires on tag push → test → GHCR multi-arch + GitHub Release + npm publish
+docs/                   — adopter docs (playbook, configuration, connector contracts, language reference, ERD)
+examples/               — worked example skills (examples/skillscripts/) + onboarding scaffold + custom-bootstrap walkthrough
+scripts/loc-ceiling.mjs — CI check; fails if narrow core exceeds budget. Header carries the full nudge history.
+tests/                  — vitest specs (161 files, ~2107 passing)
+tests/fixtures/harness/ — cold-author skills + classified manifest (regression corpus)
+.github/workflows/      — CI: release.yml fires on tag push
 Dockerfile              — multi-arch (linux/amd64 + linux/arm64) image base
 ```
 
 ## CI pipeline (release.yml)
 
-Tag push (`vX.Y.Z`) → typecheck → loc-check → build → full vitest → version verify (tag matches package.json) → Docker Buildx multi-arch GHCR push → GitHub Release with CHANGELOG section as body → npm publish.
+Tag push (`vX.Y.Z`) → typecheck → loc-check → build → full vitest → version verify (tag matches `package.json`) → **npm publish** → GitHub Release (CHANGELOG section as body) → **multi-arch GHCR container build** (best-effort, `continue-on-error` + timeout). npm publish runs *before* the container build so a slow/hung container job can't block the package shipping.
 
-Required secret: `NPM_TOKEN` (granular access token with **Bypass two-factor authentication when publishing** enabled). Token requirement documented in memory `feedback_npm_publish_2fa`. Resolved end-to-end at v0.3.1 after the chronic v0.2.5–v0.2.12 failure pattern (root cause: secret missing, then set without bypass-2FA flag).
+Required secret: `NPM_TOKEN` (granular access token with **Bypass two-factor authentication when publishing** enabled — see memory `feedback_npm_publish_2fa`). A pushed tag is the only trigger; never run `npm publish` by hand.
 
 ## Build + dev
 
