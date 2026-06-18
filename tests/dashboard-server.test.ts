@@ -297,3 +297,26 @@ describe("DashboardServer in-browser approval — disabled by default", () => {
     }
   });
 });
+
+describe("DashboardServer signing-misconfigured detection (v0.21.0, adopter finding 46e9b6f7)", () => {
+  afterEach(() => { setSecuredMode(false); setApprovalPublicKey(null); });
+
+  it("secured + passcode but NO skillStore → signing disabled (the silent-lockout case, now detectable)", async () => {
+    const home = mkdtempSync(join(tmpdir(), "skillscript-misconfig-"));
+    const skillStore = new FilesystemSkillStore(join(home, "skills"));
+    const traceStore = new FilesystemTraceStore(join(home, "traces"));
+    const scheduler = new Scheduler({ registry: new Registry(), skillStore, traceStore });
+    const mcpServer = new McpServer({ skillStore, scheduler, traceStore });
+    setSecuredMode(true);
+    // Programmatic-adopter mistake: passcode set, skillStore NOT passed to DashboardServer.
+    const server = new DashboardServer({ mcpServer, port: 0, bindAddress: "127.0.0.1", approvalPasscode: "x" });
+    await server.start();
+    try {
+      const r = await fetch(`http://127.0.0.1:${server.boundPort()}/signing-status`);
+      expect(await r.json()).toEqual({ enabled: false }); // not silently "working"
+    } finally {
+      await server.stop();
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+});

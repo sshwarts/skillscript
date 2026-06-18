@@ -11,6 +11,7 @@ import type { SkillStore } from "../connectors/types.js";
 import { EventNotFoundError, EventParamMismatchError } from "../errors.js";
 import { resolveRuntimeConfigFromEnv, pickEnvOptionalOption } from "../runtime-env-resolver.js";
 import { stampApprovalEd25519, isSecuredMode } from "../approval.js";
+import { defaultApprovalKeyFile } from "../bootstrap.js";
 
 /**
  * Dashboard HTTP server (T6b Phase 2). Bundles the SPA assets + a
@@ -199,7 +200,12 @@ export class DashboardServer {
     this.authToken = config.authToken ?? (process.env["SKILLSCRIPT_DASHBOARD_AUTH_TOKEN"] || undefined);
     // v0.20.2 — in-browser approval wiring.
     this.skillStore = config.skillStore;
-    this.approvalKeyFile = config.approvalKeyFile ?? (process.env["SKILLSCRIPT_APPROVAL_KEY_FILE"] || undefined);
+    // v0.21.0 — ONE shared resolver for the key path (adopter finding 46e9b6f7):
+    // bootstrap() provisions the keypair at defaultApprovalKeyFile(); the dashboard
+    // MUST resolve the same path, or a programmatic adopter who sets only
+    // SECURED_MODE+passcode gets a silent lockout (key provisioned at the default
+    // path, dashboard looking at `undefined`). Fall back to the same default.
+    this.approvalKeyFile = config.approvalKeyFile ?? process.env["SKILLSCRIPT_APPROVAL_KEY_FILE"] ?? defaultApprovalKeyFile();
     this.approvalPasscode = config.approvalPasscode ?? (process.env["SKILLSCRIPT_APPROVAL_PASSCODE"] || undefined);
   }
 
@@ -214,6 +220,33 @@ export class DashboardServer {
     );
   }
 
+  /**
+   * v0.21.0 — fail LOUD, not silent (adopter finding 46e9b6f7 + Perry's security
+   * lens). When the operator EXPLICITLY asked for in-browser approval (secured
+   * mode + a passcode) but signing can't wire, a silent no-op leaves the system
+   * locked (secured) AND unapprovable-from-the-web with no signal — undiagnosable,
+   * and it drives operators to just turn secured mode off. Announce the exact gap
+   * + the fix at boot. A security control that can't do its job must say so.
+   */
+  private warnIfSigningMisconfigured(): void {
+    if (!isSecuredMode() || this.approvalPasscode === undefined || this.signingEnabled()) return;
+    const reasons: string[] = [];
+    if (this.skillStore === undefined) reasons.push("no skillStore wired into DashboardServer (pass `skillStore` in its config)");
+    if (this.approvalKeyFile === undefined || !existsSync(this.approvalKeyFile)) {
+      reasons.push(`no approval private key at ${this.approvalKeyFile ?? "(unresolved path)"} — start once in secured mode to auto-provision, or set SKILLSCRIPT_APPROVAL_KEY_FILE`);
+    }
+    const bar = "!".repeat(72);
+    process.stderr.write(
+      `\n${bar}\n` +
+      `⚠  SECURED MODE + approval passcode are set, but IN-BROWSER APPROVE IS NOT WIRED.\n` +
+      `   Skills are locked (secured) AND cannot be approved from the dashboard:\n` +
+      reasons.map((r) => `     • ${r}\n`).join("") +
+      `   Until fixed, approve at a terminal: \`skillfile approve <name>\` / \`reapprove --apply\`\n` +
+      `   (filesystem SkillStore only — for a non-FS store the browser path is the only one).\n` +
+      `${bar}\n\n`,
+    );
+  }
+
   async start(): Promise<void> {
     this.httpServer = createServer((req, res) => {
       void this.handle(req, res);
@@ -223,7 +256,7 @@ export class DashboardServer {
       // Reject (don't hang) on bind errors — e.g. EADDRINUSE — so callers fail
       // fast instead of waiting on a promise that never resolves.
       const onError = (err: Error): void => { server.off("listening", onListening); reject(err); };
-      const onListening = (): void => { server.off("error", onError); resolve(); };
+      const onListening = (): void => { server.off("error", onError); this.warnIfSigningMisconfigured(); resolve(); };
       server.once("error", onError);
       server.once("listening", onListening);
       server.listen(this.port, this.bindAddress);

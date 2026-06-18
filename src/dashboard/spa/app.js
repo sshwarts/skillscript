@@ -76,7 +76,10 @@ async function refresh() {
     state.blockedShellAttempts = blocked;
     state.lastUpdate = ts;
     renderSecuredBanner();
-    document.getElementById("poll-status").textContent = `last updated ${ts.toLocaleTimeString()}`;
+    // v0.21.0 — surface the running runtime version next to the poll timestamp.
+    const ver = state.capabilities?.runtimeVersion;
+    document.getElementById("poll-status").textContent =
+      `last updated ${ts.toLocaleTimeString()}${ver ? ` · skillscript v${ver}` : ""}`;
     renderCurrentView();
   } catch (err) {
     document.getElementById("poll-status").textContent = `poll failed: ${err.message}`;
@@ -350,7 +353,7 @@ function renderSkills() {
           ${state.skills.map((s) => `
             <tr onclick="window.location.hash='#skill/${encodeURIComponent(s.name)}'">
               <td><strong>${esc(s.name)}</strong></td>
-              <td><span class="badge ${esc(s.status)}">${esc(s.status)}</span></td>
+              <td>${skillStatusBadge(s)}</td>
               <td>${esc(s.description ?? "—")}</td>
               <td><code>${esc(s.version?.slice(0, 8) ?? "—")}</code></td>
             </tr>
@@ -359,6 +362,18 @@ function renderSkills() {
       </table>
     </section>
   `;
+}
+
+// v0.21.0 — gate-aware status badge (adopter finding 576632ca). A legacy skill
+// stored `Approved` but failing the secured gate (e.g. a v1 stamp) WON'T run —
+// badging it a plain green "Approved" while the Approvals tab lists it as
+// "needs approval" reads as a contradiction. Show "re-approval needed" here too
+// so both views agree on the truth (what the gate will actually do).
+function skillStatusBadge(s) {
+  if (s.status === "Approved" && s.gate_ok === false) {
+    return `<span class="badge error" title="Approved status, but the body lacks a valid signature — won't run until re-approved">re-approval needed</span>`;
+  }
+  return `<span class="badge ${esc(s.status)}">${esc(s.status)}</span>`;
 }
 
 async function renderSkillDetail(name) {
