@@ -145,16 +145,14 @@ The dashboard does NOT default to SqliteSkillStore today — `skillfile dashboar
 
 ---
 
-## Approval-token stamping
+## Approval — the store doesn't mint it
 
-Skill bodies that declare `# Status: Approved` get a token stamped on `store()` automatically: `# Status: Approved v1:<hex>`. Same behavior as FilesystemSkillStore. Transitions to `Approved` via `update_status()` stamp the token; transitions away strip it.
+`SqliteSkillStore.store()` persists the body as handed to it; it does **not** stamp or verify approval. That's the runtime's concern, and it differs by mode:
 
-Adopters who want a stronger `f()` for the token (HMAC-SHA256 instead of the default) can register a custom approval fn before calling `store()`/`update_status()`:
+- **Unsecured mode** — a bare `# Status: Approved` is sufficient and is stored verbatim, no token.
+- **Secured mode** — approval is a v3 Ed25519 signature applied by the **approve flow** (`skillfile approve` / the dashboard), never by `store()`. The MCP `skill_write` handler forces any unsigned `Approved` write to `Draft` before it reaches the store, and the bundled stores apply the same force as defense-in-depth (in both `store()` and `update_status()`). So `store()` only ever persists a genuinely-signed Approved body or a Draft.
 
-```typescript
-import { registerApprovalFn } from "skillscript-runtime";
-registerApprovalFn("v2", (body) => hmacSha256(SECRET, body));
-```
+The same holds for a fork: your `store()` neither stamps nor verifies — persist the body, let the runtime own the gate. See [Adopter Playbook](adopter-playbook.md) §"Approval + secured mode".
 
 ---
 
