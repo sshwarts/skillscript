@@ -262,11 +262,11 @@ Adopter substrates with their own ownership concept (e.g., AMP's `author:<id>` t
 
 
 
-**`content_hash` semantics.** Bundled impls (`FilesystemSkillStore`, `SqliteSkillStore`) compute `content_hash = sha256(approval-stamped body)` — i.e., the SHA-256 of the canonicalized skill source *including* the `# Status: Approved vN:<token>` line. Diverge from this convention and cross-impl version equality breaks (skill content_hashes won't match across substrates even when the body is identical). The contract doesn't require SHA-256, but the convention is load-bearing for cross-substrate skill identity.
+**`content_hash` semantics.** Bundled impls (`FilesystemSkillStore`, `SqliteSkillStore`) compute `content_hash = sha256(body)` — the SHA-256 of the canonicalized skill source *including* the `# Status:` line as persisted (a bare `# Status: Approved` in unsecured mode, or `# Status: Approved v3:<signature>` in secured mode). Diverge from this convention and cross-impl version equality breaks (skill content_hashes won't match across substrates even when the body is identical). The contract doesn't require SHA-256, but the convention is load-bearing for cross-substrate skill identity.
 
 **`version` derivation.** `version = first 12 hex chars of content_hash`. Opaque-substrate-declared per the contract (`SkillSource.version` is just a string), but the 12-hex convention is what the bundled impls use. Adopters can derive their own scheme, but if other tools (lint diagnostics, dashboard) parse versions, the divergence shows.
 
-**`store()` auto-stamps the approval token.** When a caller writes a skill with `# Status: Approved` (no `vN:<token>`), the store MUST stamp the v1 CRC32 (or whatever version is currently `setPreferredApprovalVersion`'d) onto the body before persisting. Otherwise the skill is non-executable — the approval gate refuses bodies without a valid token. This is a **runtime-semantic concern that leaked into the storage layer**: ideally the runtime would stamp at execute-time, but for forward-compat reasons the convention is store-side stamping. See `src/approval.ts` and the v0.9.x hash-token auth thread.
+**`store()` does NOT mint or stamp approval.** In **unsecured** mode a bare `# Status: Approved` is sufficient; the store persists the body verbatim, no token. In **secured** mode, approval is a v3 Ed25519 signature applied by the approve flow (`skillfile approve` / the dashboard), never by `store()`; the MCP `skill_write` handler forces any unsigned `Approved` write to `Draft` before it reaches the store (the bundled stores do the same as defense-in-depth). Your `store()` therefore persists the body as handed to it — it neither stamps nor verifies approval; the runtime owns the gate. See [Adopter Playbook](adopter-playbook.md) §"Approval + secured mode" and `src/approval.ts`.
 
 ### DataStore conventions
 
@@ -286,11 +286,9 @@ Implementer responsibility: either pick a substrate posture that satisfies "dura
 
 ### Filter-scope discipline
 
-**Filters are advisory at the contract layer (v0.13.x and earlier).** `query(filters)` accepts arbitrary fields via the `[key: string]: unknown` extension; substrates honor what they support and silently drop the rest. For non-scope-sensitive filters (`tag`, `since`) this is fine. For **scope/visibility/security-relevant filters** (any future `vault` filter, tenant-id, access-control) — the silent-drop is a leak waiting to happen.
+**Unsupported filters fail loud at the bridge, not silently.** The `DataStoreMcpConnector` bridge validates every `query()` filter key against the substrate's declared `manifest().supported_filters` set and throws `UnsupportedFilterError` for any key outside it — closing the silent-scope-leak class where an unhonored `vault` / tenant-id / access-control filter would drop without the caller knowing. Per-call opt-out: `permissive_filters: true` acknowledges "unknown keys are advisory; the substrate may ignore them."
 
-Today's discipline: enforce scope-relevant filters *above* the contract — adopter wraps the SkillStore/DataStore with a guard that asserts the substrate honors the filter, or the wrapping layer applies the filter in-memory after the substrate returns.
-
-v0.14.0 plans `strict_filters: true` at the contract layer so the substrate must surface unsupported-filter use via `UnsupportedFilterError`. Until then, adopter-side enforcement is the only option.
+Implementer responsibility: **declare every filter your `query()` actually honors** in `manifest().supported_filters`, so the bridge validates against your truth rather than a guess. Under-declare and legitimate filters get rejected; over-declare and you reopen the silent-drop leak for the keys you named but don't enforce.
 
 ### Why these aren't in the typed interface
 
