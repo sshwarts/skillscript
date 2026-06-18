@@ -137,10 +137,9 @@ async function setupE2e(opts: { mcpCallerIdentityHeader?: string }): Promise<E2e
   const traceStore = new FilesystemTraceStore(join(home, "traces"));
   const scheduler = new Scheduler({ registry: new Registry(), skillStore, traceStore });
   const mcpServer = new McpServer({ skillStore, scheduler, traceStore });
-  const port = 30000 + Math.floor(Math.random() * 10000);
   const server = new DashboardServer({
     mcpServer,
-    port,
+    port: 0,
     bindAddress: "127.0.0.1",
     mountSpa: false,
     ...(opts.mcpCallerIdentityHeader !== undefined ? { mcpCallerIdentityHeader: opts.mcpCallerIdentityHeader } : {}),
@@ -149,7 +148,7 @@ async function setupE2e(opts: { mcpCallerIdentityHeader?: string }): Promise<E2e
   return {
     server,
     skillStore,
-    baseUrl: `http://127.0.0.1:${port}`,
+    baseUrl: `http://127.0.0.1:${server.boundPort()}`,
     cleanup: async () => {
       await server.stop();
       rmSync(home, { recursive: true, force: true });

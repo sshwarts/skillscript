@@ -173,9 +173,23 @@ export class DashboardServer {
     this.httpServer = createServer((req, res) => {
       void this.handle(req, res);
     });
-    return new Promise<void>((resolve) => {
-      this.httpServer!.listen(this.port, this.bindAddress, () => resolve());
+    return new Promise<void>((resolve, reject) => {
+      const server = this.httpServer!;
+      // Reject (don't hang) on bind errors — e.g. EADDRINUSE — so callers fail
+      // fast instead of waiting on a promise that never resolves.
+      const onError = (err: Error): void => { server.off("listening", onListening); reject(err); };
+      const onListening = (): void => { server.off("error", onError); resolve(); };
+      server.once("error", onError);
+      server.once("listening", onListening);
+      server.listen(this.port, this.bindAddress);
     });
+  }
+
+  /** The actual bound port after `start()` — read this when constructed with
+   *  port 0 (OS-assigned ephemeral port). Falls back to the configured port. */
+  boundPort(): number {
+    const addr = this.httpServer?.address();
+    return typeof addr === "object" && addr !== null ? addr.port : this.port;
   }
 
   async stop(): Promise<void> {

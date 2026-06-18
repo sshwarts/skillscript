@@ -82,26 +82,6 @@ jobs:
           fi
           echo "OK: package.json and tag agree on v$TAG_VERSION"
 
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-
-      - name: Log in to GHCR
-        uses: docker/login-action@v3
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Build + push container (linux/amd64 + linux/arm64)
-        uses: docker/build-push-action@v5
-        with:
-          context: .
-          platforms: linux/amd64,linux/arm64
-          push: true
-          tags: |
-            ghcr.io/${{ github.repository_owner }}/skillscript-runtime:v${{ steps.version.outputs.version }}
-            ghcr.io/${{ github.repository_owner }}/skillscript-runtime:latest
-
       - name: Extract changelog section for this version
         id: changelog
         run: |
@@ -115,6 +95,17 @@ jobs:
           fi
           echo "ok: extracted $(wc -l < /tmp/release-notes.md) lines of release notes"
 
+      # npm is the PRIMARY artifact — publish BEFORE the (secondary) container
+      # image so a slow/flaky multi-arch ARM build can never block the release.
+      # (v0.20.1 hung 30+ min on the arm64 QEMU build, gating the npm publish.)
+      - name: Publish to npm
+        run: |
+          echo "NPM_TOKEN length: ${#NPM_TOKEN}"
+          npm config set //registry.npmjs.org/:_authToken "$NPM_TOKEN"
+          npm publish --access public --ignore-scripts
+        env:
+          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
@@ -124,18 +115,27 @@ jobs:
           draft: false
           prerelease: false
 
-      - name: Publish to npm
-        # SIX publish-step failures across v0.2.5–v0.2.10 with six
-        # different fix theories, none working — same ENEEDAUTH for
-        # the last three. Time to verify the secret is even reaching
-        # the runner. Diagnostic emits token LENGTH only (GHA masks
-        # values in logs); if the secret is empty/wrong we'll see it.
-        run: |
-          echo "NPM_TOKEN length: ${#NPM_TOKEN}"
-          echo "First 4 chars look like: ${NPM_TOKEN:0:4}..."
-          npm config set //registry.npmjs.org/:_authToken "$NPM_TOKEN"
-          echo "npm registry config:"
-          npm config list 2>&1 | grep -iE "registry|authtoken" | sed 's/_authToken=[a-zA-Z0-9_-]*/_authToken=***/'
-          npm publish --access public --ignore-scripts
-        env:
-          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+      # Container image is a SECONDARY, best-effort artifact. Multi-arch ARM
+      # builds (QEMU emulation) are slow/flaky; cap the time and NEVER fail the
+      # release on it — the npm package is already published above.
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build + push container (linux/amd64 + linux/arm64)
+        continue-on-error: true
+        timeout-minutes: 20
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: |
+            ghcr.io/${{ github.repository_owner }}/skillscript-runtime:v${{ steps.version.outputs.version }}
+            ghcr.io/${{ github.repository_owner }}/skillscript-runtime:latest

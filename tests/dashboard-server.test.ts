@@ -23,15 +23,14 @@ async function setup(): Promise<Ctx> {
   const traceStore = new FilesystemTraceStore(join(home, "traces"));
   const scheduler = new Scheduler({ registry: new Registry(), skillStore, traceStore });
   const mcpServer = new McpServer({ skillStore, scheduler, traceStore });
-  // Pick a random high port so concurrent test files don't collide.
-  const port = 30000 + Math.floor(Math.random() * 10000);
-  const server = new DashboardServer({ mcpServer, port, bindAddress: "127.0.0.1" });
+  // Port 0 → OS assigns a free ephemeral port (no cross-test collisions).
+  const server = new DashboardServer({ mcpServer, port: 0, bindAddress: "127.0.0.1" });
   await server.start();
   return {
     server,
     mcpServer,
     skillStore,
-    baseUrl: `http://127.0.0.1:${port}`,
+    baseUrl: `http://127.0.0.1:${server.boundPort()}`,
     cleanup: async () => {
       await server.stop();
       rmSync(home, { recursive: true, force: true });
@@ -151,13 +150,12 @@ describe("DashboardServer auth gate (v0.20.1)", () => {
     const traceStore = new FilesystemTraceStore(join(home, "traces"));
     const scheduler = new Scheduler({ registry: new Registry(), skillStore, traceStore });
     const mcpServer = new McpServer({ skillStore, scheduler, traceStore });
-    const port = 30000 + Math.floor(Math.random() * 10000);
     const token = "tok-secret-abc123";
-    const server = new DashboardServer({ mcpServer, port, bindAddress: "127.0.0.1", authToken: token });
+    const server = new DashboardServer({ mcpServer, port: 0, bindAddress: "127.0.0.1", authToken: token });
     await server.start();
     return {
       server, mcpServer, skillStore, token,
-      baseUrl: `http://127.0.0.1:${port}`,
+      baseUrl: `http://127.0.0.1:${server.boundPort()}`,
       cleanup: async () => { await server.stop(); rmSync(home, { recursive: true, force: true }); },
     };
   }

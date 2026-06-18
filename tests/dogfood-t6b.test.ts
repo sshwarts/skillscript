@@ -64,12 +64,11 @@ beforeAll(async () => {
     trace: { mode: "on" },
   });
   const mcpServer = new McpServer({ skillStore, scheduler, traceStore });
-  const port = 30000 + Math.floor(Math.random() * 10000);
-  const dashboardServer = new DashboardServer({ mcpServer, port, bindAddress: "127.0.0.1" });
+  const dashboardServer = new DashboardServer({ mcpServer, port: 0, bindAddress: "127.0.0.1" });
   await dashboardServer.start();
   ctx = {
     home, skillStore, traceStore, scheduler, mcpServer, dashboardServer,
-    baseUrl: `http://127.0.0.1:${port}`,
+    baseUrl: `http://127.0.0.1:${dashboardServer.boundPort()}`,
   };
 });
 

@@ -234,9 +234,9 @@ describe("v0.2.7 Item 4 — serve / dashboard mode reporting", () => {
 
   it("DashboardServer with mountSpa=false serves /rpc but 404s GET /", async () => {
     const { mcpServer } = bootstrap({ skillsDir: join(home, "skills"), traceDir: join(home, "traces"), mode: "serve" });
-    const port = 30000 + Math.floor(Math.random() * 30000);
-    const server = new DashboardServer({ mcpServer, port, bindAddress: "127.0.0.1", mountSpa: false });
+    const server = new DashboardServer({ mcpServer, port: 0, bindAddress: "127.0.0.1", mountSpa: false });
     await server.start();
+    const port = server.boundPort();
     try {
       // GET / → 404 in serve mode.
       const indexResp = await fetch(`http://127.0.0.1:${port}/`);
@@ -260,9 +260,9 @@ describe("v0.2.7 Item 4 — serve / dashboard mode reporting", () => {
 
   it("DashboardServer with mountSpa=true (default) serves both / (SPA) and /rpc", async () => {
     const { mcpServer } = bootstrap({ skillsDir: join(home, "skills"), traceDir: join(home, "traces") });
-    const port = 30000 + Math.floor(Math.random() * 30000);
-    const server = new DashboardServer({ mcpServer, port, bindAddress: "127.0.0.1" });
+    const server = new DashboardServer({ mcpServer, port: 0, bindAddress: "127.0.0.1" });
     await server.start();
+    const port = server.boundPort();
     try {
       const indexResp = await fetch(`http://127.0.0.1:${port}/`);
       expect(indexResp.status).toBe(200);
