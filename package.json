@@ -71,6 +71,8 @@
     "docs/language-reference.md",
     "docs/sqlite-skill-store.md",
     "README.md",
+    "CHANGELOG.md",
+    "UPGRADING.md",
     "LICENSE"
   ],
   "engines": {

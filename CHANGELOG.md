@@ -1,6 +1,10 @@
 # Changelog
 
+Each release carries an **Upgrade impact:** line (first in its section) so a bump's requirements are visible at a glance. Tags (closed set): **BREAKING** (a manual change is needed to keep working) · **RE-APPROVE** (secured-mode signature invalidation — skills must be re-approved before they run) · **CONFIG** (`connectors.json` / config edit needed) · **none (additive)** (no action; backward-compatible). Standard from 0.20.0 forward; the pre-0.20 transitions that need action are flagged inline below (0.14.0, 0.18.8, 0.19.0). Full walkthrough: [UPGRADING.md](UPGRADING.md).
+
 ## 0.21.1 — 2026-06-19 — server-delivered agent instructions (cold-start on-ramp)
+
+**Upgrade impact:** none (additive)
 
 The MCP server now teaches a connecting agent how to use it — no CLAUDE.md
 copy-paste, and it works for agents with no shared memory substrate.
@@ -19,6 +23,8 @@ copy-paste, and it works for agents with no shared memory substrate.
   paste-block is now a fallback that mirrors the server's authoritative copy.
 
 ## 0.21.0 — 2026-06-18 — preflight contract surface + store-agnostic approval closure
+
+**Upgrade impact:** none (additive)
 
 The pre-execution contract is now first-class: an agent reads what a skill takes,
 returns, requires, and *touches* before running it, and the human approver sees the
@@ -59,6 +65,8 @@ same effect footprint before signing.
 
 ## 0.20.2 — 2026-06-18 — in-browser approval (passcode session-unlock)
 
+**Upgrade impact:** none (additive)
+
 Click-to-approve in the dashboard, without putting standing signing power on the
 network surface.
 
@@ -80,6 +88,8 @@ network surface.
   vault/encrypted-key custody is the future hardening.
 
 ## 0.20.1 — 2026-06-17 — approval-migration UX + dashboard access gate
+
+**Upgrade impact:** none (additive) — eases the 0.20.0 secured-mode transition; introduces no new break.
 
 Follow-ups that make the secured-mode migration legible, plus an optional
 access gate for the dashboard.
@@ -103,6 +113,8 @@ access gate for the dashboard.
   key custody). `/event` keeps its own bearer token.
 
 ## 0.20.0 — 2026-06-17 — Gate #7: the approval security boundary
+
+**Upgrade impact:** RE-APPROVE (only if you enable secured mode) — secured mode (`SKILLSCRIPT_SECURED_MODE=true`, default OFF) now enforces Ed25519-signed approval; skills approved the old way carry no valid signature and will not execute until re-signed. Bulk-discover + fix with `skillfile reapprove` (dry-run) → `skillfile reapprove --apply`. Default unsecured installs are unaffected. See [UPGRADING.md §3](UPGRADING.md).
 
 The runtime gains a real, enforced execution boundary. The Draft → Approved
 status gate applies in both runtime modes; the mode decides whether an Approved
@@ -1329,6 +1341,8 @@ sensor sources stands; v0.19.1 doesn't change parser behavior).
 
 ## 0.19.0 — 2026-06-07 — **BREAKING** — Simplified trigger model: cron + event only; new `POST /event` HTTP ingress
 
+**Upgrade impact:** BREAKING — the trigger model collapsed to `cron` + `event`; skills declaring removed sources (`session` / `webhook` / `file-watch` / `sensor`) fail to parse. Rewrite those `# Triggers:` as `cron`, or drive them by having an external adapter `POST /event`.
+
 Closes the locked Scott + Perry decision (memory `ceaf4579`): collapse
 triggers to two primitives. Time-based (`cron`) + external-signal
 (`event` via HTTP POST). Everything else is an external adapter that
@@ -1588,6 +1602,8 @@ Perry's atom surface.
 ---
 
 ## 0.18.8 — 2026-06-06 — **BREAKING** — default-deny shell binary allowlist
+
+**Upgrade impact:** BREAKING, CONFIG — `shell(...)` ops are now default-deny; they refuse until you allowlist the binaries via `SKILLSCRIPT_SHELL_ALLOWLIST` (run `skillfile shell-audit` to list what your corpus needs, then paste).
 
 **This is a breaking change.** Default behavior changes from "any
 binary on `PATH` reachable via `shell(...)`" to "only operator-
@@ -4745,6 +4761,8 @@ actually honors in `manifest().supported_filters`. Omissions become
 Suite: 1296 passing (+8 since v0.14.0).
 
 ## 0.14.0 — 2026-05-30 — Rename: `MemoryStore` → `DataStore` (breaking)
+
+**Upgrade impact:** BREAKING, CONFIG — the `connectors.json` substrate key `memory_store` was renamed to `data_store`; rename the key in your config or the loader rejects the file. (Only breaking `connectors.json` change to date.) See [UPGRADING.md §4](UPGRADING.md).
 
 Pre-adoption window means breaking changes are still cheap. `MemoryStore` was
 misleading nomenclature — it imported cognitive / agent-mental-state semantics

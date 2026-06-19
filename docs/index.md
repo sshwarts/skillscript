@@ -372,7 +372,7 @@ The CLI covers the full authoring + ops lifecycle:
 | Command | Purpose |
 |---|---|
 | `skillfile compile <path\|name>` | Compile a skill to its rendered artifact |
-| `skillfile audit <path\|name>` | Compile + content-hash check |
+| `skillfile audit <provenance-path>` | Detect recompile-staleness via the `.provenance.json` sidecar |
 | `skillfile lint <path\|name>` | Tier-1/2/3 lint diagnostics |
 | `skillfile execute <path\|name>` | Execute a skill against configured connectors (mirrors `execute_skill` MCP tool; `skillfile run` retained as deprecated alias) |
 | `skillfile fires <skill>` | Recent fire history with trace IDs |

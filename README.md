@@ -413,7 +413,7 @@ The CLI covers the full authoring + ops lifecycle:
 | Command | Purpose |
 |---|---|
 | `skillfile compile <path\|name>` | Compile a skill to its rendered artifact |
-| `skillfile audit <path\|name>` | Compile + content-hash check |
+| `skillfile audit <provenance-path>` | Detect recompile-staleness via the `.provenance.json` sidecar |
 | `skillfile lint <path\|name>` | Tier-1/2/3 lint diagnostics |
 | `skillfile execute <path\|name>` | Execute a skill against configured connectors (mirrors `execute_skill` MCP tool; `skillfile run` retained as deprecated alias) |
 | `skillfile fires <skill>` | Recent fire history with trace IDs |
@@ -466,6 +466,7 @@ Each example is annotated with the language pattern it demonstrates.
 - **[Adopter Playbook](docs/adopter-playbook.md)** — patterns for adopters embedding skillscript-runtime in their own deployment.
 - **[Connector Contract Reference](docs/connector-contract-reference.md)** — interface contracts for adopters writing their own connector impls.
 - **[SqliteSkillStore](docs/sqlite-skill-store.md)** — the bundled DB-backed SkillStore: schema, semantics, forking checklist.
+- **[Upgrading](UPGRADING.md)** — pre-1.0 version transitions; the secured-mode re-approval migration, `connectors.json` schema changes, and per-release upgrade-impact.
 - **ROADMAP** — *coming soon to docs/*
 
 ## Status
