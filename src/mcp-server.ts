@@ -17,7 +17,7 @@ import {
   RecursionDepthExceededError,
   SkillNotFoundForCompositionError,
 } from "./composition.js";
-import { helpResponse } from "./help-content.js";
+import { helpResponse, SKILLSCRIPT_USAGE_INSTRUCTIONS } from "./help-content.js";
 import { RUNTIME_VERSION } from "./version.js";
 import { evaluateApprovalGate, isSecuredMode, hasApprovalPublicKey } from "./approval.js";
 import { forceDraftStatus } from "./connectors/skill-store-mcp.js";
@@ -211,6 +211,9 @@ export class McpServer {
               protocolVersion: MCP_PROTOCOL_VERSION,
               capabilities: { tools: {} },
               serverInfo: { name: SERVER_NAME, version: this.version },
+              // Canonical agent-usage block — every connecting agent learns the
+              // workflow at session start, no CLAUDE.md copy-paste required.
+              instructions: SKILLSCRIPT_USAGE_INSTRUCTIONS,
             },
           };
         case "tools/list":

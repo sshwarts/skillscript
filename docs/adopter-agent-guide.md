@@ -10,9 +10,11 @@ Skillscript gives your agent a way to **capture a routine once as a durable, com
 
 ---
 
-## 1. The block to put at the top of your agent file
+## 1. The runtime tells your agent how to use it
 
-Paste this into your `CLAUDE.md` / `AGENTS.md`, adjusting wording to taste. This is the load-bearing part — it tells the agent to *discover and prefer* its skills.
+**You probably don't need to paste anything.** The MCP server ships the usage contract as its `instructions` field — most MCP hosts surface that to the model at session start, so a connecting agent already knows to `skill_list()` first, preflight before composing, author-when-repeated, and never assume a backend. Quick check: after wiring the MCP, ask your agent "what do you know about skillscript?" — if it describes the workflow, you're done, and your `CLAUDE.md` / `AGENTS.md` needs nothing about Skillscript.
+
+**If your host doesn't surface server `instructions`** (some don't), paste the block below into your agent file. It mirrors what the server delivers — the authoritative copy is the runtime's `instructions` field, so keep this in sync rather than diverging from it.
 
 ```markdown
 ## Skillscript — your durable skills

@@ -16,6 +16,30 @@
 
 import type { Registry } from "./connectors/registry.js";
 
+/**
+ * The canonical agent-usage block, delivered as the MCP server's `instructions`
+ * field at `initialize` so every connecting agent learns the workflow with no
+ * CLAUDE.md copy-paste. This static string is the shipped source of truth —
+ * backend-agnostic (no AMP / substrate references) so it serves dogfood +
+ * external adopters from one place. Keep the dev-agent CLAUDE.md and
+ * docs/adopter-agent-guide.md REFERENCING this, not forking divergent copies.
+ */
+export const SKILLSCRIPT_USAGE_INSTRUCTIONS = `A Skillscript runtime is wired over MCP. Skills are compiled, approved, reusable procedures — run them, don't re-derive.
+
+**Session start:** \`skill_list()\` → your skills, grouped: \`skills\` (invoke directly) · \`receives\` (push context to you) · \`headless\` (cron/event-fired; maintain, don't invoke). Know them before routine work.
+
+**Routine task — if a skill fits, use it, don't re-reason:**
+- \`skill_preflight({name})\` → vars, returns, requires, effectful footprint, cleared-to-run. (skill_list entries already carry this contract.)
+- \`execute_skill({name})\` → run end-to-end.
+- \`compile_skill({name})\` → preview the plan, no side effects.
+
+**Doing a routine twice? Author one:**
+- \`help({topic})\` → the language (ops, frontmatter, connectors, lint-codes).
+- Draft → \`lint_skill({source})\` → \`compile_skill({source})\` → \`skill_write({name, source})\`.
+- It lands **Draft** — you can't self-approve; a human does. Treat anything you authored as not-yet-runnable until approved.
+
+**Never assume a backend:** \`runtime_capabilities()\` → connectors, models, shell mode actually wired. Author against that.`;
+
 const QUICKSTART = `# Skillscript — quickstart
 
 Skillscript is a declarative language for authoring agent workflows. A

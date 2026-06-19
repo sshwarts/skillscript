@@ -70,6 +70,24 @@ describe("McpServer protocol", () => {
     }
   });
 
+  it("initialize delivers the canonical agent-usage instructions block (cold-start on-ramp)", async () => {
+    const { server, cleanup } = withServer();
+    try {
+      const resp = await server.handle(rpc("initialize"));
+      const r = (resp as { result: { instructions?: string } }).result;
+      expect(typeof r.instructions).toBe("string");
+      expect((r.instructions ?? "").length).toBeGreaterThan(100);
+      // The workflow contract: discover → preflight → author→Draft → never-assume-backend.
+      for (const probe of ["skill_list", "skill_preflight", "skill_write", "runtime_capabilities", "Draft"]) {
+        expect(r.instructions).toContain(probe);
+      }
+      // Backend-agnostic: no substrate/AMP leakage in the shipped block.
+      expect(r.instructions?.toLowerCase()).not.toContain("amp");
+    } finally {
+      cleanup();
+    }
+  });
+
   it("tools/list returns 17 built-in tools (v0.18.9 added blocked_shell_attempts)", async () => {
     const { server, cleanup } = withServer();
     try {
