@@ -33,12 +33,10 @@ export const SKILLSCRIPT_USAGE_INSTRUCTIONS = `A Skillscript runtime is wired ov
 - \`execute_skill({name})\` → run end-to-end.
 - \`compile_skill({name})\` → preview the plan, no side effects.
 
-**Doing a routine twice? Author one:**
+**Repeating a routine? Capture it as a skill.** What you can script = the wired connectors, models, and allowed shell binaries from \`runtime_capabilities()\` — that list is your menu. When you catch yourself re-running work over any of them, author it. If something you'd need isn't wired yet, ask the operator to add it, then capture it.
 - \`help({topic})\` → the language (ops, frontmatter, connectors, lint-codes).
 - Draft → \`lint_skill({source})\` → \`compile_skill({source})\` → \`skill_write({name, source})\`.
-- It lands **Draft** — you can't self-approve; a human does. Treat anything you authored as not-yet-runnable until approved.
-
-**Never assume a backend:** \`runtime_capabilities()\` → connectors, models, shell mode actually wired. Author against that.`;
+- It lands **Draft** — you can't self-approve; a human does. Treat anything you authored as not-yet-runnable until approved.`;
 
 const QUICKSTART = `# Skillscript — quickstart
 

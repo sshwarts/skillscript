@@ -43,20 +43,21 @@ If an existing skill fits, use it — don't re-reason the steps:
 - `execute_skill({ name })` — run a stored skill end-to-end.
 - `compile_skill({ name })` — preview the rendered plan first, no side effects.
 
-### Before you reinvent something, author a skill
-If you find yourself doing the same multi-step routine twice, capture it:
+### When you're repeating yourself, author a skill
+What you can script is the wired connectors, models, and allowed shell binaries that
+`runtime_capabilities()` reports — that list is your **menu of what's capturable**. When
+you catch yourself re-running the same multi-step routine over any of them, turn it into a skill:
 
 1. `help()` — learn the language (and `help({ topic })` for ops, frontmatter,
    connectors, lint-codes).
-2. Draft the skill body.
+2. Draft the skill body against what's wired.
 3. `lint_skill({ source })` then `compile_skill({ source })` — catch mistakes
    before anything is stored.
-4. `skill_write({ name, source })` — it lands as **Draft**. A human reviews and
-   approves before it can run. Nothing you author executes unattended until then.
+4. `skill_write({ name, source })` — it lands **Draft**; a human reviews and
+   approves before it can run (you can't self-approve).
 
-### Know what's actually wired
-- `runtime_capabilities()` — discover the connectors, models, and shell mode this
-  deployment actually has. Author against what's present; never assume a backend.
+If something you'd need isn't wired yet, ask the operator to add it (a connector, or a
+binary on `SKILLSCRIPT_SHELL_ALLOWLIST`), then capture the routine.
 ```
 
 That block is enough to change behavior. Everything below explains *why* and fills in the edges.
