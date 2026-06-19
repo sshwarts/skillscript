@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.21.1 — 2026-06-19 — server-delivered agent instructions (cold-start on-ramp)
+
+The MCP server now teaches a connecting agent how to use it — no CLAUDE.md
+copy-paste, and it works for agents with no shared memory substrate.
+
+- **`initialize` carries an `instructions` field** — the canonical agent-usage
+  block (`SKILLSCRIPT_USAGE_INSTRUCTIONS`, a static backend-agnostic string in
+  `help-content.ts`). Every connecting agent learns the workflow at session
+  start: `skill_list` first → `skill_preflight` before composing → author when
+  a routine repeats (lands Draft, a human approves) → `runtime_capabilities`.
+- **Capabilities reframed as the author's menu** — the block presents the wired
+  connectors / models / shell-allowlist as *what's capturable into a skill*, not
+  just a defensive "don't assume a backend" check; if a needed capability isn't
+  wired, the agent asks the operator to add it.
+- **`docs/adopter-agent-guide` §1 reframed** — the runtime delivers the usage
+  contract automatically, so an adopter's agent file can be minimal; the
+  paste-block is now a fallback that mirrors the server's authoritative copy.
+
 ## 0.21.0 — 2026-06-18 — preflight contract surface + store-agnostic approval closure
 
 The pre-execution contract is now first-class: an agent reads what a skill takes,
