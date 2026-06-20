@@ -24,8 +24,8 @@ const REPO_ROOT = join(__dirname, "..");
 const PACKAGE_JSON = JSON.parse(readFileSync(join(REPO_ROOT, "package.json"), "utf8")) as Record<string, unknown>;
 
 describe("T7 — package.json polish", () => {
-  it("1. version is 0.21.1 (cold-start on-ramp: MCP server delivers the canonical agent-usage block as its `instructions` field at initialize — every connecting agent learns the workflow with no CLAUDE.md copy-paste; capabilities reframed as the author menu)", () => {
-    expect(PACKAGE_JSON["version"]).toBe("0.21.1");
+  it("1. version is 0.21.2 (fix: dashboard /approve re-registers a skill's declarative triggers in the live scheduler — dashboard-approved cron/event skills now fire + show in the Triggers view; + README/docs density trim + UPGRADING.md/per-release upgrade-impact ships in the tarball)", () => {
+    expect(PACKAGE_JSON["version"]).toBe("0.21.2");
   });
 
   it("2. main + types + bin + engines.node ≥ 22.5 declared", () => {

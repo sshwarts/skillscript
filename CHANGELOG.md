@@ -2,6 +2,13 @@
 
 Each release carries an **Upgrade impact:** line (first in its section) so a bump's requirements are visible at a glance. Tags (closed set): **BREAKING** (a manual change is needed to keep working) · **RE-APPROVE** (secured-mode signature invalidation — skills must be re-approved before they run) · **CONFIG** (`connectors.json` / config edit needed) · **none (additive)** (no action; backward-compatible). Standard from 0.20.0 forward; the pre-0.20 transitions that need action are flagged inline below (0.14.0, 0.18.8, 0.19.0). Full walkthrough: [UPGRADING.md](UPGRADING.md).
 
+## 0.21.2 — 2026-06-20 — dashboard-approve trigger re-sync fix + docs
+
+**Upgrade impact:** none (additive)
+
+- **Fix: dashboard `/approve` now re-registers a skill's declarative triggers in the live scheduler.** Approving a cron/event skill from the dashboard signed and stored it Approved but did not re-add its `# Triggers:` to the running scheduler. So a skill that was edited (which in secured mode forces it back to Draft, dropping its triggers) and then approved in the browser ended up Approved-but-trigger-less: absent from the Triggers view and silently not firing. The dashboard approve path now syncs declarative triggers the same way the MCP `skill_status` path does, and the scheduler is now wired to the dashboard unconditionally (previously only when `/event` ingress was enabled). Existing approvals are unaffected; the fix applies to subsequent dashboard approvals. (A process restart already re-registered them at startup — that workaround is no longer needed.)
+- **Docs:** trimmed the README + landing page of reference-detail that belongs in the deeper docs; corrected the `skillfile audit` CLI signature; and the per-release **Upgrade impact:** convention plus a new [UPGRADING.md](UPGRADING.md) (pre-1.0 transition guide) now ship in the published package.
+
 ## 0.21.1 — 2026-06-19 — server-delivered agent instructions (cold-start on-ramp)
 
 **Upgrade impact:** none (additive)
