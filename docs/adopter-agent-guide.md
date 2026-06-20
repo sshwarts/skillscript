@@ -62,6 +62,16 @@ binary on `SKILLSCRIPT_SHELL_ALLOWLIST`), then capture the routine.
 
 That block is enough to change behavior. Everything below explains *why* and fills in the edges.
 
+### What your agent file *should* carry instead
+
+Now that the runtime delivers the universal how-to, your agent file gets *thinner* — it should hold only what the runtime can't know:
+
+- **Who the operator is.** The usage block says "ask the operator to wire what's missing" — but not *who*. Name them and the channel to ask on.
+- **Which skills are *this* agent's to maintain.** A skill's `headless` category (in `skill_list`) flags it as cron/event-fired, but "this one is *yours to keep correct*" is an ownership fact the universal block can't carry. Note the autonomous skills the agent is responsible for.
+- **The agent's role and behavioral context.** Who it is, how it should work. Never Skillscript's to provide; always yours.
+
+The test: if it's true for *every* agent on *any* Skillscript runtime, the runtime already delivers it — leave it out. If it's specific to *this* agent or *this* deployment, it belongs in your file. The runtime owns "how to use me"; your file owns "who you are, where you are, and what's yours to tend."
+
 ---
 
 ## 2. Best practices

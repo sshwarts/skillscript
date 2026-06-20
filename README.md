@@ -128,7 +128,7 @@ Every skillscript skill is one of three shapes, determined by the relationship t
 
 The kinds compose. A Headless monitor fires on cron, evaluates a condition, and routes into an Augmenting skill that wakes an agent with context, which itself references a Template skill for the agent to execute.
 
-The three kinds describe the skill's *role* (who consumes the output). Orthogonal to that is *how* the result ships. The default is the **body-text output template**: any non-op text in the skill body is rendered against the skill's final variables and published as its canonical output — no ceremony, as in the `hello` skill above. For what the template can't express, three explicit delivery ops are first-class: `emit(text="...")` for incremental or per-item output, `$ data_write content="..." recipients=[...]` for data handoff, and `file_write(path="...", content="...")` for file handoff. Template and ops coexist — the body template is the canonical output, `emit` lines are additional. See the [Language Reference](docs/language-reference.md) §1 for the full taxonomy.
+The three kinds describe the skill's *role* (who consumes the output). Orthogonal to that is *how* the result ships. The default is the **body-text output template**: any non-op text in the skill body is rendered against the skill's final variables and published as its canonical output — no ceremony, as in the `hello` skill above. For what the template can't express, three delivery ops are first-class — `emit()` for incremental/per-item output, `$ data_write` for data handoff, `file_write` for files — and they coexist with the template (which owns canonical output; `emit` lines are additional). See the [Language Reference](docs/language-reference.md) §1 for the full taxonomy.
 
 The canonical use for `emit` is per-item output inside a loop, where there's no single template to render — one line per iteration:
 
@@ -165,43 +165,17 @@ default: parent
 
 The child skill runs to completion against the runtime's wired connectors, returns its full execution record (final vars, transcript, outputs), and binds to the parent's named variable. Field access on the bound result (`${RESULT.final_vars.X}`) lets the parent reach into whatever the child produced.
 
-Composition is what makes skill libraries accumulate. Utility skills (`extract-json-number`, `summarize-thread`, `classify-urgency`) get authored once and orchestrated forever. The composition primitive is symmetric across the MCP surface — `execute_skill({name, inputs?, mechanical?})` works the same way at the runtime entry point as it does inside a skill body. `mechanical: true` previews the dispatch graph without firing real ops, propagating through nested composition calls. TestFlight your multi-skill chains before commitment.
+Composition is what makes skill libraries accumulate — utility skills (`extract-json-number`, `summarize-thread`, `classify-urgency`) authored once, orchestrated forever. You can dry-run a multi-skill chain before committing to it.
 
 ### Waking agents
 
-Augmenting and Template skills don't just write somewhere; they deliver to a frontier agent through `AgentConnector`. The contract is substrate-neutral: a Headless monitor detects a condition, evaluates whether action is warranted, and either resolves silently or calls `AgentConnector.deliver(agent_id, payload)`. The implementation might write to a data store the agent reads at next session, post to a chat thread the agent monitors, send a push notification, write to a tmux pane, or invoke a webhook. All the adopter's call.
-
-The runtime ships `NoOpAgentConnector` by default; production deployments wire their own and register it via the runtime's connector registry, rather than declaring it in `connectors.json`. Common wirings look like:
-
-```typescript
-// At runtime startup
-import { Runtime, AgentConnector } from "skillscript-runtime";
-
-class TmuxAgentConnector implements AgentConnector {
-  async deliver(agent_id, payload) {
-    // tmux send-keys to the pane for agent_id with payload.content
-  }
-  async wake(agent_id, opts) { /* ... */ }
-  async list_agents() { /* ... */ }
-}
-
-const runtime = new Runtime({
-  agentConnector: new TmuxAgentConnector(),
-  // ...
-});
-```
-
-Adopter impls can write to a data store, post to a chat thread, send a webhook, write to a tmux pane, or anything else that wakes the receiving agent.
-
-This is what makes *"Headless monitor → wake agent with context"* a real composition primitive, not just a pattern adopters bolt on. Skills don't know what substrate they're waking into; the substrate doesn't know what skill triggered it. The contract handles the seam.
+Augmenting and Template skills deliver to a frontier agent through `AgentConnector` — a substrate-neutral seam. A Headless monitor detects a condition and either resolves silently or calls `AgentConnector.deliver(...)`; your impl decides where that lands — a data store the agent reads next session, a chat thread, a push notification, a tmux pane, a webhook, anything that wakes the agent. The runtime ships a no-op default; production wires their own. Skills don't know what they're waking into, and the substrate doesn't know what triggered them — the contract handles the seam. (See [Connector Contract Reference](docs/connector-contract-reference.md) to implement one.)
 
 ### Static vs dynamic skills
 
 Skills have an execution model orthogonal to their kind. A **dynamic skill** requires the Skillscript runtime to execute — the runtime walks the DAG, fires dispatches against wired connectors, threads outputs. A **static skill** compiles to a portable artifact that any agent capable of reading prose can execute without the runtime.
 
-The static case matters for shareable artifacts. A skill whose body is just an output template or `emit(...)` lines — no `$ tool` MCP dispatches, no `shell(...)`, no `file_read`/`file_write` — compiles to a self-contained recipe. Email it, post it, hand it to a frontier agent in a different environment — they read the compiled output and execute the steps using their own tools. The skill becomes the deliverable.
-
-Template-kind skills are the canonical static shape; their compiled artifact is the prompt the receiving agent acts on. Headless and Augmenting skills are usually dynamic. The axes are independent — author the combination the work calls for.
+The static case is shareable artifacts: a skill whose body is just a template or `emit(...)` lines — no `$`/`shell`/`file_*` dispatches — compiles to a self-contained recipe you can email, post, or hand to an agent in another environment, which executes the steps with its own tools. The skill becomes the deliverable. Template-kind skills are the canonical static shape; Headless and Augmenting are usually dynamic. The axes are independent — author the combination the work calls for.
 
 ```
 # A static recipe (no runtime dispatches; just procedure + data)
@@ -331,11 +305,11 @@ skillfile execute daily-disk-check
 
 Five things to notice:
 
-1. **`# Triggers: cron:"..."`** — the runtime registers the cron schedule at load time; no external scheduler.
-2. **`# Autonomous: true`** — the skill-author's declaration that mutation ops (here `file_write`) are authorized to fire without per-call confirmation. Without this header, mutation ops require an inline `approved="<reason>"` kwarg on each call site.
-3. **`${EVENT.fired_at_unix}` + `${NOW}`** — ambient refs the runtime substitutes per-fire. `EVENT.*` covers the trigger payload; `NOW` is the ISO timestamp at op dispatch. See [Language Reference §3](docs/language-reference.md) for the full ambient list.
-4. **Body text above `snapshot:` is the output template** — the runtime renders `Snapshot written for ${NOW}.` against final vars and publishes it as the skill's canonical output. No `emit()` ceremony needed for declarative outputs; see the adopter-playbook's "Output template" section.
-5. **Default-deny allowlists** — `shell` and `file_*` ops are refused until the operator allowlists the binary (`SKILLSCRIPT_SHELL_ALLOWLIST`) and path roots (`SKILLSCRIPT_FS_ALLOWLIST`). An operator boundary the skill author can't escape — see [Configuration & security knobs](#configuration--security-knobs).
+1. **`# Triggers: cron:"..."`** — the runtime registers the schedule at load; no external scheduler.
+2. **`# Autonomous: true`** — authorizes the mutation op (`file_write`) to fire without per-call confirmation; without it, each mutation needs an inline `approved="<reason>"`.
+3. **`${EVENT.fired_at_unix}` + `${NOW}`** — ambient refs the runtime fills per-fire (`EVENT.*` = trigger payload; `NOW` = dispatch-time ISO timestamp).
+4. **Body text above `snapshot:` is the output template** — rendered against final vars and published as canonical output; no `emit()` needed.
+5. **Default-deny allowlists** — `shell` / `file_*` ops refuse until the operator allowlists the binary + path roots; the author can't escape it (see [Configuration & security knobs](#configuration--security-knobs)).
 
 Swap in `$ ticketing_search`, `$ llm`, `$ data_write` once you've wired connectors, and the same skill shape becomes a real triage pipeline.
 
@@ -385,14 +359,9 @@ Per-host configuration. The runtime loads it at startup. Two top-level concerns:
 
 Substrate short-form (`"sqlite"` etc.) wires bundled defaults. Object form (`{type, config}`) overrides config. See **[`docs/configuration.md`](docs/configuration.md)** for the full schema + adopter-custom impl path.
 
-Two credential shapes:
+**Credentials** resolve via `${VAR}` substitution — `"AUTH_HEADER": "Bearer ${YOUTRACK_TOKEN}"` pulls `${NAME}` from `process.env` at load time (a missing var is a clear startup error, not a silent empty string). Commit the `${...}` references; keep the real values in your deployment environment.
 
-- **Literal**: `"AUTH_HEADER": "Bearer plnt-XXX..."` — the credential lives in the file
-- **Env-var substitution**: `"AUTH_HEADER": "Bearer ${YOUTRACK_TOKEN}"` — `${NAME}` resolves from `process.env` at load time. Missing env var → clear startup error (not silent empty string).
-
-**Credential discipline (hard requirement):** `connectors.json` is secret-bearing. The repo's `.gitignore` excludes it by default. Use the version-controlled `connectors.json.example` as the template — copy it to `connectors.json` (gitignored), fill in real values. For deployments, prefer `${VAR}` substitution over in-file literals; commit the `${...}` references but keep the actual credentials in deployment env.
-
-**Closed-set class registry:** the runtime ships a fixed list of `class:` values it recognizes. `RemoteMcpConnector` is the JSON-instantiable class for the stdio-bridged remote MCP pattern; `CallbackMcpConnector` is wired via embedder code only (not configurable from JSON). Plugin-style runtime-arbitrary class loading is deliberately out of scope. Use `runtime_capabilities({include:["mcpConnectorClasses"]})` to introspect the available set in your runtime.
+**Connector classes are a fixed, recognized set** (no arbitrary plugin loading — deliberate). Introspect what your runtime supports with `runtime_capabilities({include:["mcpConnectorClasses"]})`.
 
 ## Configuration & security knobs
 
@@ -444,7 +413,7 @@ The runtime exposes its tools over MCP (HTTP at `/rpc`) for cold-client authorin
 | Observability | `health_metrics`, `blocked_shell_attempts` |
 | Discovery | `runtime_capabilities`, `help` |
 
-This is the "agent reaches MCP" path — an external agent (Claude, GPT, anything that speaks MCP) can author, validate, and deploy skills entirely over the wire. `help()` is the entry point — call with no arguments for a ~500-token quickstart, or with `{topic: "ops" | "frontmatter" | "examples" | "connectors" | "lint-codes" | "composition"}` for deeper sections. `execute_skill` runs a skill end-to-end against the runtime's connectors in either of two modes: `{name}` invokes a stored skill (subject to the approval gate — in secured mode, an operator signature verified on every execution); `{source}` runs an ad-hoc inline body that's never persisted (one-off scripting without polluting the store). Both modes honor `mechanical: true` for dispatch-graph preview, and enforce the mutation gate at runtime so `$ data_write` / `file_write` without `# Autonomous: true` / `??` / `approved=...` throw `UnconfirmedMutationError` regardless of which mode invoked them.
+This is the **agent-reaches-MCP** path: any MCP-speaking agent (Claude, GPT, anything that speaks the protocol) can discover, author, validate, and run skills entirely over the wire. On connect the server hands the agent its usage contract automatically, and `help()` returns a quickstart — each tool's own description carries the specifics (execution modes, the approval + mutation gates, dry-run preview), so an agent learns the surface without leaving the wire.
 
 ## Examples
 

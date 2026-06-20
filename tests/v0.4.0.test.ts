@@ -271,10 +271,11 @@ describe("v0.4.0 — credential discipline (item 8)", () => {
     expect(example).toMatch(/Bearer/);
   });
 
-  it("README documents connectors.json + credential discipline", () => {
+  it("README documents connectors.json + credential handling", () => {
     const readme = readFileSync(join(__dirname, "..", "README.md"), "utf8");
     expect(readme).toMatch(/`connectors\.json`/);
-    expect(readme).toMatch(/Credential discipline/);
-    expect(readme).toMatch(/\.gitignore.*connectors\.json|connectors\.json.*gitignored/);
+    expect(readme).toMatch(/Credentials/);
+    // Documents env-var substitution as the way to keep secrets out of the file.
+    expect(readme).toMatch(/\$\{VAR\}|\$\{\.\.\.\}/);
   });
 });
