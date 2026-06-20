@@ -1214,7 +1214,12 @@ async function cmdRuntimeHost(args: string[], opts: { mode: "serve" | "dashboard
     // v0.19.0 — event ingress, off-by-default, scheduler reference required
     eventIngressEnabled,
     ...(eventIngressAuthToken !== undefined ? { eventIngressAuthToken } : {}),
-    ...(eventIngressEnabled ? { scheduler: wired.scheduler } : {}),
+    // Scheduler is passed unconditionally: the /event route is gated on
+    // eventIngressEnabled, but the dashboard /approve route also needs the
+    // scheduler to re-register a skill's declarative triggers on approval
+    // (without it, dashboard-approved cron/event skills don't fire / don't
+    // show in the Triggers view).
+    scheduler: wired.scheduler,
     // v0.20.2 — in-browser approval (passcode session-unlock). Mounts /unlock +
     // /approve only when SKILLSCRIPT_APPROVAL_PASSCODE is set + secured + keyed.
     skillStore: wired.skillStore,

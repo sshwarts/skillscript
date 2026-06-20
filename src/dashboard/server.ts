@@ -11,6 +11,7 @@ import type { SkillStore } from "../connectors/types.js";
 import { EventNotFoundError, EventParamMismatchError } from "../errors.js";
 import { resolveRuntimeConfigFromEnv, pickEnvOptionalOption } from "../runtime-env-resolver.js";
 import { stampApprovalEd25519, isSecuredMode } from "../approval.js";
+import { parse } from "../parser.js";
 import { defaultApprovalKeyFile } from "../bootstrap.js";
 
 /**
@@ -455,6 +456,19 @@ export class DashboardServer {
       const signed = stampApprovalEd25519(loaded.source, priv);
       const info = await this.skillStore!.store(name, signed, { status: "Approved" });
       if (info.status === "Approved") {
+        // Re-register the skill's declarative triggers in the live scheduler —
+        // approval just activated them. An edit→Draft (forced in secured mode)
+        // drops them; without this re-sync they stay dropped, so the now-Approved
+        // skill won't fire on cron/event and won't appear in the Triggers view.
+        // Mirrors the MCP skill_status path (McpServer.syncTriggersForSkill).
+        if (this.scheduler !== undefined) {
+          try {
+            const parsed = parse(signed);
+            this.scheduler.syncDeclarativeTriggersForSkill(
+              name, parsed.triggers, parsed.vars.map((v) => v.name), "Approved",
+            );
+          } catch { /* parse failure → leave triggers as-is; an unparseable body isn't dispatchable anyway */ }
+        }
         json(200, { approved: true, name, version: info.version });
       } else {
         // Public key didn't verify the signature → store forced Draft.

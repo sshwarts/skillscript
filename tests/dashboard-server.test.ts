@@ -275,6 +275,47 @@ describe("DashboardServer in-browser approval — passcode session-unlock (v0.20
   });
 });
 
+describe("DashboardServer /approve re-registers declarative triggers (v0.21.2 bug fix)", () => {
+  it("dashboard-approving a cron skill registers its trigger in the live scheduler", async () => {
+    const home = mkdtempSync(join(tmpdir(), "skillscript-approve-trig-"));
+    const skillStore = new FilesystemSkillStore(join(home, "skills"));
+    const traceStore = new FilesystemTraceStore(join(home, "traces"));
+    const scheduler = new Scheduler({ registry: new Registry(), skillStore, traceStore });
+    const mcpServer = new McpServer({ skillStore, scheduler, traceStore });
+    const { publicKeyPem, privateKeyPem } = generateApprovalKeypair();
+    const keyFile = join(home, "approval.key");
+    writeFileSync(keyFile, privateKeyPem);
+    setApprovalPublicKey(publicKeyPem);
+    setSecuredMode(true);
+    // A cron skill currently Draft (e.g. just edited → forced Draft in secured mode).
+    await skillStore.store("nightly", "# Skill: nightly\n# Status: Draft\n# Triggers: cron: 0 3 * * *\n# Autonomous: true\nrun:\n    emit(text=\"tick\")\ndefault: run\n", { status: "Draft" });
+    // Draft → no trigger registered yet (the bug's precondition).
+    expect(scheduler.listTriggers().some((t) => t.skillName === "nightly")).toBe(false);
+    const server = new DashboardServer({ mcpServer, port: 0, bindAddress: "127.0.0.1", scheduler, skillStore, approvalKeyFile: keyFile, approvalPasscode: "sesame" });
+    await server.start();
+    try {
+      const base = `http://127.0.0.1:${server.boundPort()}`;
+      const post = (path: string, body: unknown, cookie?: string) => fetch(`${base}${path}`, {
+        method: "POST", headers: { "content-type": "application/json", ...(cookie ? { cookie } : {}) }, body: JSON.stringify(body),
+      });
+      const unlock = await post("/unlock", { passcode: "sesame" });
+      const cookie = (unlock.headers.get("set-cookie") ?? "").split(";")[0]!;
+      const approve = await post("/approve", { name: "nightly" }, cookie);
+      expect(approve.status).toBe(200);
+      // THE FIX: the cron trigger is now in the live scheduler (Triggers view + firing).
+      const trigs = scheduler.listTriggers().filter((t) => t.skillName === "nightly");
+      expect(trigs.length).toBe(1);
+      expect(trigs[0]!.source).toBe("cron");
+      expect(trigs[0]!.name).toBe("0 3 * * *");
+    } finally {
+      await server.stop();
+      setSecuredMode(false);
+      setApprovalPublicKey(null);
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+});
+
 describe("DashboardServer in-browser approval — disabled by default", () => {
   it("/unlock + /approve + signing-status:false when no passcode is wired", async () => {
     const home = mkdtempSync(join(tmpdir(), "skillscript-nosign-"));
