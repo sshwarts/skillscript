@@ -177,6 +177,12 @@ const COMMAND_HELP: Readonly<Record<string, CommandHelp>> = {
     args: [{ name: "<name>", description: "Name of a skill in the SkillStore to review + sign with the operator's approval key" }],
     examples: ["skillfile approve my-skill"],
   },
+  delete: {
+    description: "Delete a stored skill (soft-delete — recoverable, name freed for reuse)",
+    usage: "skillfile delete <name>",
+    args: [{ name: "<name>", description: "Name of a skill in the SkillStore to delete (moved to .trash; not a hard erase)" }],
+    examples: ["skillfile delete my-skill"],
+  },
   reapprove: {
     description: "Migrate pre-secured-mode approvals — batch re-sign Approved skills lacking a valid signature",
     usage: "skillfile reapprove [<name>] [--apply]",
@@ -252,7 +258,7 @@ const COMMAND_HELP: Readonly<Record<string, CommandHelp>> = {
 
 const COMMAND_ORDER: ReadonlyArray<string> = [
   "init", "execute", "compile", "audit", "lint", "list",
-  "fires", "diagram", "sign", "verify", "approve", "reapprove", "replay", "health",
+  "fires", "diagram", "sign", "verify", "approve", "reapprove", "delete", "replay", "health",
   "serve", "dashboard",
 ];
 
@@ -351,6 +357,7 @@ async function main(): Promise<number> {
     case "verify":  return await cmdVerify(rest);
     case "approve": return await cmdApprove(rest);
     case "reapprove": return await cmdReapprove(rest);
+    case "delete": return await cmdDelete(rest);
     case "replay":  return await cmdReplay(rest);
     case "health":  return await cmdHealth(rest);
     case "serve":               return await cmdRuntimeHost(rest, { mode: "serve" });
@@ -819,6 +826,56 @@ async function cmdApprove(args: string[]): Promise<number> {
     `The public key at ${pubFile} may not match the signing key.\n`,
   );
   return 1;
+}
+
+// Best-effort static reverse-dependency scan: which other stored skills
+// literally reference `target` via `$ execute_skill(... name="target")` or
+// `inline(... skill="target")`? Literal-name only — a runtime-resolved
+// `name="${VAR}"` reference can't be detected statically.
+async function findStaticDependents(store: FilesystemSkillStore, target: string): Promise<string[]> {
+  let metas;
+  try { metas = await store.query(); } catch { return []; }
+  const esc = target.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const re = new RegExp(`(?:execute_skill\\([^)]*name|inline\\([^)]*skill)\\s*=\\s*"${esc}"`);
+  const dependents: string[] = [];
+  for (const m of metas) {
+    if (m.name === target) continue;
+    try {
+      const loaded = await store.load(m.name);
+      if (re.test(loaded.source)) dependents.push(m.name);
+    } catch { /* skip unreadable */ }
+  }
+  return dependents.sort();
+}
+
+// `skillfile delete <name>` — operator-only soft-delete. Moves the skill to the
+// store's tombstone (recoverable), frees the name for reuse, and warns about
+// static dependents first. (No agent/MCP delete surface by design.)
+async function cmdDelete(args: string[]): Promise<number> {
+  const name = args.find((a) => !a.startsWith("-"));
+  if (name === undefined) {
+    process.stderr.write("Usage: skillfile delete <skill-name>\n");
+    return 64;
+  }
+  const store = new FilesystemSkillStore(SKILLS_DIR);
+  try {
+    await store.load(name);
+  } catch {
+    process.stderr.write(`skillfile delete: skill '${name}' not found in ${SKILLS_DIR}.\n`);
+    return 66;
+  }
+  const dependents = await findStaticDependents(store, name);
+  if (dependents.length > 0) {
+    process.stdout.write(
+      `⚠ '${name}' is referenced by: ${dependents.join(", ")}. ` +
+      `They will fail to dispatch it once it's gone (deletion is recoverable — restore from .trash).\n`,
+    );
+  }
+  await store.delete(name);
+  process.stdout.write(
+    `✓ deleted '${name}' — soft-deleted (recoverable from .trash; the name is free for reuse).\n`,
+  );
+  return 0;
 }
 
 // v1.0 Gate #7 Phase 3 — force-re-approve migration (batch-assisted re-bless).

@@ -480,6 +480,29 @@ export class Scheduler {
   }
 
   /**
+   * Drop ALL of a skill's triggers — declarative AND imperative. Used when the
+   * skill is deleted: the record is gone, so every trigger pointing at it must
+   * go (unlike `syncDeclarativeTriggersForSkill`, which only touches declarative
+   * triggers). Fires `onTriggersChanged` once if any imperative trigger was
+   * removed, so the persistent registry (`triggers.json`) drops them too.
+   * Returns the number removed.
+   */
+  dropAllTriggersForSkill(name: string): { removed: number } {
+    let removed = 0;
+    let imperativeRemoved = false;
+    for (const [id, t] of [...this.triggers.entries()]) {
+      if (t.skillName === name) {
+        this.triggers.delete(id);
+        this.cronState.delete(id);
+        removed++;
+        if (!t.declarative) imperativeRemoved = true;
+      }
+    }
+    if (imperativeRemoved) this.fireOnTriggersChanged();
+    return { removed };
+  }
+
+  /**
    * v0.19.0 — fire an event-triggered skill from external POST. Returns
    * synchronously with `{ run_id }` after validation; the actual skill
    * dispatch runs async (caller does NOT await skill completion). The

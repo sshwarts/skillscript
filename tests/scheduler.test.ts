@@ -85,6 +85,23 @@ describe("Scheduler", () => {
     }
   });
 
+  it("dropAllTriggersForSkill removes a skill's declarative AND imperative triggers, leaving others", () => {
+    const { store, cleanup } = withTempStore();
+    try {
+      const sched = new Scheduler({ registry: new Registry(), skillStore: store });
+      sched.registerTrigger({ skillName: "doomed", source: "cron", name: "0 3 * * *", declarative: true });
+      sched.registerTrigger({ skillName: "doomed", source: "event", name: "go", declarative: false });
+      sched.registerTrigger({ skillName: "keep", source: "cron", name: "0 9 * * *", declarative: true });
+      expect(sched.listTriggers({ skillName: "doomed" })).toHaveLength(2);
+      const { removed } = sched.dropAllTriggersForSkill("doomed");
+      expect(removed).toBe(2);
+      expect(sched.listTriggers({ skillName: "doomed" })).toHaveLength(0);
+      expect(sched.listTriggers({ skillName: "keep" })).toHaveLength(1);
+    } finally {
+      cleanup();
+    }
+  });
+
   it("dispatchSkill skips Draft status with debug log", async () => {
     const { store, cleanup } = withTempStore();
     try {
