@@ -21,6 +21,7 @@ import type { ProvenanceBlock } from "./provenance.js";
 import { renderSidecarProvenance } from "./provenance.js";
 import { Registry } from "./connectors/registry.js";
 import { FilesystemSkillStore } from "./connectors/skill-store.js";
+import { findStaticDependents } from "./skill-dependents.js";
 import type { SkillStore } from "./connectors/types.js";
 import { setApprovalPublicKey, setSecuredMode, isSecuredMode, stampApprovalEd25519, evaluateApprovalGate } from "./approval.js";
 import { OllamaLocalModel } from "./connectors/local-model.js";
@@ -826,26 +827,6 @@ async function cmdApprove(args: string[]): Promise<number> {
     `The public key at ${pubFile} may not match the signing key.\n`,
   );
   return 1;
-}
-
-// Best-effort static reverse-dependency scan: which other stored skills
-// literally reference `target` via `$ execute_skill(... name="target")` or
-// `inline(... skill="target")`? Literal-name only — a runtime-resolved
-// `name="${VAR}"` reference can't be detected statically.
-async function findStaticDependents(store: FilesystemSkillStore, target: string): Promise<string[]> {
-  let metas;
-  try { metas = await store.query(); } catch { return []; }
-  const esc = target.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  const re = new RegExp(`(?:execute_skill\\([^)]*name|inline\\([^)]*skill)\\s*=\\s*"${esc}"`);
-  const dependents: string[] = [];
-  for (const m of metas) {
-    if (m.name === target) continue;
-    try {
-      const loaded = await store.load(m.name);
-      if (re.test(loaded.source)) dependents.push(m.name);
-    } catch { /* skip unreadable */ }
-  }
-  return dependents.sort();
 }
 
 // `skillfile delete <name>` — operator-only soft-delete. Moves the skill to the

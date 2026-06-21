@@ -12,6 +12,7 @@ import { EventNotFoundError, EventParamMismatchError } from "../errors.js";
 import { resolveRuntimeConfigFromEnv, pickEnvOptionalOption } from "../runtime-env-resolver.js";
 import { stampApprovalEd25519, isSecuredMode } from "../approval.js";
 import { parse } from "../parser.js";
+import { findStaticDependents } from "../skill-dependents.js";
 import { defaultApprovalKeyFile } from "../bootstrap.js";
 
 /**
@@ -332,6 +333,23 @@ export class DashboardServer {
         await (url.pathname === "/unlock" ? this.handleUnlock(req, res) : this.handleApprove(req, res));
         return;
       }
+      // Operator-only soft-delete. Behind the dashboard auth gate (token, top of
+      // handler); destructive but recoverable, so no signing passcode (unlike
+      // /approve, which mints a signature). 404 when no skill store is wired.
+      if (url.pathname === "/delete") {
+        if (req.method !== "POST") {
+          res.statusCode = 405;
+          res.end("Method Not Allowed");
+          return;
+        }
+        if (this.skillStore === undefined) {
+          res.statusCode = 404;
+          res.end("Not Found (no skill store wired)");
+          return;
+        }
+        await this.handleDelete(req, res);
+        return;
+      }
       // v0.20.2 — lets the SPA decide whether to render in-browser approve UI.
       if (url.pathname === "/signing-status") {
         res.statusCode = 200;
@@ -476,6 +494,53 @@ export class DashboardServer {
       }
     } catch (err) {
       json(404, { approved: false, error: (err as Error).message });
+    }
+  }
+
+  /**
+   * Operator-only soft-delete (POST /delete). Two-step: a first POST without
+   * `force` runs the reverse-dependency scan and, if other skills reference the
+   * target, returns `{ blocked: true, dependents }` WITHOUT deleting — the SPA
+   * confirms "delete anyway?" and re-POSTs with `force: true`. No dependents →
+   * deletes immediately. Soft-delete (recoverable) + drops all the skill's
+   * triggers from the live scheduler.
+   */
+  private async handleDelete(req: IncomingMessage, res: ServerResponse): Promise<void> {
+    const json = (status: number, body: unknown): void => {
+      res.statusCode = status;
+      res.setHeader("content-type", "application/json");
+      res.end(JSON.stringify(body));
+    };
+    const chunks: Buffer[] = [];
+    for await (const chunk of req) chunks.push(chunk as Buffer);
+    let name: unknown;
+    let force = false;
+    try {
+      const parsed = JSON.parse(Buffer.concat(chunks).toString("utf8")) as { name?: unknown; force?: unknown };
+      name = parsed.name;
+      force = parsed.force === true;
+    } catch { name = undefined; }
+    if (typeof name !== "string" || name.length === 0) {
+      json(400, { deleted: false, error: "missing skill name" });
+      return;
+    }
+    try {
+      await this.skillStore!.load(name);
+    } catch {
+      json(404, { deleted: false, error: `skill '${name}' not found` });
+      return;
+    }
+    const dependents = await findStaticDependents(this.skillStore!, name);
+    if (dependents.length > 0 && !force) {
+      json(200, { deleted: false, blocked: true, dependents });
+      return;
+    }
+    try {
+      await this.skillStore!.delete(name);
+      this.scheduler?.dropAllTriggersForSkill(name);
+      json(200, { deleted: true, name, dependents });
+    } catch (err) {
+      json(500, { deleted: false, error: (err as Error).message });
     }
   }
 

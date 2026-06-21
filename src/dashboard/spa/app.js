@@ -263,6 +263,32 @@ window.approveInBrowser = async function (name) {
   }
 };
 
+// Operator-only soft-delete. Two-step: the first POST runs a reverse-dependency
+// scan server-side; if other skills reference this one it returns blocked +
+// dependents (nothing deleted), and we confirm "delete anyway?" before re-POSTing
+// with force. Soft-delete is recoverable, so the framing stays low-stakes.
+window.deleteSkill = async function (name) {
+  try {
+    if (!confirm(`Delete '${name}'?\nThis is a soft-delete — recoverable, and the name frees up for reuse.`)) return;
+    let res = await postJson("/delete", { name });
+    let out = await res.json().catch(() => ({}));
+    if (res.status === 200 && out.blocked && Array.isArray(out.dependents) && out.dependents.length) {
+      if (!confirm(`⚠ '${name}' is referenced by: ${out.dependents.join(", ")}.\nThose skills will fail to dispatch it once it's gone. Delete anyway?`)) return;
+      res = await postJson("/delete", { name, force: true });
+      out = await res.json().catch(() => ({}));
+    }
+    if (res.status === 200 && out.deleted) {
+      location.hash = "#skills";
+      await refresh();
+      renderCurrentView();
+    } else {
+      alert(`Delete failed: ${out.error || ("HTTP " + res.status)}`);
+    }
+  } catch (err) {
+    alert(`Delete failed: ${err.message}`);
+  }
+};
+
 window.copyText = function (text, btn) {
   const done = () => { if (btn) { const o = btn.textContent; btn.textContent = "copied"; setTimeout(() => { btn.textContent = o; }, 1200); } };
   if (navigator.clipboard?.writeText) {
@@ -410,6 +436,10 @@ async function renderSkillDetail(name) {
         <p>${esc(metadata.description ?? "(no description)")}</p>
         ${approvalBanner}
         ${renderStatusActions(name, metadata, approval)}
+        <div style="margin-top: 16px; border-top: 1px solid #eee; padding-top: 12px;">
+          <button class="danger" onclick="deleteSkill('${esc(name).replace(/'/g, "\\'")}')">Delete skill</button>
+          <span style="color:#6c757d; font-size:0.85em; margin-left:8px;">soft-delete — recoverable, frees the name; warns if other skills reference it</span>
+        </div>
       </section>
 
       ${renderEffectfulFootprintPanel(contract?.effectful_footprint)}

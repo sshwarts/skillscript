@@ -316,6 +316,43 @@ describe("DashboardServer /approve re-registers declarative triggers (v0.21.2 bu
   });
 });
 
+describe("DashboardServer /delete (operator soft-delete)", () => {
+  it("blocks on dependents without force; force deletes + drops triggers + frees the name", async () => {
+    const home = mkdtempSync(join(tmpdir(), "skillscript-del-"));
+    const skillStore = new FilesystemSkillStore(join(home, "skills"));
+    const traceStore = new FilesystemTraceStore(join(home, "traces"));
+    const scheduler = new Scheduler({ registry: new Registry(), skillStore, traceStore });
+    const mcpServer = new McpServer({ skillStore, scheduler, traceStore });
+    await skillStore.store("util", "# Skill: util\n# Status: Approved\n# Triggers: cron: 0 3 * * *\n# Autonomous: true\nrun:\n    emit(text=\"u\")\ndefault: run\n", { status: "Approved" });
+    await skillStore.store("caller", "# Skill: caller\n# Status: Approved\nrun:\n    execute_skill(name=\"util\") -> R\ndefault: run\n", { status: "Approved" });
+    scheduler.syncDeclarativeTriggersForSkill("util", [{ source: "cron", name: "0 3 * * *" }], [], "Approved");
+    const server = new DashboardServer({ mcpServer, port: 0, bindAddress: "127.0.0.1", scheduler, skillStore });
+    await server.start();
+    try {
+      const base = `http://127.0.0.1:${server.boundPort()}`;
+      const del = (body) => fetch(`${base}/delete`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
+
+      // No force → blocked, surfaces the dependent.
+      const blocked = await (await del({ name: "util" })).json();
+      expect(blocked.deleted).toBe(false);
+      expect(blocked.blocked).toBe(true);
+      expect(blocked.dependents).toEqual(["caller"]);
+      // util still present + trigger intact.
+      expect((await skillStore.query()).map((m) => m.name)).toContain("util");
+      expect(scheduler.listTriggers({ skillName: "util" })).toHaveLength(1);
+
+      // Force → deleted, trigger dropped, name freed.
+      const done = await (await del({ name: "util", force: true })).json();
+      expect(done.deleted).toBe(true);
+      expect((await skillStore.query()).map((m) => m.name)).not.toContain("util");
+      expect(scheduler.listTriggers({ skillName: "util" })).toHaveLength(0);
+    } finally {
+      await server.stop();
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+});
+
 describe("DashboardServer in-browser approval — disabled by default", () => {
   it("/unlock + /approve + signing-status:false when no passcode is wired", async () => {
     const home = mkdtempSync(join(tmpdir(), "skillscript-nosign-"));
