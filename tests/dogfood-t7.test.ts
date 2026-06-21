@@ -24,8 +24,8 @@ const REPO_ROOT = join(__dirname, "..");
 const PACKAGE_JSON = JSON.parse(readFileSync(join(REPO_ROOT, "package.json"), "utf8")) as Record<string, unknown>;
 
 describe("T7 — package.json polish", () => {
-  it("1. version is 0.21.2 (fix: dashboard /approve re-registers a skill's declarative triggers in the live scheduler — dashboard-approved cron/event skills now fire + show in the Triggers view; + README/docs density trim + UPGRADING.md/per-release upgrade-impact ships in the tarball)", () => {
-    expect(PACKAGE_JSON["version"]).toBe("0.21.2");
+  it("1. version is 0.22.0 (operator-only skill deletion: skillfile delete + dashboard Delete button, destructive hard-delete in the bundled stores with a confirm + reverse-dependency preflight, and live-scheduler trigger cleanup on delete; no agent/MCP delete surface)", () => {
+    expect(PACKAGE_JSON["version"]).toBe("0.22.0");
   });
 
   it("2. main + types + bin + engines.node ≥ 22.5 declared", () => {

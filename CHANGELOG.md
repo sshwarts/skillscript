@@ -2,6 +2,17 @@
 
 Each release carries an **Upgrade impact:** line (first in its section) so a bump's requirements are visible at a glance. Tags (closed set): **BREAKING** (a manual change is needed to keep working) · **RE-APPROVE** (secured-mode signature invalidation — skills must be re-approved before they run) · **CONFIG** (`connectors.json` / config edit needed) · **none (additive)** (no action; backward-compatible). Standard from 0.20.0 forward; the pre-0.20 transitions that need action are flagged inline below (0.14.0, 0.18.8, 0.19.0). Full walkthrough: [UPGRADING.md](UPGRADING.md).
 
+## 0.22.0 — 2026-06-21 — operator skill deletion
+
+**Upgrade impact:** none (additive)
+
+Deleting a skill is now a supported operator action. It's **operator-only** — an agent can author and disable a skill, but only a human at the CLI or dashboard can remove one. There is no agent/MCP delete surface.
+
+- **`skillfile delete <name>` + a Delete button on the dashboard skill detail view** expose the SkillStore `delete()` contract operation to operators.
+- **Destructive by design — no trash, no restore.** The bundled stores erase: `FilesystemSkillStore` unlinks the skill file + its version sidecar; `SqliteSkillStore` hard-cascades both tables. The name frees up immediately for reuse. The safety is the confirm step plus the reverse-dependency check, not recoverability. An adopter store *may* soft-delete instead — the runtime only requires "remove from normal views," and recovery semantics are the store's concern.
+- **Reverse-dependency guard.** Before deleting, both surfaces run a best-effort static scan for other skills that reference the target via `execute_skill(skill_name="…")` / `inline(skill="…")`. The dashboard runs it as a preflight and folds any dependents into a single confirm ("`welcome-flow` references this — permanently delete anyway?"); the CLI aborts and requires `--force`. Literal-name only — a runtime-resolved `name="${VAR}"` reference can't be detected statically, so treat the scan as a heads-up, not a guarantee.
+- **Trigger cleanup.** Deleting a skill drops all of its triggers — declarative `# Triggers:` and imperatively-registered alike — from the live scheduler, so a deleted cron/event skill leaves no orphan registration firing or lingering in the Triggers view.
+
 ## 0.21.2 — 2026-06-20 — dashboard-approve trigger re-sync fix + docs
 
 **Upgrade impact:** none (additive)

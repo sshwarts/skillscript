@@ -385,7 +385,7 @@ The CLI covers the full authoring + ops lifecycle:
 | `skillfile audit <provenance-path>` | Detect recompile-staleness via the `.provenance.json` sidecar |
 | `skillfile lint <path\|name>` | Tier-1/2/3 lint diagnostics |
 | `skillfile execute <path\|name>` | Execute a skill against configured connectors (mirrors `execute_skill` MCP tool; `skillfile run` retained as deprecated alias) |
-| `skillfile delete <name>` | Soft-delete a stored skill (recoverable; warns about dependents). Operator-only — no agent/MCP delete surface |
+| `skillfile delete <name>` | Permanently delete a stored skill (destructive — no restore; aborts on dependents unless `--force`). Operator-only — no agent/MCP delete surface |
 | `skillfile fires <skill>` | Recent fire history with trace IDs |
 | `skillfile diagram <path\|name>` | Mermaid DAG visualization |
 | `skillfile sign <path\|name>` | Generate content-hash signature |

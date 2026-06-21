@@ -263,20 +263,27 @@ window.approveInBrowser = async function (name) {
   }
 };
 
-// Operator-only soft-delete. Two-step: the first POST runs a reverse-dependency
-// scan server-side; if other skills reference this one it returns blocked +
-// dependents (nothing deleted), and we confirm "delete anyway?" before re-POSTing
-// with force. Soft-delete is recoverable, so the framing stays low-stakes.
+// Operator-only destructive delete. Preflight-then-commit: a first POST without
+// force is a pure scan — it returns any reverse-dependents without touching
+// anything, so we surface them in a SINGLE confirm before re-POSTing with force.
+// Deletion is permanent — no trash, no restore — so the confirm framing is
+// high-stakes.
 window.deleteSkill = async function (name) {
   try {
-    if (!confirm(`Delete '${name}'?\nThis is a soft-delete — recoverable, and the name frees up for reuse.`)) return;
-    let res = await postJson("/delete", { name });
-    let out = await res.json().catch(() => ({}));
-    if (res.status === 200 && out.blocked && Array.isArray(out.dependents) && out.dependents.length) {
-      if (!confirm(`⚠ '${name}' is referenced by: ${out.dependents.join(", ")}.\nThose skills will fail to dispatch it once it's gone. Delete anyway?`)) return;
-      res = await postJson("/delete", { name, force: true });
-      out = await res.json().catch(() => ({}));
+    // Preflight scan first so the one confirm can name any dependents.
+    const pre = await postJson("/delete", { name });
+    const scan = await pre.json().catch(() => ({}));
+    if (pre.status !== 200) {
+      alert(`Delete failed: ${scan.error || ("HTTP " + pre.status)}`);
+      return;
     }
+    const deps = Array.isArray(scan.dependents) ? scan.dependents : [];
+    const warn = deps.length
+      ? `⚠ '${name}' is referenced by: ${deps.join(", ")}.\nThose skills will fail to dispatch it once it's gone.\n\n`
+      : "";
+    if (!confirm(`${warn}Permanently delete '${name}'?\nThis erases the skill and its version history. There is no undo.`)) return;
+    const res = await postJson("/delete", { name, force: true });
+    const out = await res.json().catch(() => ({}));
     if (res.status === 200 && out.deleted) {
       location.hash = "#skills";
       await refresh();
@@ -438,7 +445,7 @@ async function renderSkillDetail(name) {
         ${renderStatusActions(name, metadata, approval)}
         <div style="margin-top: 16px; border-top: 1px solid #eee; padding-top: 12px;">
           <button class="danger" onclick="deleteSkill('${esc(name).replace(/'/g, "\\'")}')">Delete skill</button>
-          <span style="color:#6c757d; font-size:0.85em; margin-left:8px;">soft-delete — recoverable, frees the name; warns if other skills reference it</span>
+          <span style="color:#6c757d; font-size:0.85em; margin-left:8px;">permanent — no undo; warns if other skills reference it, then frees the name</span>
         </div>
       </section>
 

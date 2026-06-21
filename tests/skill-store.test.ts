@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { mkdtempSync, rmSync, readdirSync } from "node:fs";
+import { mkdtempSync, rmSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { FilesystemSkillStore } from "../src/connectors/skill-store.js";
@@ -105,15 +105,15 @@ describe("FilesystemSkillStore", () => {
     await expect(store.delete("missing")).rejects.toBeInstanceOf(SkillNotFoundError);
   });
 
-  it("soft-delete: excludes from query() + retains the file under .trash (recoverable)", async () => {
+  it("delete: removes from query(), erases the files (no .trash), frees the name", async () => {
     await store.store("hello", SAMPLE);
     await store.update_status("hello", "Approved");
     expect((await store.query()).map((m) => m.name)).toContain("hello");
     await store.delete("hello");
     expect((await store.query()).map((m) => m.name)).not.toContain("hello");
-    // Body retained under .trash for recovery, not unlinked.
-    const trashed = readdirSync(join(dir, ".trash"));
-    expect(trashed.some((f) => f.endsWith("hello.skill.md"))).toBe(true);
+    // Destructive: the source file is unlinked, not moved to a trash dir.
+    expect(existsSync(join(dir, "hello.skill.md"))).toBe(false);
+    expect(existsSync(join(dir, ".trash"))).toBe(false);
     // Name reclaimable with clean history.
     await store.store("hello", SAMPLE);
     expect((await store.versions("hello")).length).toBe(1);

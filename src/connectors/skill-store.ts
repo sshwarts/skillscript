@@ -1,4 +1,4 @@
-import { readFile, readdir, writeFile, mkdir, stat, unlink, rename, appendFile } from "node:fs/promises";
+import { readFile, readdir, writeFile, mkdir, stat, unlink, appendFile } from "node:fs/promises";
 import { join, basename, extname } from "node:path";
 import { createHash } from "node:crypto";
 import { userInfo } from "node:os";
@@ -327,24 +327,22 @@ export class FilesystemSkillStore implements SkillStore {
   }
 
   async delete(name: string): Promise<void> {
-    // Soft-delete: move the skill's files into a `.trash/` subdir rather than
-    // unlinking. `query()` only scans top-level `*.skill.md`, so a trashed skill
-    // vanishes from every listing; `load()`/`metadata()` miss it (ENOENT →
-    // not-found); the name frees up for a fresh `store()`; and the source +
-    // version sidecar are retained under `.trash/` for recovery.
-    const trashDir = join(this.rootDir, ".trash");
-    await mkdir(trashDir, { recursive: true });
-    const ts = Math.floor(Date.now() / 1000);
-    let moved = false;
-    for (const src of [this.pathFor(name), this.versionsPathFor(name)]) {
+    // Destructive — unlink the skill file and its version sidecar. There is no
+    // trash and no restore: the dashboard/CLI delete flow gates this behind an
+    // explicit confirm plus a reverse-dependency warning, so by the time we
+    // reach the substrate the operator has already accepted the loss. The name
+    // frees up immediately for a fresh `store()`.
+    let removed = false;
+    for (const p of [this.pathFor(name), this.versionsPathFor(name)]) {
       try {
-        await rename(src, join(trashDir, `${ts}.${basename(src)}`));
-        moved = true;
+        await unlink(p);
+        removed = true;
       } catch (err) {
-        if ((err as NodeJS.ErrnoException).code !== "ENOENT") throw err;
+        if ((err as NodeJS.ErrnoException).code === "ENOENT") continue;
+        throw err;
       }
     }
-    if (!moved) {
+    if (!removed) {
       throw new SkillNotFoundError(name, "FilesystemSkillStore");
     }
   }

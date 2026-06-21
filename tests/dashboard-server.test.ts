@@ -316,8 +316,8 @@ describe("DashboardServer /approve re-registers declarative triggers (v0.21.2 bu
   });
 });
 
-describe("DashboardServer /delete (operator soft-delete)", () => {
-  it("blocks on dependents without force; force deletes + drops triggers + frees the name", async () => {
+describe("DashboardServer /delete (operator destructive delete)", () => {
+  it("preflight scan without force surfaces dependents + deletes nothing; force deletes + drops triggers + frees the name", async () => {
     const home = mkdtempSync(join(tmpdir(), "skillscript-del-"));
     const skillStore = new FilesystemSkillStore(join(home, "skills"));
     const traceStore = new FilesystemTraceStore(join(home, "traces"));
@@ -332,11 +332,11 @@ describe("DashboardServer /delete (operator soft-delete)", () => {
       const base = `http://127.0.0.1:${server.boundPort()}`;
       const del = (body) => fetch(`${base}/delete`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
 
-      // No force → blocked, surfaces the dependent.
-      const blocked = await (await del({ name: "util" })).json();
-      expect(blocked.deleted).toBe(false);
-      expect(blocked.blocked).toBe(true);
-      expect(blocked.dependents).toEqual(["caller"]);
+      // No force → preflight scan only: surfaces the dependent, deletes nothing.
+      const scan = await (await del({ name: "util" })).json();
+      expect(scan.deleted).toBe(false);
+      expect(scan.preflight).toBe(true);
+      expect(scan.dependents).toEqual(["caller"]);
       // util still present + trigger intact.
       expect((await skillStore.query()).map((m) => m.name)).toContain("util");
       expect(scheduler.listTriggers({ skillName: "util" })).toHaveLength(1);
@@ -346,6 +346,36 @@ describe("DashboardServer /delete (operator soft-delete)", () => {
       expect(done.deleted).toBe(true);
       expect((await skillStore.query()).map((m) => m.name)).not.toContain("util");
       expect(scheduler.listTriggers({ skillName: "util" })).toHaveLength(0);
+    } finally {
+      await server.stop();
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  it("preflight without force never deletes even when there are no dependents", async () => {
+    const home = mkdtempSync(join(tmpdir(), "skillscript-del-nodep-"));
+    const skillStore = new FilesystemSkillStore(join(home, "skills"));
+    const traceStore = new FilesystemTraceStore(join(home, "traces"));
+    const scheduler = new Scheduler({ registry: new Registry(), skillStore, traceStore });
+    const mcpServer = new McpServer({ skillStore, scheduler, traceStore });
+    await skillStore.store("lonely", "# Skill: lonely\n# Status: Approved\nrun:\n    emit(text=\"x\")\ndefault: run\n", { status: "Approved" });
+    const server = new DashboardServer({ mcpServer, port: 0, bindAddress: "127.0.0.1", scheduler, skillStore });
+    await server.start();
+    try {
+      const base = `http://127.0.0.1:${server.boundPort()}`;
+      const del = (body) => fetch(`${base}/delete`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
+
+      // No force, no dependents → still a preflight: nothing deleted.
+      const scan = await (await del({ name: "lonely" })).json();
+      expect(scan.deleted).toBe(false);
+      expect(scan.preflight).toBe(true);
+      expect(scan.dependents).toEqual([]);
+      expect((await skillStore.query()).map((m) => m.name)).toContain("lonely");
+
+      // Force commits the delete.
+      const done = await (await del({ name: "lonely", force: true })).json();
+      expect(done.deleted).toBe(true);
+      expect((await skillStore.query()).map((m) => m.name)).not.toContain("lonely");
     } finally {
       await server.stop();
       rmSync(home, { recursive: true, force: true });

@@ -333,9 +333,10 @@ export class DashboardServer {
         await (url.pathname === "/unlock" ? this.handleUnlock(req, res) : this.handleApprove(req, res));
         return;
       }
-      // Operator-only soft-delete. Behind the dashboard auth gate (token, top of
-      // handler); destructive but recoverable, so no signing passcode (unlike
-      // /approve, which mints a signature). 404 when no skill store is wired.
+      // Operator-only destructive delete. Behind the dashboard auth gate (token,
+      // top of handler); the SPA confirm + reverse-dependency check are the
+      // safety, so no signing passcode (unlike /approve, which mints a
+      // signature). 404 when no skill store is wired.
       if (url.pathname === "/delete") {
         if (req.method !== "POST") {
           res.statusCode = 405;
@@ -498,12 +499,13 @@ export class DashboardServer {
   }
 
   /**
-   * Operator-only soft-delete (POST /delete). Two-step: a first POST without
-   * `force` runs the reverse-dependency scan and, if other skills reference the
-   * target, returns `{ blocked: true, dependents }` WITHOUT deleting — the SPA
-   * confirms "delete anyway?" and re-POSTs with `force: true`. No dependents →
-   * deletes immediately. Soft-delete (recoverable) + drops all the skill's
-   * triggers from the live scheduler.
+   * Operator-only destructive delete (POST /delete). Preflight-then-commit: a
+   * first POST without `force` is a pure scan — it runs the reverse-dependency
+   * check and returns `{ deleted: false, preflight: true, dependents }` WITHOUT
+   * touching anything, so the SPA can fold any dependents into a single confirm
+   * ("X references this — permanently delete anyway?"). A POST with `force: true`
+   * commits the delete. The delete is permanent (no trash, no restore) and drops
+   * all the skill's triggers from the live scheduler.
    */
   private async handleDelete(req: IncomingMessage, res: ServerResponse): Promise<void> {
     const json = (status: number, body: unknown): void => {
@@ -531,8 +533,10 @@ export class DashboardServer {
       return;
     }
     const dependents = await findStaticDependents(this.skillStore!, name);
-    if (dependents.length > 0 && !force) {
-      json(200, { deleted: false, blocked: true, dependents });
+    if (!force) {
+      // Preflight — scan only, never delete. The SPA uses `dependents` to build
+      // a single confirm before re-POSTing with force.
+      json(200, { deleted: false, preflight: true, dependents });
       return;
     }
     try {

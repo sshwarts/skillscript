@@ -179,10 +179,10 @@ const COMMAND_HELP: Readonly<Record<string, CommandHelp>> = {
     examples: ["skillfile approve my-skill"],
   },
   delete: {
-    description: "Delete a stored skill (soft-delete — recoverable, name freed for reuse)",
-    usage: "skillfile delete <name>",
-    args: [{ name: "<name>", description: "Name of a skill in the SkillStore to delete (moved to .trash; not a hard erase)" }],
-    examples: ["skillfile delete my-skill"],
+    description: "Permanently delete a stored skill (destructive — no trash, no restore)",
+    usage: "skillfile delete <name> [--force]",
+    args: [{ name: "<name>", description: "Name of a skill in the SkillStore to erase. Aborts if other skills reference it unless --force is given." }],
+    examples: ["skillfile delete my-skill", "skillfile delete my-skill --force"],
   },
   reapprove: {
     description: "Migrate pre-secured-mode approvals — batch re-sign Approved skills lacking a valid signature",
@@ -829,13 +829,15 @@ async function cmdApprove(args: string[]): Promise<number> {
   return 1;
 }
 
-// `skillfile delete <name>` — operator-only soft-delete. Moves the skill to the
-// store's tombstone (recoverable), frees the name for reuse, and warns about
-// static dependents first. (No agent/MCP delete surface by design.)
+// `skillfile delete <name>` — operator-only destructive delete. Erases the
+// skill and its version history (no trash, no restore). Aborts up front if other
+// skills statically reference it, unless `--force` is given. (No agent/MCP
+// delete surface by design.)
 async function cmdDelete(args: string[]): Promise<number> {
   const name = args.find((a) => !a.startsWith("-"));
+  const force = args.includes("--force") || args.includes("-f");
   if (name === undefined) {
-    process.stderr.write("Usage: skillfile delete <skill-name>\n");
+    process.stderr.write("Usage: skillfile delete <skill-name> [--force]\n");
     return 64;
   }
   const store = new FilesystemSkillStore(SKILLS_DIR);
@@ -846,15 +848,17 @@ async function cmdDelete(args: string[]): Promise<number> {
     return 66;
   }
   const dependents = await findStaticDependents(store, name);
-  if (dependents.length > 0) {
-    process.stdout.write(
-      `⚠ '${name}' is referenced by: ${dependents.join(", ")}. ` +
-      `They will fail to dispatch it once it's gone (deletion is recoverable — restore from .trash).\n`,
+  if (dependents.length > 0 && !force) {
+    process.stderr.write(
+      `✗ '${name}' is referenced by: ${dependents.join(", ")}.\n` +
+      `  They will fail to dispatch it once it's gone. This deletion is permanent — there is no restore.\n` +
+      `  Re-run with --force to delete anyway.\n`,
     );
+    return 1;
   }
   await store.delete(name);
   process.stdout.write(
-    `✓ deleted '${name}' — soft-deleted (recoverable from .trash; the name is free for reuse).\n`,
+    `✓ permanently deleted '${name}'. The name is free for reuse.\n`,
   );
   return 0;
 }

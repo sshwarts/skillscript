@@ -256,13 +256,13 @@ describe("SqliteSkillStore — delete (hard cascade)", () => {
     await expect(store.delete("nope")).rejects.toBeInstanceOf(SkillNotFoundError);
   });
 
-  it("soft-delete: excludes the skill from query() (no agent-listing noise)", async () => {
+  it("delete: removes the skill from query() and frees the name for reuse", async () => {
     await store.store("hello", SAMPLE_SKILL);
     await store.update_status("hello", "Approved");
     expect((await store.query()).map((m) => m.name)).toContain("hello");
     await store.delete("hello");
     expect((await store.query()).map((m) => m.name)).not.toContain("hello");
-    // Name reclaimable: a fresh store supersedes the tombstone with clean history.
+    // Name reclaimable: a fresh store starts clean (no orphan history).
     await store.store("hello", SAMPLE_SKILL);
     expect((await store.query()).map((m) => m.name)).toContain("hello");
     expect((await store.versions("hello")).length).toBe(1);
