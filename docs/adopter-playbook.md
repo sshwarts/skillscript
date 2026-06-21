@@ -399,6 +399,21 @@ Turning secured mode on means any skill that's `Approved` without a valid signat
 
 Bundled example skills ship as `# Status: Draft` — a signature baked at package-build time could never validate on your install (the key is per-operator). `skillfile init` locally approves the three seeded demos with *your* machine's authority (secured → provision keypair + sign; unsecured → bare Approved), so they're runnable immediately after init.
 
+## Deleting skills
+
+Deleting a skill is an **operator-only** action — there is **no agent / MCP delete surface** (an agent can author and disable, but only the operator removes). Two surfaces:
+
+| Surface | How |
+|---|---|
+| CLI | `skillfile delete <name>` |
+| Dashboard | the **Delete skill** button on a skill's detail view |
+
+Both are **soft-delete**: the skill is tombstoned, not erased. It disappears from every listing (so an agent's `skill_list` never sees it), its triggers are dropped, and its name frees up for a fresh `skill_write`/`store` — but the source + version history are retained for recovery (the bundled `FilesystemSkillStore` moves the files into a `.trash/` subdir; `SqliteSkillStore` stamps a `deleted_at` tombstone). A re-write of the same name supersedes the tombstone with clean history.
+
+Before deleting, both surfaces run a **best-effort reverse-dependency scan** — which other skills statically reference the target via `$ execute_skill(name="…")` or `inline(skill="…")` — and warn ("`triage-flow` references this — delete anyway?"). It's literal-name only: a runtime-resolved `name="${VAR}"` reference can't be detected statically, which is the other reason delete stays soft (recoverable if the warning missed a dynamic caller).
+
+Adopter SkillStores implement `delete(name)` per the contract; if your store deletes hard rather than soft, that's your choice — the runtime treats `delete` as "remove from normal views," and recovery semantics are the store's concern. See [Connector Contract Reference](connector-contract-reference.md).
+
 ## Shell binary allowlist
 
 **The runtime enforces a default-deny operator allowlist for binaries reachable via `shell(...)` ops.** Skill authors are agents, agents are a weak trust anchor (hallucination, prompt-injection, no human-in-loop at scale), and operator-side scoping converts "a human reviews every skill" from discipline into an enforced constraint at the language level.
