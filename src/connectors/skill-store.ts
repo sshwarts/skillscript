@@ -1,4 +1,4 @@
-import { readFile, readdir, writeFile, mkdir, stat, unlink, appendFile } from "node:fs/promises";
+import { readFile, readdir, writeFile, mkdir, stat, unlink, rename, appendFile } from "node:fs/promises";
 import { join, basename, extname } from "node:path";
 import { createHash } from "node:crypto";
 import { userInfo } from "node:os";
@@ -327,16 +327,24 @@ export class FilesystemSkillStore implements SkillStore {
   }
 
   async delete(name: string): Promise<void> {
-    let removed = false;
-    for (const p of [this.pathFor(name), this.versionsPathFor(name)]) {
+    // Soft-delete: move the skill's files into a `.trash/` subdir rather than
+    // unlinking. `query()` only scans top-level `*.skill.md`, so a trashed skill
+    // vanishes from every listing; `load()`/`metadata()` miss it (ENOENT →
+    // not-found); the name frees up for a fresh `store()`; and the source +
+    // version sidecar are retained under `.trash/` for recovery.
+    const trashDir = join(this.rootDir, ".trash");
+    await mkdir(trashDir, { recursive: true });
+    const ts = Math.floor(Date.now() / 1000);
+    let moved = false;
+    for (const src of [this.pathFor(name), this.versionsPathFor(name)]) {
       try {
-        await unlink(p);
-        removed = true;
+        await rename(src, join(trashDir, `${ts}.${basename(src)}`));
+        moved = true;
       } catch (err) {
         if ((err as NodeJS.ErrnoException).code !== "ENOENT") throw err;
       }
     }
-    if (!removed) {
+    if (!moved) {
       throw new SkillNotFoundError(name, "FilesystemSkillStore");
     }
   }

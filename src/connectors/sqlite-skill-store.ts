@@ -194,7 +194,8 @@ export class SqliteSkillStore implements SkillStore {
         metadata_json TEXT,
         created_at INTEGER NOT NULL,
         updated_at INTEGER NOT NULL,
-        status_changed_at INTEGER
+        status_changed_at INTEGER,
+        deleted_at INTEGER
       );
       CREATE TABLE IF NOT EXISTS skill_versions (
         name TEXT NOT NULL,
@@ -205,12 +206,20 @@ export class SqliteSkillStore implements SkillStore {
         previous_status TEXT,
         changed_at INTEGER NOT NULL,
         changed_by TEXT,
+        deleted_at INTEGER,
         PRIMARY KEY (name, version)
       );
       CREATE INDEX IF NOT EXISTS skills_status_idx ON skills(status);
       CREATE INDEX IF NOT EXISTS skills_updated_at_idx ON skills(updated_at);
       CREATE INDEX IF NOT EXISTS skill_versions_name_idx ON skill_versions(name);
     `);
+    // Migration — add the soft-delete tombstone column to pre-existing DBs.
+    // CREATE TABLE IF NOT EXISTS won't add it; ALTER throws if it's already
+    // there, so swallow that one case.
+    try { this.db.exec(`ALTER TABLE skills ADD COLUMN deleted_at INTEGER`); }
+    catch { /* column already exists */ }
+    try { this.db.exec(`ALTER TABLE skill_versions ADD COLUMN deleted_at INTEGER`); }
+    catch { /* column already exists */ }
   }
 
   async manifest(): Promise<ManifestInfo<"skill_store">> {
@@ -263,7 +272,9 @@ export class SqliteSkillStore implements SkillStore {
   }
 
   async query(filter?: SkillFilter): Promise<SkillMeta[]> {
-    const where: string[] = [];
+    // Soft-deleted skills are tombstoned (deleted_at set) — excluded from every
+    // listing so they never surface to agents or operator default views.
+    const where: string[] = ["deleted_at IS NULL"];
     const params: Record<string, unknown> = {};
     if (filter?.status !== undefined) {
       const wanted = Array.isArray(filter.status) ? filter.status : [filter.status];
@@ -325,7 +336,7 @@ export class SqliteSkillStore implements SkillStore {
     this.skillRow(name);
     const rows = this.db.prepare(
       `SELECT name, version, content_hash, status, previous_status, changed_at, changed_by
-         FROM skill_versions WHERE name = $name ORDER BY changed_at`,
+         FROM skill_versions WHERE name = $name AND deleted_at IS NULL ORDER BY changed_at`,
     ).all({ $name: name }) as Array<Record<string, unknown>>;
     return rows.map((r) => {
       const info: VersionInfo = {
@@ -383,7 +394,8 @@ export class SqliteSkillStore implements SkillStore {
             description = $description,
             metadata_json = $meta,
             updated_at = $updatedAt,
-            status_changed_at = $statusChangedAt`,
+            status_changed_at = $statusChangedAt,
+            deleted_at = NULL`,
       ).run({
         $name: name,
         $version: version,
@@ -400,7 +412,8 @@ export class SqliteSkillStore implements SkillStore {
         `INSERT INTO skill_versions (name, version, content_hash, source, status, changed_at, changed_by)
               VALUES ($name, $version, $hash, $source, $status, $changedAt, $changedBy)
           ON CONFLICT(name, version) DO UPDATE SET
-            source = $source, status = $status, changed_at = $changedAt, changed_by = $changedBy`,
+            source = $source, status = $status, changed_at = $changedAt, changed_by = $changedBy,
+            deleted_at = NULL`,
       ).run({
         $name: name,
         $version: version,
@@ -428,18 +441,22 @@ export class SqliteSkillStore implements SkillStore {
   }
 
   async delete(name: string): Promise<void> {
-    const result = this.withTransaction(() => {
-      const r = this.db.prepare(
-        `DELETE FROM skills WHERE name = $name`,
-      ).run({ $name: name });
-      this.db.prepare(
-        `DELETE FROM skill_versions WHERE name = $name`,
-      ).run({ $name: name });
-      return r;
-    });
-    // Post-commit no-rows check — the transaction completed cleanly, but
-    // there was nothing to delete. Same shape as the other "not found" misses.
-    if (result.changes === 0) throw new SkillNotFoundError(name, "SqliteSkillStore");
+    // Soft-delete: stamp a tombstone (deleted_at) instead of dropping rows.
+    // The skill vanishes from every query/load/metadata (deleted_at IS NULL
+    // guards), the name frees up for a fresh store() (which clears deleted_at,
+    // superseding the tombstone), and the source + version history are retained
+    // for recovery/audit. Only an already-live skill can be deleted.
+    const ts = Math.floor(Date.now() / 1000);
+    const r = this.db.prepare(
+      `UPDATE skills SET deleted_at = $ts WHERE name = $name AND deleted_at IS NULL`,
+    ).run({ $name: name, $ts: ts });
+    if (r.changes === 0) throw new SkillNotFoundError(name, "SqliteSkillStore");
+    // Tombstone the version history too, so a fresh store() under the same name
+    // starts with a clean history (matching FilesystemSkillStore). The rows are
+    // retained (deleted_at set) for recovery; versions() filters them out.
+    this.db.prepare(
+      `UPDATE skill_versions SET deleted_at = $ts WHERE name = $name AND deleted_at IS NULL`,
+    ).run({ $name: name, $ts: ts });
   }
 
   async update_status(name: string, status: SkillStatus): Promise<VersionInfo> {
@@ -533,7 +550,7 @@ export class SqliteSkillStore implements SkillStore {
     const row = this.db.prepare(
       `SELECT name, current_version, content_hash, status, source, description,
               metadata_json, created_at, updated_at, status_changed_at
-         FROM skills WHERE name = $name`,
+         FROM skills WHERE name = $name AND deleted_at IS NULL`,
     ).get({ $name: name }) as Record<string, unknown> | undefined;
     if (row === undefined) throw new SkillNotFoundError(name, "SqliteSkillStore");
     return row;
