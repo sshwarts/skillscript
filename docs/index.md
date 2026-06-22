@@ -172,34 +172,31 @@ If that bet is wrong, skillscript stays a nice niche tool. If it's right, skills
 
 ## Quickstart
 
+Skillscript is **operated by a human and authored with an agent**. You install and run the runtime, wire it into your agent as an MCP server, then build skills together — the agent writes them (they land as `Draft`), and you approve what's allowed to run. The three steps below follow that division of labor.
+
+### 1. Human — install and set up
+
 ```bash
-# Install (global for single-instance use)
 npm install -g skillscript-runtime
-
-# Author your first skill — body text IS the output, no target needed
-mkdir -p ./skills && cat > ./skills/hello.skill.md <<'EOF'
-# Skill: hello
-# Status: Approved
-# Vars: WHO=world
-
-Hello, ${WHO}!
-EOF
-
-# Point the runtime at this directory — it reads skills from $SKILLSCRIPT_HOME/skills/
-export SKILLSCRIPT_HOME=$(pwd)
-
-# Run the skill
-skillfile execute hello
-# → Hello, world!
-
-# Start the runtime + dashboard, then open it
-skillfile dashboard --port 7878
-open http://localhost:7878
+skillfile init             # scaffolds ~/.skillscript/ — config, signing keys, demo skills
 ```
 
-The skill runs immediately because the runtime starts in **unsecured** mode, where a bare `# Status: Approved` is sufficient. For a deployment that should only run key-signed skills, set `SKILLSCRIPT_SECURED_MODE=true` and approve with `skillfile approve hello` (or from the dashboard) — see [Approval + secured mode](/docs/adopter-playbook#approval--secured-mode).
+Set up your environment the way you want it — all optional; the defaults work:
 
-Or via Docker / GHCR:
+```bash
+cp ~/.skillscript/.env.example ~/.skillscript/.env
+# edit ~/.skillscript/.env — e.g. SKILLSCRIPT_PORT (default 7878),
+# SKILLSCRIPT_SECURED_MODE, the shell allowlist
+```
+
+Start the runtime — this is the MCP server your agent connects to:
+
+```bash
+skillfile dashboard --port 7878    # foreground server — Ctrl-C to stop
+# then, in your browser, open http://localhost:7878
+```
+
+Prefer headless? `skillfile serve` runs the same MCP server without the dashboard SPA. Or run the container:
 
 ```bash
 docker run -p 7878:7878 -v $(pwd)/skills:/data/skills \
@@ -207,7 +204,9 @@ docker run -p 7878:7878 -v $(pwd)/skills:/data/skills \
   ghcr.io/sshwarts/skillscript-runtime:latest
 ```
 
-Then add the MCP to your agent. The simplest path on Claude Code (and similar hosts) is to just ask: *"Add the skillscript MCP server at `http://localhost:7878/rpc`"* — the host writes the config for you. Or wire it manually:
+### 2. Human — add the MCP to your agent
+
+On Claude Code (and similar hosts) the simplest path is to just ask: *"Add the skillscript MCP server at `http://localhost:7878/rpc`"* — the host writes the config for you. Or wire it manually:
 
 ```json
 {
@@ -232,6 +231,16 @@ For stdio-only clients, bridge it the same way you'd bridge any HTTP MCP — via
   }
 }
 ```
+
+### 3. Human + agent — write your first skill together
+
+The agent learns the workflow on connect (the MCP server delivers its usage instructions automatically). Just ask it to build something:
+
+> *"Author a skill that greets someone by name."*
+
+The agent discovers what's available with `skill_list`, checks the contract with `skill_preflight`, and authors via `skill_write` — the skill lands as **Draft**. You review and approve it (the dashboard's approve button, or `skillfile approve <name>`), and it's live. From there the agent runs it via `execute_skill`, or you can from the CLI with `skillfile execute <name>`.
+
+The runtime starts in **unsecured** mode, where a bare `# Status: Approved` is sufficient and approval is one click. For a deployment that should only run key-signed skills, set `SKILLSCRIPT_SECURED_MODE=true` — approval then signs with your operator key. See [Approval + secured mode](/docs/adopter-playbook#approval--secured-mode).
 
 ### A canonical autonomous skill
 
@@ -340,20 +349,21 @@ The CLI covers the full authoring + ops lifecycle:
 
 | Command | Purpose |
 |---|---|
+| `skillfile init` | Scaffold the `~/.skillscript/` tree + bundled examples (provisions keys, locally approves the demos) |
+| `skillfile execute <path\|name>` | Execute a skill against configured connectors (mirrors the `execute_skill` MCP tool) |
 | `skillfile compile <path\|name>` | Compile a skill to its rendered artifact |
 | `skillfile audit <provenance-path>` | Detect recompile-staleness via the `.provenance.json` sidecar |
 | `skillfile lint <path\|name>` | Tier-1/2/3 lint diagnostics |
-| `skillfile execute <path\|name>` | Execute a skill against configured connectors (mirrors `execute_skill` MCP tool; `skillfile run` retained as deprecated alias) |
-| `skillfile delete <name>` | Permanently delete a stored skill (destructive — no restore; aborts on dependents unless `--force`). Operator-only — no agent/MCP delete surface |
+| `skillfile list` | List available skills in the configured SkillStore |
 | `skillfile fires <skill>` | Recent fire history with trace IDs |
 | `skillfile diagram <path\|name>` | Mermaid DAG visualization |
 | `skillfile sign <path\|name>` | Generate content-hash signature |
 | `skillfile verify <path\|name> <hash>` | Verify against a known signature |
+| `skillfile approve <name>` | Approve a stored skill (sign it for secured-mode execution) |
+| `skillfile reapprove [<name>] [--apply]` | Batch re-sign Approved skills lacking a valid signature (pre-secured-mode migration) |
+| `skillfile delete <name>` | Permanently delete a stored skill (destructive — no restore; aborts on dependents unless `--force`). Operator-only — no agent/MCP delete surface |
 | `skillfile replay <trace_id>` | Re-run from a captured trace |
 | `skillfile health` | Aggregate runtime health metrics |
-| `skillfile register-trigger <skill> <source> <name>` | Register an imperative trigger |
-| `skillfile unregister-trigger <trigger_id>` | Remove a registered trigger |
-| `skillfile list-triggers` | List registered triggers |
 | `skillfile serve [--port N]` | Headless: scheduler + MCP server, no SPA |
 | `skillfile dashboard [--port N]` | Same as `serve` plus dashboard SPA at `/` |
 

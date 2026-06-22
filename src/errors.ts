@@ -325,14 +325,17 @@ export class ShellBinaryNotAllowedError extends OpError {
         : allowlist.join(", ");
     const message = `\`shell\` op refused: binary '${binary}' is not in the operator's shell allowlist. Current allowlist: ${allowlistDisplay}.`;
     const remediation =
-      `Add '${binary}' to the runtime's shell allowlist via one of three wiring paths: ` +
-      `(1) \`SKILLSCRIPT_SHELL_ALLOWLIST\` env var (comma-separated; works on CLI + bootstrap()); ` +
-      `(2) \`shellAllowlist\` field in \`skillscript.config.json\`; ` +
-      `(3) \`bootstrap({ shellAllowlist: [...] })\` programmatic opt for embedders. ` +
-      `Then restart the runtime. ` +
-      `To discover what binaries your existing skill corpus uses, run \`skillfile shell-audit\` — it scans every skill and prints the union of binaries ready to paste into the allowlist. ` +
-      `Binary-scope is an operator boundary the skill author cannot escape via the \`unsafe\` keyword or any other in-skill mechanism. ` +
-      `See \`docs/adopter-playbook.md\` § "Shell binary allowlist" for the migration walkthrough (including the programmatic-bootstrap path's \`.env\` auto-load gotcha).`;
+      `If you are an agent: STOP — the shell allowlist is a human-operator boundary, not something to edit yourself. ` +
+      `Do not modify \`.env\`, \`skillscript.config.json\`, or any config to add this binary. ` +
+      `Ask the operator to permit '${binary}' (or refactor the skill to use an already-allowed binary). ` +
+      `\n\nFor the operator: add '${binary}' to the shell allowlist via one of three wiring paths — ` +
+      `(1) \`SKILLSCRIPT_SHELL_ALLOWLIST\` env var (comma-separated; CLI + bootstrap()); ` +
+      `(2) \`shellAllowlist\` in \`skillscript.config.json\`; ` +
+      `(3) \`bootstrap({ shellAllowlist: [...] })\` for embedders — then restart the runtime. ` +
+      `\`skillfile shell-audit\` prints the union of binaries the corpus uses, ready to paste; ` +
+      `\`blocked_shell_attempts\` shows what's been refused. ` +
+      `Binary-scope cannot be escaped from inside a skill (not via \`unsafe\` or any other mechanism). ` +
+      `See \`docs/adopter-playbook.md\` § "Shell binary allowlist".`;
     super(message, "shell", remediation, target);
     this.name = "ShellBinaryNotAllowedError";
   }
@@ -359,12 +362,15 @@ export class FilePathNotAllowedError extends OpError {
         : allowlist.join(", ");
     const message = `\`${opName}\` op refused: path '${path}' is not under any operator-allowed filesystem root. Current fs allowlist: ${allowlistDisplay}.`;
     const remediation =
-      `Add an allowed root via one of three wiring paths: ` +
-      `(1) \`SKILLSCRIPT_FS_ALLOWLIST\` env var (comma-separated absolute dirs; works on CLI + bootstrap()); ` +
-      `(2) \`fsAllowlist\` field in \`skillscript.config.json\`; ` +
-      `(3) \`bootstrap({ fsAllowlist: [...] })\` programmatic opt for embedders. ` +
-      `Then restart the runtime. Paths are canonicalized (symlinks + \`..\` resolved) before the check, so the target must REALLY resolve under an allowed root. ` +
-      `Keep key/secret directories OUT of the allowlist — file ops must not reach trust material. The allowlist is an operator boundary the skill author cannot escape.`;
+      `If you are an agent: STOP — the filesystem allowlist is a human-operator boundary, not something to edit yourself. ` +
+      `Do not modify \`.env\`, \`skillscript.config.json\`, or any config to add this path. ` +
+      `Ask the operator to permit it (or change the skill to use an already-allowed path). ` +
+      `\n\nFor the operator: add an allowed root via one of three wiring paths — ` +
+      `(1) \`SKILLSCRIPT_FS_ALLOWLIST\` env var (comma-separated absolute dirs; CLI + bootstrap()); ` +
+      `(2) \`fsAllowlist\` in \`skillscript.config.json\`; ` +
+      `(3) \`bootstrap({ fsAllowlist: [...] })\` for embedders — then restart the runtime. ` +
+      `Paths are canonicalized (symlinks + \`..\` resolved) before the check, so the target must REALLY resolve under an allowed root. ` +
+      `Keep key/secret directories OUT of the allowlist — file ops must not reach trust material.`;
     super(message, opName, remediation, target);
     this.name = "FilePathNotAllowedError";
   }

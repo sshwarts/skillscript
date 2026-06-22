@@ -962,10 +962,11 @@ window.updateStatus = async function (name, newState) {
   }
 };
 
-// Note: register-trigger intentionally NOT exposed in the SPA — creates
-// new autonomous dispatch surface that doesn't appear in the skill source.
-// CLI-only (`skillfile register-trigger`) keeps intent explicit. Unregister
-// stays in the UI; it removes existing surface (safety, not weapon).
+// Note: registering a trigger is intentionally NOT exposed in the SPA — it
+// creates new autonomous dispatch surface that doesn't appear in the skill
+// source. It lives only on the MCP `register_trigger` tool, which keeps intent
+// explicit. Unregister stays in the UI; it removes existing surface (safety,
+// not weapon).
 
 window.unregisterTrigger = async function (id) {
   if (!confirm("Unregister this trigger?")) return;

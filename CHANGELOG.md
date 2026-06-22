@@ -2,6 +2,15 @@
 
 Each release carries an **Upgrade impact:** line (first in its section) so a bump's requirements are visible at a glance. Tags (closed set): **BREAKING** (a manual change is needed to keep working) · **RE-APPROVE** (secured-mode signature invalidation — skills must be re-approved before they run) · **CONFIG** (`connectors.json` / config edit needed) · **none (additive)** (no action; backward-compatible). Standard from 0.20.0 forward; the pre-0.20 transitions that need action are flagged inline below (0.14.0, 0.18.8, 0.19.0). Full walkthrough: [UPGRADING.md](UPGRADING.md).
 
+## 0.22.1 — 2026-06-22 — agent-facing allowlist guidance + docs accuracy
+
+**Upgrade impact:** none (additive)
+
+- **Allowlist denial messages now tell agents to escalate, not self-edit.** When a skill hits an off-allowlist shell binary or filesystem path, the runtime's remediation (`ShellBinaryNotAllowedError`, `FilePathNotAllowedError`) and the `shell-binary-not-allowed` lint rule previously read as an operator runbook — *"add it to `SKILLSCRIPT_SHELL_ALLOWLIST` in your `.env`, then restart."* Returned to a connecting agent through the MCP error, that reads as an instruction: the agent edits `.env` to self-grant the capability, defeating the operator boundary. The messages now lead with an agent-facing *"stop — this is a human-operator boundary; ask the operator, don't edit config yourself,"* with the wiring how-to clearly labeled operator-only (and a pointer to `blocked_shell_attempts` as the operator's review surface). Allowlist enforcement itself is unchanged.
+- **CLI reference accuracy.** The README + landing-page CLI table dropped three commands removed back in v0.2.1 (`register-trigger` / `unregister-trigger` / `list-triggers`) and a dead `run` alias, added `init` / `list` / `approve` / `reapprove`, and now mirrors the CLI's own command order.
+- **Quickstart restructured** around the human/agent division of labor — the human installs, configures, and wires the MCP; the human and agent author the first skill together — and the dashboard step is corrected (it's a blocking foreground server, so the browser is opened separately).
+- **`.env.example` trimmed** to what each setting does (the security rationale moved to the adopter playbook), and its example port corrected to `7878`.
+
 ## 0.22.0 — 2026-06-21 — operator skill deletion
 
 **Upgrade impact:** none (additive)

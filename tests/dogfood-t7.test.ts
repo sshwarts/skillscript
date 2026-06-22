@@ -24,8 +24,8 @@ const REPO_ROOT = join(__dirname, "..");
 const PACKAGE_JSON = JSON.parse(readFileSync(join(REPO_ROOT, "package.json"), "utf8")) as Record<string, unknown>;
 
 describe("T7 — package.json polish", () => {
-  it("1. version is 0.22.0 (operator-only skill deletion: skillfile delete + dashboard Delete button, destructive hard-delete in the bundled stores with a confirm + reverse-dependency preflight, and live-scheduler trigger cleanup on delete; no agent/MCP delete surface)", () => {
-    expect(PACKAGE_JSON["version"]).toBe("0.22.0");
+  it("1. version is 0.22.1 (allowlist denial messages tell agents to escalate to the operator instead of self-editing .env; CLI reference accuracy pass; quickstart restructured around human/agent labor; .env.example trimmed to what-each-setting-does)", () => {
+    expect(PACKAGE_JSON["version"]).toBe("0.22.1");
   });
 
   it("2. main + types + bin + engines.node ≥ 22.5 declared", () => {

@@ -1869,7 +1869,7 @@ const SHELL_BINARY_NOT_ALLOWED: LintRule = {
   id: "shell-binary-not-allowed",
   severity: "error",
   description: "A `shell(command=\"X ...\")` or `shell(argv=[\"X\", ...])` op's binary `X` is not in the operator's shell allowlist. The runtime refuses the op at execution time.",
-  remediation: "Either add the binary to `SKILLSCRIPT_SHELL_ALLOWLIST` in your `.env` (or `shellAllowlist` in `skillscript.config.json`), or refactor the skill to use a permitted binary. Run `skillfile shell-audit` to discover what binaries your existing corpus uses. Reminder: lint is a local advisory against your author-env allowlist; runtime enforcement is authoritative.",
+  remediation: "Refactor the skill to use an already-permitted binary, or ask the operator to add this one to the shell allowlist. If you are an agent, do NOT edit `.env` or `skillscript.config.json` yourself — the allowlist is a human-operator boundary; surface the need to the operator. (For the operator: `SKILLSCRIPT_SHELL_ALLOWLIST` env var or `shellAllowlist` in `skillscript.config.json`; `skillfile shell-audit` lists what the corpus uses.) Reminder: lint is a local advisory against your author-env allowlist; runtime enforcement is authoritative.",
   check: (ctx) => {
     if (ctx.shellAllowlist === undefined) return [];
     const findings: LintFinding[] = [];
