@@ -153,6 +153,7 @@ export class RemoteMcpConnector implements McpConnector {
   // tools/list, for connector-aware input lint + selective discovery.
   private toolDescriptors: McpToolDescriptor[] = [];
   private errorState: Error | undefined;
+  private disposed = false;
   private readonly framing: RemoteMcpFraming;
   private readonly initTimeoutMs: number;
   private readonly callTimeoutMs: number;
@@ -171,9 +172,44 @@ export class RemoteMcpConnector implements McpConnector {
    * Called lazily by `call()` on first dispatch.
    */
   start(): Promise<unknown> {
+    // After an intentional dispose(), do NOT respawn — dispatch must fail.
+    if (this.disposed) {
+      return Promise.reject(new RemoteMcpDispatchError("RemoteMcpConnector has been disposed"));
+    }
+    // v0.23.1 — respawn-on-death (self-heal). If the prior child exited or
+    // latched an error, discard the dead session so this call relaunches it,
+    // instead of returning the stale/terminal promise forever. Without it a
+    // single child death (e.g. an external SIGTERM — code=143) was a PERMANENT
+    // connector outage until full process restart (adopter finding 15463781).
+    // Mirrors a session reconnect.
+    if (this.sessionUnusable()) this.resetSession();
     if (this.initializePromise !== undefined) return this.initializePromise;
-    this.initializePromise = this.doStart();
-    return this.initializePromise;
+    const p = this.doStart();
+    this.initializePromise = p;
+    // Don't latch a failed handshake either — clear the promise on rejection so
+    // a later dispatch re-attempts (the rejection still propagates to THIS
+    // caller). Guard against clobbering a newer promise.
+    p.catch(() => { if (this.initializePromise === p) this.initializePromise = undefined; });
+    return p;
+  }
+
+  /** True when the current session can't serve a dispatch: a latched error, or a child that has exited. */
+  private sessionUnusable(): boolean {
+    if (this.errorState !== undefined) return true;
+    if (this.child !== undefined && this.child.exitCode !== null) return true;
+    return false;
+  }
+
+  /** Discard the dead session so the next start() spawns a fresh child. Kills any lingering child first. */
+  private resetSession(): void {
+    const old = this.child;
+    if (old !== undefined && old.exitCode === null) {
+      try { old.kill("SIGKILL"); } catch { /* already gone */ }
+    }
+    this.errorState = undefined;
+    this.initializePromise = undefined;
+    this.child = undefined;
+    this.inboundBuffer = Buffer.alloc(0);
   }
 
   private async doStart(): Promise<unknown> {
@@ -240,12 +276,13 @@ export class RemoteMcpConnector implements McpConnector {
     args: Record<string, unknown>,
     _ctxOverrides?: McpDispatchCtx,
   ): Promise<unknown> {
-    if (this.errorState !== undefined) {
-      throw new RemoteMcpDispatchError(`RemoteMcpConnector in error state: ${this.errorState.message}`, this.errorState);
-    }
+    // start() self-heals a dead prior session (respawn-on-death) before we
+    // check state — so a child that exited since the last dispatch is relaunched
+    // here rather than throwing a terminal error.
     await this.start();
     if (this.errorState !== undefined) {
-      throw new RemoteMcpDispatchError(`RemoteMcpConnector in error state after start: ${(this.errorState as Error).message}`, this.errorState);
+      // A FRESH spawn/handshake attempt still failed — surface the real error.
+      throw new RemoteMcpDispatchError(`RemoteMcpConnector in error state: ${this.errorState.message}`, this.errorState);
     }
     const result = await this.sendRequest("tools/call", {
       name: toolName,
@@ -291,6 +328,9 @@ export class RemoteMcpConnector implements McpConnector {
    * SIGTERM, then SIGKILL fallback after `shutdownTimeoutMs`. Idempotent.
    */
   async dispose(): Promise<void> {
+    // Intentional teardown — block the respawn-on-death path so a post-dispose
+    // dispatch throws rather than relaunching the child.
+    this.disposed = true;
     const child = this.child;
     if (child === undefined || child.exitCode !== null) return;
     try {

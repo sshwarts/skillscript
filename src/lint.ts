@@ -1191,6 +1191,15 @@ const UNVERIFIED_QUALIFIED_TOOL: LintRule = {
         const m = /^([A-Za-z_][\w:-]*)/.exec(op.body);
         if (m === null) return;
         const toolName = m[1]!;
+        // v0.23.1 — if the connector's warmed `describeTools` schema verifies
+        // THIS tool (the same source the tier-2 connector-arg rules consume),
+        // the surface IS known — the "can't validate statically" advisory is
+        // stale and contradicts tier-2 ("you passed an unknown arg" + "I can't
+        // see this tool" on the same op). Skip it. Tier-3 still fires when
+        // neither a static nor a warmed dynamic surface verifies the tool
+        // (truly-opaque connector: describeTools absent/unreachable, or a
+        // misspelled tool name not in the fetched surface).
+        if (ctx.mcpConnectorToolSchemas.get(ref)?.has(toolName)) return;
         const key = `${targetName}:${ref}:${toolName}`;
         if (reported.has(key)) return;
         reported.add(key);

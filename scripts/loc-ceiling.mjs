@@ -247,7 +247,10 @@ const CORE_PATHS = [
 // caller-mint + self-approval/status closure + config/provisioning). Clear,
 // security-critical code; headroom for the Phase-2 approve flow. Per the
 // signal-not-budget rule: nudge for clear code rather than compress to fit.
-const NARROW_MAX_LOC = 11800;
+// v0.23.x: nudged 11800 → 12000 for the connector-discovery ring (schema
+// retain + connector-aware input lint + observed-output-shape) and the
+// RemoteMcpConnector respawn-on-death self-heal. Clear, feature-driven code.
+const NARROW_MAX_LOC = 12000;
 const NARROW_MAX_FILES = 23;
 const BROAD_INFO_LOC = 9500;
 const BROAD_INFO_FILES = 28;

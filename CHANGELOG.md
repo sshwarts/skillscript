@@ -2,6 +2,13 @@
 
 Each release carries an **Upgrade impact:** line (first in its section) so a bump's requirements are visible at a glance. Tags (closed set): **BREAKING** (a manual change is needed to keep working) · **RE-APPROVE** (secured-mode signature invalidation — skills must be re-approved before they run) · **CONFIG** (`connectors.json` / config edit needed) · **none (additive)** (no action; backward-compatible). Standard from 0.20.0 forward; the pre-0.20 transitions that need action are flagged inline below (0.14.0, 0.18.8, 0.19.0). Full walkthrough: [UPGRADING.md](UPGRADING.md).
 
+## 0.23.1 — 2026-06-23 — fixes: connector-arg lint advisory + RemoteMcpConnector self-heal
+
+**Upgrade impact:** none (additive).
+
+- **Fix — `RemoteMcpConnector` now respawns a dead child instead of latching a permanent outage (adopter finding).** When the connector's stdio child exited (e.g. an external `SIGTERM`, exit code 143), it latched a terminal error state and **never respawned** — every subsequent dispatch returned `RemoteMcpConnector in error state` until a full runtime restart. A single child death = total connector outage. `start()` now self-heals: a dead prior session is discarded and the next dispatch (or `describeTools` warm) relaunches the child, mirroring a session reconnect. An intentional `dispose()` still blocks respawn (a post-dispose dispatch throws). Independent of what killed the child. Verified with a real spawned child that exits mid-request.
+- **Fix — stale tier-3 advisory contradicting connector-arg lint (adopter finding).** The tier-3 `unverified-qualified-tool` advisory ("connector doesn't declare its tool surface statically; can't validate at compile time") co-fired against a connector wired via `describeTools()` but no `staticTools()` — i.e. every `RemoteMcpConnector` — and *contradicted* the 0.23.0 tier-2 connector-arg validation on the **same** op: an author saw "you passed an unknown arg (so I clearly know your schema)" alongside "I can't validate this tool." It now skips an op whose tool is verified by the warmed schema, and still fires only when neither a static nor a warmed dynamic surface is reachable (a truly-opaque connector, or a misspelled tool name not in the fetched surface). Probe-verified against the live ddg `RemoteMcpConnector`.
+
 ## 0.23.0 — 2026-06-23 — connector tool-schema discovery + connector-aware lint
 
 **Upgrade impact:** none (additive). One thing to know: the new tier-2 lint can surface a *pre-existing* wrong-arg-name in an existing skill (it was always wrong; it just failed at dispatch before). Tier-2 is a warning — it never blocks compile or execution.

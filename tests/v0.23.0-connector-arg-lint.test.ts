@@ -146,4 +146,23 @@ describe("v0.23.0 — connector-aware input lint (registry warming path)", () =>
     const res = await lint(skill(`$ ddg.search querry="hi" -> R`), { registry });
     expect(rulesOf(res.findings)).not.toContain("unknown-connector-arg");
   });
+
+  // Adopter finding 262d5ab9: the tier-3 unverified-qualified-tool advisory
+  // (gates only on staticTools) co-fired against a describeTools connector and
+  // contradicted the tier-2 arg validation on the same op.
+  it("does NOT co-fire unverified-qualified-tool when describeTools verifies the tool", async () => {
+    const registry = new Registry();
+    registry.registerMcpConnector("ddg", new FakeMcpConnector("ok")); // describeTools, no staticTools
+    const res = await lint(skill(`$ ddg.search querry="hi" -> R`), { registry });
+    const rules = rulesOf(res.findings);
+    expect(rules).toContain("unknown-connector-arg"); // tier-2 DID validate the schema
+    expect(rules).not.toContain("unverified-qualified-tool"); // tier-3 must not contradict it
+  });
+
+  it("still fires unverified-qualified-tool for a tool NOT in the warmed surface", async () => {
+    const registry = new Registry();
+    registry.registerMcpConnector("ddg", new FakeMcpConnector("ok")); // exposes only `search`
+    const res = await lint(skill(`$ ddg.nonexistent query="x" -> R`), { registry });
+    expect(rulesOf(res.findings)).toContain("unverified-qualified-tool");
+  });
 });
