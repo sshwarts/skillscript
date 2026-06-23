@@ -604,6 +604,17 @@ export interface McpDispatchCtx {
   isAdmin?: boolean;
 }
 
+/**
+ * A downstream tool descriptor as learned from the connector's `tools/list`.
+ * `inputSchema` is the tool's JSON-Schema argument contract (MCP `inputSchema`);
+ * absent when the upstream server didn't declare one.
+ */
+export interface McpToolDescriptor {
+  name: string;
+  description?: string;
+  inputSchema?: Record<string, unknown>;
+}
+
 export interface McpConnector {
   call(
     toolName: string,
@@ -611,6 +622,17 @@ export interface McpConnector {
     ctxOverrides?: McpDispatchCtx,
   ): Promise<unknown>;
   manifest(): Promise<ManifestInfo>;
+  /**
+   * Warmed downstream tool descriptors for connector-aware input lint and
+   * selective discovery. Best-effort: ensures the tool surface is warm
+   * (a read-only `tools/list` when the cache is cold — protocol introspection,
+   * NOT a tool dispatch, so it crosses no effect boundary) and returns each
+   * tool's `{ name, description?, inputSchema? }`. Optional — connectors
+   * without it contribute no schema, and lint degrades to arg-agnostic
+   * (no false positives). May reject if the upstream is unreachable; callers
+   * treat that as "no schema available."
+   */
+  describeTools?(): Promise<McpToolDescriptor[]>;
 }
 
 export interface McpConnectorClass {

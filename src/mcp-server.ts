@@ -8,7 +8,7 @@ import { healthMetrics, type HealthMetrics } from "./metrics.js";
 import { lint } from "./lint.js";
 import { compile } from "./compile.js";
 import { parse as parseSkill } from "./parser.js";
-import { extractEffectfulFootprint } from "./skill-surface.js";
+import { extractEffectfulFootprint, extractConnectorToolRefs } from "./skill-surface.js";
 import { listKnownConnectorClasses } from "./connectors/config.js";
 import { LintFailureError, MissingSkillReferenceError, OpError } from "./errors.js";
 import {
@@ -399,6 +399,9 @@ export class McpServer {
         // clauses), and TOUCHES (effectful footprint). Derived statically from
         // the body. Null when the source isn't loadable.
         let contract: { vars: string[]; returns: string[]; requires: unknown[]; effectful_footprint: ReturnType<typeof extractEffectfulFootprint> } | null = null;
+        // v0.23.0 — per-tool input schemas for the connector tools this skill
+        // calls (selective). Null when none / no registry / unreachable.
+        let connector_tools: Array<Record<string, unknown>> | null = null;
         if (loaded?.source !== undefined) {
           const g = evaluateApprovalGate(loaded.source);
           approval = g.ok ? { gate_ok: true } : { gate_ok: false, reason: g.reason };
@@ -409,10 +412,40 @@ export class McpServer {
             requires: parsed.requires,
             effectful_footprint: extractEffectfulFootprint(parsed),
           };
+          // v0.23.0 — surface the input schema for ONLY the connector tools
+          // this skill calls (selective by construction). Warms each connector's
+          // tools/list on demand (read-only). Empty when no registry, no
+          // qualified `$ conn.tool` ops, or the schemas aren't reachable.
+          if (this.deps.registry !== undefined) {
+            const refs = extractConnectorToolRefs(parsed);
+            const resolved = await Promise.all(
+              refs.map((r) => this.fetchToolSchema(`${r.connector}.${r.tool}`, this.deps.registry!)),
+            );
+            const tools = resolved.filter((t): t is Record<string, unknown> => t !== null);
+            if (tools.length > 0) {
+              // v0.23.0 — attach each tool's last-observed output shape (if any
+              // approved run has recorded it). Only for the tools that passed
+              // the allowed_tools filter above, so gated tools stay hidden.
+              if (this.deps.traceStore.getObservedShapes !== undefined) {
+                const shapes = await this.deps.traceStore.getObservedShapes(
+                  tools.map((t) => ({ connector: t["connector"] as string, tool: t["name"] as string })),
+                );
+                for (const t of tools) {
+                  const rec = shapes.get(`${t["connector"] as string}.${t["name"] as string}`);
+                  if (rec !== undefined) {
+                    t["observed_output_shape"] = rec.shape;
+                    t["observed_at_ms"] = rec.observed_at_ms;
+                  }
+                }
+              }
+              connector_tools = tools;
+            }
+          }
         }
         return {
           metadata,
           contract,
+          connector_tools,
           approval,
           versions,
           recent_fires,
@@ -648,7 +681,7 @@ export class McpServer {
 
     this.registerTool({
       name: "runtime_capabilities",
-      description: "Discover the runtime's wired connectors and shell-execution mode. Read-only. Use to author skills against the actually-available primitives. Per-category filter via `include`.",
+      description: "Discover the runtime's wired connectors and shell-execution mode. Read-only. Use to author skills against the actually-available primitives. Per-category filter via `include`. The connector lists are a compact menu (tool NAMES); pull one tool's full argument schema on demand with `tool: \"<connector>.<tool>\"`.",
       inputSchema: {
         type: "object",
         properties: {
@@ -659,6 +692,10 @@ export class McpServer {
               enum: ["localModels", "mcpConnectors", "mcpConnectorClasses", "dataStores", "skillStores", "agentConnectors", "shellExecution", "securedApproval", "runtimeVersion", "runtimeMode", "triggersFilePath"],
             },
             description: "Filter which categories to return. Omit for all.",
+          },
+          tool: {
+            type: "string",
+            description: "Selective schema fetch: `\"<connector>.<tool>\"` (or a bare tool name) returns that one tool's full descriptor (name, description, input_schema) under `toolSchema`. The manual for a single tool you're about to call — not in the default menu.",
           },
         },
       },
@@ -830,6 +867,12 @@ export class McpServer {
       registry: this.deps.registry,
       mechanical,
       recursionDepth: 0,
+      // v0.23.0 — pass the trace store (NOT a `trace` config) so `$`-op observed
+      // output-shape capture works on the MCP execute path. With no trace config
+      // the full per-run TraceRecord is still NOT written (traceBuilder stays
+      // null); only the lightweight shape cache is updated. Skipped in mechanical
+      // preview (no real dispatch occurs).
+      ...(!mechanical ? { traceStore: this.deps.traceStore } : {}),
       ...(this.deps.enableUnsafeShell !== undefined ? { enableUnsafeShell: this.deps.enableUnsafeShell } : {}),
       ...(this.deps.shellAllowlist !== undefined ? { shellAllowlist: this.deps.shellAllowlist } : {}),
       ...(this.deps.fsAllowlist !== undefined ? { fsAllowlist: this.deps.fsAllowlist } : {}),
@@ -1211,7 +1254,52 @@ export class McpServer {
           "(lint surfaces them as deprecated-symbol-op).",
       };
     }
+    // v0.23.0 — selective tool-schema fetch. `tool: "connector.tool"` (or a bare
+    // tool name, searched across connectors) returns that ONE tool's full
+    // descriptor — the on-demand "manual" for a tool the author is about to use,
+    // kept out of the default compact menu so the response footprint stays flat.
+    // Read-only: warms the connector's tools/list (protocol introspection).
+    if (typeof args["tool"] === "string" && args["tool"] !== "" && reg) {
+      out["toolSchema"] = await this.fetchToolSchema(args["tool"], reg);
+    }
     return out;
+  }
+
+  /**
+   * v0.23.0 — resolve a single tool's descriptor for the selective
+   * `runtime_capabilities({ tool })` fetch. Accepts "connector.tool" (explicit)
+   * or a bare tool name (first match across wired connectors). Best-effort:
+   * returns null when unresolved or the upstream is unreachable.
+   */
+  private async fetchToolSchema(
+    spec: string,
+    reg: NonNullable<McpServerDeps["registry"]>,
+  ): Promise<Record<string, unknown> | null> {
+    const dot = spec.indexOf(".");
+    const wantConn = dot >= 0 ? spec.slice(0, dot) : undefined;
+    const wantTool = dot >= 0 ? spec.slice(dot + 1) : spec;
+    for (const e of reg.listMcpConnectors()) {
+      if (wantConn !== undefined && e.name !== wantConn) continue;
+      // Respect the per-connector `allowed_tools` gate — never surface the
+      // schema of a tool the operator gated off (undefined = allow-all).
+      if (e.allowedTools !== undefined && !e.allowedTools.includes(wantTool)) continue;
+      const inst = e.instance as { describeTools?: () => Promise<import("./connectors/types.js").McpToolDescriptor[]> };
+      if (typeof inst.describeTools !== "function") continue;
+      try {
+        const d = (await inst.describeTools()).find((x) => x.name === wantTool);
+        if (d !== undefined) {
+          return {
+            connector: e.name,
+            name: d.name,
+            ...(d.description !== undefined ? { description: d.description } : {}),
+            ...(d.inputSchema !== undefined ? { input_schema: d.inputSchema } : {}),
+          };
+        }
+      } catch {
+        // Unreachable upstream — keep scanning other connectors.
+      }
+    }
+    return null;
   }
 }
 

@@ -44,6 +44,7 @@ import type {
   McpConnector,
   McpDispatchCtx,
   McpConnectorCapabilities,
+  McpToolDescriptor,
   ManifestInfo,
 } from "./types.js";
 
@@ -145,7 +146,10 @@ interface JsonRpcReply {
 interface SessionEntry {
   sessionId: string | null;
   initializing: Promise<void> | null;
-  cachedTools: string[] | null;
+  // v0.23.0 — cache the full descriptor (name + description + inputSchema)
+  // from `tools/list`, not just the name. Feeds connector-aware input lint
+  // and selective schema discovery; the manifest derives names from it.
+  cachedTools: McpToolDescriptor[] | null;
 }
 
 const DEFAULT_IDENTITY_KEY = "<default>";
@@ -251,7 +255,8 @@ export class HttpMcpConnector implements McpConnector {
     const entry = this.getOrCreateEntry(DEFAULT_IDENTITY_KEY);
     try {
       await this.ensureSession(DEFAULT_IDENTITY_KEY, entry);
-      toolsAvailable = entry.cachedTools ?? (await this.listToolsForEntry(DEFAULT_IDENTITY_KEY, entry));
+      const descriptors = entry.cachedTools ?? (await this.listToolsForEntry(DEFAULT_IDENTITY_KEY, entry));
+      toolsAvailable = descriptors.map((t) => t.name);
     } catch (err) {
       fetchError = err instanceof Error ? err.message : String(err);
     }
@@ -332,18 +337,42 @@ export class HttpMcpConnector implements McpConnector {
     }
   }
 
-  private async listToolsForEntry(identityKey: string, entry: SessionEntry): Promise<string[]> {
+  private async listToolsForEntry(identityKey: string, entry: SessionEntry): Promise<McpToolDescriptor[]> {
     const reply = (await this.post(identityKey, entry, {
       jsonrpc: "2.0",
       id: Math.floor(Math.random() * 1e6),
       method: "tools/list",
-    })) as { result?: { tools?: Array<{ name?: string }> } } | null;
+    })) as {
+      result?: { tools?: Array<{ name?: string; description?: string; inputSchema?: Record<string, unknown> }> };
+    } | null;
     const tools = reply?.result?.tools;
-    const names = Array.isArray(tools)
-      ? tools.map((t) => t.name ?? "").filter((n) => n !== "")
+    // v0.23.0 — retain description + inputSchema (previously discarded). The
+    // inputSchema is the tool's argument contract, fed to connector-aware lint.
+    const descriptors: McpToolDescriptor[] = Array.isArray(tools)
+      ? tools
+          .filter((t): t is { name: string; description?: string; inputSchema?: Record<string, unknown> } =>
+            typeof t.name === "string" && t.name !== "")
+          .map((t) => ({
+            name: t.name,
+            ...(typeof t.description === "string" ? { description: t.description } : {}),
+            ...(t.inputSchema !== undefined && t.inputSchema !== null ? { inputSchema: t.inputSchema } : {}),
+          }))
       : [];
-    entry.cachedTools = names;
-    return names;
+    entry.cachedTools = descriptors;
+    return descriptors;
+  }
+
+  /**
+   * v0.23.0 — warmed tool descriptors for connector-aware lint + discovery.
+   * Ensures the default-identity session's `tools/list` is warm (read-only
+   * protocol introspection, not a tool dispatch), then returns the cached
+   * descriptors. Rejects if the upstream is unreachable; the caller treats
+   * that as "no schema available."
+   */
+  async describeTools(): Promise<McpToolDescriptor[]> {
+    const entry = this.getOrCreateEntry(DEFAULT_IDENTITY_KEY);
+    await this.ensureSession(DEFAULT_IDENTITY_KEY, entry);
+    return entry.cachedTools ?? (await this.listToolsForEntry(DEFAULT_IDENTITY_KEY, entry));
   }
 
   /**

@@ -2,6 +2,19 @@
 
 Each release carries an **Upgrade impact:** line (first in its section) so a bump's requirements are visible at a glance. Tags (closed set): **BREAKING** (a manual change is needed to keep working) · **RE-APPROVE** (secured-mode signature invalidation — skills must be re-approved before they run) · **CONFIG** (`connectors.json` / config edit needed) · **none (additive)** (no action; backward-compatible). Standard from 0.20.0 forward; the pre-0.20 transitions that need action are flagged inline below (0.14.0, 0.18.8, 0.19.0). Full walkthrough: [UPGRADING.md](UPGRADING.md).
 
+## 0.23.0 — 2026-06-23 — connector tool-schema discovery + connector-aware lint
+
+**Upgrade impact:** none (additive). One thing to know: the new tier-2 lint can surface a *pre-existing* wrong-arg-name in an existing skill (it was always wrong; it just failed at dispatch before). Tier-2 is a warning — it never blocks compile or execution.
+
+Authoring a skill against an MCP connector tool used to be guess-and-run: the runtime called the connector's `tools/list` but kept only tool *names*, discarding the argument schema. Now it retains the schema and puts it to work — without bloating agent context (schemas are surfaced selectively, never dumped).
+
+- **Connector-aware input lint.** `lint_skill` validates `$ <connector>.<tool> arg=...` argument names against the tool's `inputSchema`: an unknown arg (`$ ddg.search querry=...`) is `unknown-connector-arg` and a missing required arg is `missing-required-connector-arg`, both tier-2. The schema is warmed on demand via a read-only `tools/list` (protocol introspection — not a tool dispatch, so it crosses no effect boundary) with a short timeout; a connector whose schema isn't reachable degrades to today's arg-agnostic behavior (no false positives). Runs entirely server-side — the schema never enters agent context.
+- **Selective schema fetch.** `runtime_capabilities({ tool: "<connector>.<tool>" })` returns that one tool's full descriptor (name, description, `input_schema`) on demand. The default response stays the compact menu (tool names) — pull the manual only for the tool you're about to call.
+- **`skill_preflight` surfaces tool contracts.** For the connector tools a skill actually calls, preflight now reports each tool's input schema and — once any approved run has dispatched it — its **last-observed output shape** (keys + types), so an author knows what `-> R` binds before running.
+- **Observed-output-shape capture.** A `$ connector.tool` dispatch records the shape (keys/types, **not values**) of the value the skill binds, keyed by `connector.tool`, in an operator-local cache under `~/.skillscript/`. Once any approved skill runs a tool, later authors see its return shape. Privacy-first (no values); independent of trace mode.
+- **Respects `allowed_tools`.** Every discovery surface honors the per-connector `allowed_tools` gate — a tool the operator gated off is never surfaced or validated against.
+- **Adopter note:** custom `McpConnector` classes may implement the optional `describeTools()` method to light up the same discovery + lint; bundled HTTP/remote connectors provide it. A connector without it simply contributes no schema (graceful).
+
 ## 0.22.1 — 2026-06-22 — agent-facing allowlist guidance + docs accuracy
 
 **Upgrade impact:** none (additive)

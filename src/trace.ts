@@ -1,9 +1,11 @@
 import { createHash, randomUUID } from "node:crypto";
-import { mkdir, readdir, readFile, stat, unlink, writeFile } from "node:fs/promises";
+import { mkdir, readdir, readFile, rename, stat, unlink, writeFile } from "node:fs/promises";
 import { join, basename, dirname } from "node:path";
 import { safePathJoin, validatePathComponent } from "./safe-path.js";
 import { InvalidPathError } from "./errors.js";
 import type { ExecutionError } from "./runtime.js";
+import type { ObservedShapeRecord } from "./observed-shape.js";
+import { shapeKey } from "./observed-shape.js";
 
 /**
  * Per-fire dispatch trace recording. Lets operators query "what did this
@@ -99,6 +101,21 @@ export interface TraceStore {
    * path. Returns the count of records pruned.
    */
   prune(retentionMs: number): Promise<number>;
+  /**
+   * v0.23.0 — record a `$ connector.tool` op's last-observed return shape
+   * (keys/types, not values). Optional: a store without it simply contributes
+   * no observed shapes and skill_preflight degrades (no shape surfaced). Internal
+   * runtime cache, last-write-wins.
+   */
+  recordObservedShape?(record: ObservedShapeRecord): Promise<void>;
+  /** v0.23.0 — read the last-observed shapes for a set of (connector, tool) refs. */
+  getObservedShapes?(refs: Array<{ connector: string; tool: string }>): Promise<Map<string, ObservedShapeRecord>>;
+  /**
+   * v0.23.0 — await any in-flight observed-shape writes. Called at run
+   * completion so fire-and-forget captures are durable before execute()
+   * returns (CLI-exit-safe; an immediately-following read sees them).
+   */
+  flushObservedShapes?(): Promise<void>;
 }
 
 // ─── FilesystemTraceStore (bundled default) ─────────────────────────────────
@@ -111,6 +128,56 @@ export interface TraceStore {
  */
 export class FilesystemTraceStore implements TraceStore {
   constructor(private readonly rootDir: string) {}
+
+  // v0.23.0 — observed output-shape cache. A single sidecar map under the
+  // trace root, last-write-wins. Writes are serialized in-process via this
+  // promise chain so concurrent records don't tear the file (atomic temp +
+  // rename on each flush). Cross-process races degrade to last-write-wins,
+  // which is fine for a hint cache.
+  private observedShapeWrite: Promise<void> = Promise.resolve();
+  private observedShapesPath(): string {
+    return join(this.rootDir, "observed-shapes.json");
+  }
+  private async readObservedShapes(): Promise<Record<string, ObservedShapeRecord>> {
+    try {
+      const text = await readFile(this.observedShapesPath(), "utf8");
+      const parsed = JSON.parse(text) as Record<string, ObservedShapeRecord>;
+      return parsed !== null && typeof parsed === "object" ? parsed : {};
+    } catch {
+      return {}; // missing / unparseable → empty
+    }
+  }
+
+  async recordObservedShape(record: ObservedShapeRecord): Promise<void> {
+    // Serialize read-modify-write on the in-process chain.
+    this.observedShapeWrite = this.observedShapeWrite.then(async () => {
+      const all = await this.readObservedShapes();
+      all[shapeKey(record.connector, record.tool)] = record;
+      await mkdir(this.rootDir, { recursive: true });
+      const path = this.observedShapesPath();
+      const tmp = `${path}.${randomUUID()}.tmp`;
+      await writeFile(tmp, JSON.stringify(all, null, 2), "utf8");
+      await rename(tmp, path);
+    }).catch(() => { /* best-effort cache; never surface a write failure */ });
+    return this.observedShapeWrite;
+  }
+
+  async flushObservedShapes(): Promise<void> {
+    await this.observedShapeWrite;
+  }
+
+  async getObservedShapes(
+    refs: Array<{ connector: string; tool: string }>,
+  ): Promise<Map<string, ObservedShapeRecord>> {
+    const all = await this.readObservedShapes();
+    const out = new Map<string, ObservedShapeRecord>();
+    for (const r of refs) {
+      const k = shapeKey(r.connector, r.tool);
+      const rec = all[k];
+      if (rec !== undefined) out.set(k, rec);
+    }
+    return out;
+  }
 
   async write(record: TraceRecord): Promise<void> {
     // safePathJoin throws InvalidPathError on `..`, `.`, separators, null bytes.
@@ -147,7 +214,10 @@ export class FilesystemTraceStore implements TraceStore {
       try {
         entries = await readdir(full);
       } catch (err) {
-        if ((err as NodeJS.ErrnoException).code === "ENOENT") continue;
+        // ENOENT (race) or ENOTDIR (a sidecar file at the root, e.g.
+        // observed-shapes.json) — skip; only skill subdirs hold trace records.
+        const code = (err as NodeJS.ErrnoException).code;
+        if (code === "ENOENT" || code === "ENOTDIR") continue;
         throw err;
       }
       for (const entry of entries) {
@@ -189,7 +259,10 @@ export class FilesystemTraceStore implements TraceStore {
         const text = await readFile(path, "utf8");
         return JSON.parse(text) as TraceRecord;
       } catch (err) {
-        if ((err as NodeJS.ErrnoException).code === "ENOENT") continue;
+        // ENOENT (no such trace under this skill) or ENOTDIR (skillDir is a
+        // sidecar file like observed-shapes.json, not a directory) — skip.
+        const code = (err as NodeJS.ErrnoException).code;
+        if (code === "ENOENT" || code === "ENOTDIR") continue;
         throw err;
       }
     }

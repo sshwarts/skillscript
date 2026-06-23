@@ -41,6 +41,28 @@ function firstToken(s: string): string {
   return s.trim().split(/\s+/)[0] ?? "";
 }
 
+/**
+ * v0.23.0 — the unique qualified connector-tool references a skill dispatches:
+ * each `$ <connector>.<tool>` op as `{ connector, tool }`, de-duplicated. Used
+ * by skill_preflight to surface the input schema (and observed output shape)
+ * for ONLY the tools this skill calls — selective by construction. Bare-form
+ * `$ <tool>` (no connector prefix) is excluded; its owning connector resolves
+ * at dispatch.
+ */
+export function extractConnectorToolRefs(parsed: ParsedSkill): Array<{ connector: string; tool: string }> {
+  const seen = new Map<string, { connector: string; tool: string }>();
+  for (const target of parsed.targets.values()) {
+    walkOps(target.ops, (op) => {
+      if (op.kind !== "$" || op.mcpConnector === undefined) return;
+      const tool = firstToken(op.body);
+      if (tool.length === 0) return;
+      seen.set(`${op.mcpConnector}.${tool}`, { connector: op.mcpConnector, tool });
+    });
+  }
+  return [...seen.values()].sort((a, b) =>
+    a.connector.localeCompare(b.connector) || a.tool.localeCompare(b.tool));
+}
+
 export function extractEffectfulFootprint(parsed: ParsedSkill): EffectfulFootprint {
   const connectors = new Set<string>();
   const builtins = new Set<string>();

@@ -981,6 +981,16 @@ Adopters whose `SkillStore` is backed by an addressable substrate (e.g., a memor
 
 **Gotcha:** in **secured mode**, a direct-write declaring `# Status: Approved` without a valid signature is forced to `Draft` — the substrate can't mint approval, only the operator's key can. Publish by writing `Draft`, then signing via `skillfile approve <name>` or the dashboard Approvals queue (both preserve the captured author). In **unsecured mode** a bare `# Status: Approved` direct-write is honored as-is. Either way, in-skill `$ skill_write` always lands its child `Draft` regardless of body declaration. See [Approval + secured mode](#approval--secured-mode).
 
+### Discovering connector tools while authoring
+
+When a skill dispatches an MCP connector tool (`$ <connector>.<tool> ...`), the runtime helps an author get the call right without a guess-and-run loop:
+
+- **`runtime_capabilities`** lists the wired connectors and their tool names (a compact menu). Pull one tool's full argument schema on demand with `runtime_capabilities({ tool: "<connector>.<tool>" })` — the manual for the tool you're about to call, kept out of the default response so it stays small.
+- **`lint_skill`** validates the args you wrote against that schema: an unknown arg name (`$ ddg.search querry=...`) or a missing required arg surfaces as a tier-2 warning at author time instead of failing at dispatch. Degrades silently when a connector's schema isn't reachable (no false positives).
+- **`skill_preflight`** shows, for the connector tools the skill actually calls, both their input schema and — once any approved run has dispatched the tool — its **last-observed output shape** (keys + types), so you know what `-> R` will bind before you run.
+
+All three respect the connector's `allowed_tools` gate: a tool the operator gated off is never surfaced or validated against. The observed-output-shape cache holds keys + types only (not values) and lives operator-local under `~/.skillscript/`.
+
 ## Identity propagation — for multi-agent hosts
 
 **Skip this section** if your runtime serves one agent (CLI tools, single-user dashboards, hobby deployments). The default — `SkillMeta.author` captured from the SkillStore's writer identity — already attributes authorship correctly when there's only one writer.

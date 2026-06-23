@@ -1,7 +1,7 @@
 import { parse, tokenizeKeywordArgs, type ParsedSkill, type SkillOp } from "./parser.js";
 import { classifyMutation, authorizationGranted, type MutationAuthState } from "./mutation-gate.js";
 import { KNOWN_FILTERS } from "./filters.js";
-import type { StaticCapabilities, SkillStore } from "./connectors/types.js";
+import type { StaticCapabilities, SkillStore, McpToolDescriptor } from "./connectors/types.js";
 import type { Registry } from "./connectors/registry.js";
 
 /**
@@ -101,6 +101,15 @@ export interface LintOptions {
    */
   mcpConnectorAllowedTools?: Map<string, string[]>;
   /**
+   * v0.23.0 — warmed per-connector tool schemas: connector name → (tool name →
+   * descriptor with `inputSchema`). Feeds the connector-aware input-lint rules
+   * (`unknown-connector-arg` / `missing-required-connector-arg`). Derived
+   * async from `registry` (via each connector's `describeTools()`) when only
+   * the registry is provided and the async `lint()` entry point is used; tests
+   * inject directly. Absent/empty → those rules degrade to arg-agnostic.
+   */
+  mcpConnectorToolSchemas?: Map<string, Map<string, McpToolDescriptor>>;
+  /**
    * Errors from `connectors.json` load pass (v0.4.0). When provided,
    * `unknown-connector-class` lint rule re-surfaces the subset of these
    * about unknown class names so cold-author tooling sees them through
@@ -193,6 +202,13 @@ interface LintContext {
    * `$ ref.unknown_tool` at lint time (P0.1 fix).
    */
   mcpConnectorStaticTools: Map<string, string[] | null>;
+  /**
+   * v0.23.0 — warmed per-connector tool schemas (connector → tool → descriptor).
+   * Populated only on the async `lint()` path (warming `describeTools()` is
+   * async + best-effort); `lintSync()` leaves it empty so the connector-arg
+   * rules degrade to arg-agnostic. Empty inner map / missing entry → skip.
+   */
+  mcpConnectorToolSchemas: Map<string, Map<string, McpToolDescriptor>>;
 }
 
 export interface LintRule {
@@ -227,6 +243,8 @@ export async function lint(source: string, options?: LintOptions): Promise<LintR
     bareArrayReturnTools: options?.bareArrayReturnTools ?? [],
     shellAllowlist: options?.shellAllowlist,
     mcpConnectorStaticTools: collectMcpConnectorStaticToolsFromRegistry(options?.registry),
+    mcpConnectorToolSchemas:
+      options?.mcpConnectorToolSchemas ?? (await collectMcpConnectorToolSchemasFromRegistry(options?.registry)),
   };
   const findings: LintFinding[] = [];
   for (const rule of RULES) {
@@ -273,6 +291,9 @@ export function lintSync(source: string, options?: LintOptions): LintResult {
     bareArrayReturnTools: options?.bareArrayReturnTools ?? [],
     shellAllowlist: options?.shellAllowlist,
     mcpConnectorStaticTools: collectMcpConnectorStaticToolsFromRegistry(options?.registry),
+    // lintSync can't warm schemas (describeTools is async); honor an explicit
+    // injection (tests) but otherwise leave empty → connector-arg rules degrade.
+    mcpConnectorToolSchemas: options?.mcpConnectorToolSchemas ?? new Map(),
   };
   const findings: LintFinding[] = [];
   for (const rule of RULES) {
@@ -1179,6 +1200,113 @@ const UNVERIFIED_QUALIFIED_TOOL: LintRule = {
           message: `\`$ ${ref}.${toolName}\` in target '${targetName}' — connector '${ref}' doesn't declare its tool surface statically; can't validate at compile time. Verify the tool exists on the connector; runtime will fail with a connector-specific error if it doesn't.`,
           block: targetName,
           extras: { connector: ref, tool: toolName },
+        });
+      });
+    }
+    return findings;
+  },
+};
+
+// v0.23.0 — connector-aware input lint. For a qualified `$ ref.tool arg=...`
+// op where the connector's warmed inputSchema is available (ctx.
+// mcpConnectorToolSchemas), validate the arg NAMES against the schema. Catches
+// the typo class (`$ ddg.search querry=...`) statically — today it compiles
+// clean and fails only at runtime because MCP connector args are unvalidated.
+//
+// SCOPE (phase 1): qualified `$ connector.tool` form only (bare `$ tool`
+// resolves its owning connector at dispatch and is deferred). Reads only the
+// pre-warmed cache — no I/O here; the async lint() entry point warms it.
+//
+// GRACEFUL DEGRADE: no cache entry / no inputSchema / open schema
+// (additionalProperties: true) → skip. Schema-less or unreachable connectors
+// behave exactly as before (no false positives).
+function connectorArgLintInfo(
+  ctx: LintContext,
+  op: SkillOp,
+): { connector: string; toolName: string; argNames: string[]; inputSchema: Record<string, unknown> } | null {
+  if (op.kind !== "$" || op.mcpConnector === undefined) return null;
+  const byTool = ctx.mcpConnectorToolSchemas.get(op.mcpConnector);
+  if (byTool === undefined) return null;
+  const m = /^([A-Za-z_][\w:-]*)\s*([\s\S]*)$/.exec(op.body);
+  if (m === null) return null;
+  const toolName = m[1]!;
+  const descriptor = byTool.get(toolName);
+  if (descriptor === undefined || descriptor.inputSchema === undefined) return null;
+  const argNames: string[] = [];
+  for (const tok of tokenizeKeywordArgs(m[2] ?? "")) {
+    const eq = tok.indexOf("=");
+    if (eq === -1) continue;
+    const k = tok.slice(0, eq).trim();
+    // `timeout` is a runtime-reserved per-op kwarg, popped before the connector
+    // sees args — never part of the tool's own schema.
+    if (k !== "" && k !== "timeout") argNames.push(k);
+  }
+  return { connector: op.mcpConnector, toolName, argNames, inputSchema: descriptor.inputSchema };
+}
+
+const UNKNOWN_CONNECTOR_ARG: LintRule = {
+  id: "unknown-connector-arg",
+  severity: "warning",
+  description: "A qualified `$ ref.tool arg=...` op passes an argument name the connector tool's inputSchema doesn't declare.",
+  remediation: "Use an argument the tool declares (see `runtime_capabilities` for the connector tool's schema), or remove the unrecognized one. If the tool genuinely accepts it, the upstream inputSchema may be incomplete — verify before relying on it.",
+  check: (ctx) => {
+    if (ctx.mcpConnectorToolSchemas.size === 0) return [];
+    const findings: LintFinding[] = [];
+    const reported = new Set<string>();
+    for (const [targetName, target] of ctx.parsed.targets) {
+      walkOps(target.ops, (op) => {
+        const info = connectorArgLintInfo(ctx, op);
+        if (info === null) return;
+        const props = (info.inputSchema as { properties?: unknown }).properties;
+        if (props === null || typeof props !== "object") return; // can't enumerate the valid set
+        if ((info.inputSchema as { additionalProperties?: unknown }).additionalProperties === true) return; // open schema
+        const valid = new Set(Object.keys(props as Record<string, unknown>));
+        for (const arg of info.argNames) {
+          if (valid.has(arg)) continue;
+          const key = `${targetName}:${info.connector}:${info.toolName}:${arg}`;
+          if (reported.has(key)) continue;
+          reported.add(key);
+          findings.push({
+            rule: "unknown-connector-arg",
+            severity: "warning",
+            message: `\`$ ${info.connector}.${info.toolName}\` in target '${targetName}' passes arg '${arg}', which isn't in the tool's input schema. Declared args: ${[...valid].join(", ") || "(none)"}.`,
+            block: targetName,
+            extras: { connector: info.connector, tool: info.toolName, arg, declared_args: [...valid] },
+          });
+        }
+      });
+    }
+    return findings;
+  },
+};
+
+const MISSING_REQUIRED_CONNECTOR_ARG: LintRule = {
+  id: "missing-required-connector-arg",
+  severity: "warning",
+  description: "A qualified `$ ref.tool` op omits an argument the connector tool's inputSchema marks required.",
+  remediation: "Supply the required argument(s). See `runtime_capabilities` for the tool's schema (its `required` list).",
+  check: (ctx) => {
+    if (ctx.mcpConnectorToolSchemas.size === 0) return [];
+    const findings: LintFinding[] = [];
+    const reported = new Set<string>();
+    for (const [targetName, target] of ctx.parsed.targets) {
+      walkOps(target.ops, (op) => {
+        const info = connectorArgLintInfo(ctx, op);
+        if (info === null) return;
+        const requiredRaw = (info.inputSchema as { required?: unknown }).required;
+        if (!Array.isArray(requiredRaw)) return;
+        const provided = new Set(info.argNames);
+        const missing = requiredRaw.filter((r): r is string => typeof r === "string" && !provided.has(r));
+        if (missing.length === 0) return;
+        const key = `${targetName}:${info.connector}:${info.toolName}:${missing.join(",")}`;
+        if (reported.has(key)) return;
+        reported.add(key);
+        findings.push({
+          rule: "missing-required-connector-arg",
+          severity: "warning",
+          message: `\`$ ${info.connector}.${info.toolName}\` in target '${targetName}' is missing required arg(s): ${missing.join(", ")}.`,
+          block: targetName,
+          extras: { connector: info.connector, tool: info.toolName, missing },
         });
       });
     }
@@ -3348,6 +3476,8 @@ const RULES: LintRule[] = [
   DISALLOWED_TOOL,
   UNKNOWN_TOOL_ON_CONNECTOR,
   UNVERIFIED_QUALIFIED_TOOL,
+  UNKNOWN_CONNECTOR_ARG,
+  MISSING_REQUIRED_CONNECTOR_ARG,
   UNINITIALIZED_APPEND,
   FOREACH_LOCAL_ACCUMULATOR_TARGET,
   APPEND_TO_NON_LIST,
@@ -3611,6 +3741,53 @@ function collectMcpConnectorStaticToolsFromRegistry(registry: Registry | undefin
       out.set(e.name, null);
     }
   }
+  return out;
+}
+
+/**
+ * v0.23.0 — warm + collect per-connector tool schemas for connector-aware
+ * input lint. For each wired MCP connector exposing `describeTools()`, calls it
+ * (which ensure-warms a read-only `tools/list` when cold — protocol
+ * introspection, NOT a tool dispatch, so no effect boundary is crossed) under a
+ * short timeout. Best-effort + graceful: a connector with no `describeTools()`,
+ * an unreachable upstream, or a timeout simply contributes no schema, and the
+ * arg rules stay silent for it (no false positives). Async — only reachable via
+ * the async `lint()` entry point.
+ */
+const CONNECTOR_SCHEMA_WARM_TIMEOUT_MS = 2000;
+
+async function collectMcpConnectorToolSchemasFromRegistry(
+  registry: Registry | undefined,
+): Promise<Map<string, Map<string, McpToolDescriptor>>> {
+  const out = new Map<string, Map<string, McpToolDescriptor>>();
+  if (registry === undefined) return out;
+  await Promise.all(
+    registry.listMcpConnectors().map(async (e) => {
+      const instance = e.instance as { describeTools?: () => Promise<McpToolDescriptor[]> };
+      if (typeof instance.describeTools !== "function") return;
+      try {
+        const descriptors = await Promise.race([
+          instance.describeTools(),
+          new Promise<never>((_, reject) =>
+            setTimeout(() => reject(new Error("describeTools timeout")), CONNECTOR_SCHEMA_WARM_TIMEOUT_MS),
+          ),
+        ]);
+        // Respect the operator's per-connector `allowed_tools` gate: don't
+        // surface (or validate against) tools the operator gated off — a
+        // disallowed `$ conn.tool` is the `disallowed-tool` rule's job, not
+        // ours. undefined allowlist = allow-all.
+        const allowed = e.allowedTools;
+        const byTool = new Map<string, McpToolDescriptor>();
+        for (const d of descriptors) {
+          if (allowed !== undefined && !allowed.includes(d.name)) continue;
+          byTool.set(d.name, d);
+        }
+        out.set(e.name, byTool);
+      } catch {
+        // Unreachable / timeout / no schema — degrade arg-agnostic for this connector.
+      }
+    }),
+  );
   return out;
 }
 

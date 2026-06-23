@@ -33,6 +33,7 @@ import {
 } from "./mutation-gate.js";
 import { TraceBuilder, shouldTraceFire } from "./trace.js";
 import type { TraceConfig, TraceStore } from "./trace.js";
+import { describeValueShape, isShapeWorthRecording } from "./observed-shape.js";
 
 /**
  * Runtime executor. Pure mechanical execution: walks the parsed skill
@@ -656,6 +657,14 @@ export async function execute(
     } catch (err) {
       process.stderr.write(`[trace] failed to write record ${record.trace_id}: ${(err as Error).message}\n`);
     }
+  }
+  // v0.23.0 — drain any observed-shape writes queued during the run (the per-op
+  // capture is fire-and-forget for mid-run latency). Awaiting here guarantees
+  // they're persisted before execute() returns — so a short-lived CLI process
+  // can't exit mid-write, and an immediately-following preflight sees them.
+  // Independent of trace mode (capture works even when full tracing is off).
+  if (ctx.traceStore?.flushObservedShapes !== undefined) {
+    try { await ctx.traceStore.flushObservedShapes(); } catch { /* best-effort */ }
   }
 
   return {
@@ -1452,6 +1461,25 @@ async function execOpInner(
         );
       }
       const bindValue = unwrapToolResult(rawResult);
+      // v0.23.0 — observed output-shape capture. For a qualified `$ conn.tool`
+      // dispatch that actually ran (we're past the mechanical-preview + blocked
+      // + isError guards), record the shape of the UNWRAPPED bound value —
+      // keys/types, never values — keyed by connector.tool. NOT `finalValue`
+      // (the fallback below can replace it) and NOT `rawResult` (the MCP
+      // envelope). Best-effort, fire-and-forget; never affects the run.
+      if (
+        op.mcpConnector !== undefined &&
+        ctx.traceStore?.recordObservedShape !== undefined &&
+        isShapeWorthRecording(bindValue)
+      ) {
+        void ctx.traceStore.recordObservedShape({
+          connector: op.mcpConnector,
+          tool: toolName,
+          shape: describeValueShape(bindValue),
+          observed_at_ms: Date.now(),
+          ...(ctx.entrySkillName !== undefined ? { observed_from: ctx.entrySkillName } : {}),
+        }).catch(() => { /* best-effort cache; swallow */ });
+      }
       // v0.16.0 — fallback-on-empty parity with legacy `~`/`>` semantics
       // (LocalModel empty-trimmed-response + Retrieval empty-array both bind
       // fallback). Without this, the doc-vs-code mismatch at parser.ts:84-91

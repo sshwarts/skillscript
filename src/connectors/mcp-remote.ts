@@ -27,6 +27,7 @@ import type {
   McpConnector,
   McpDispatchCtx,
   McpConnectorCapabilities,
+  McpToolDescriptor,
   ManifestInfo,
 } from "./types.js";
 
@@ -148,6 +149,9 @@ export class RemoteMcpConnector implements McpConnector {
   private inboundBuffer = Buffer.alloc(0);
   private initializePromise: Promise<unknown> | undefined;
   private toolsAvailable: string[] = [];
+  // v0.23.0 — full descriptors (name + description + inputSchema) from
+  // tools/list, for connector-aware input lint + selective discovery.
+  private toolDescriptors: McpToolDescriptor[] = [];
   private errorState: Error | undefined;
   private readonly framing: RemoteMcpFraming;
   private readonly initTimeoutMs: number;
@@ -211,11 +215,18 @@ export class RemoteMcpConnector implements McpConnector {
     // either shape.
     try {
       const toolsResp = await this.sendRequest("tools/list", undefined, this.callTimeoutMs) as {
-        tools?: Array<{ name?: string }>;
+        tools?: Array<{ name?: string; description?: string; inputSchema?: Record<string, unknown> }>;
       };
-      this.toolsAvailable = (toolsResp.tools ?? [])
-        .map((t) => t.name)
-        .filter((n): n is string => typeof n === "string");
+      // v0.23.0 — retain description + inputSchema (previously only names kept).
+      this.toolDescriptors = (toolsResp.tools ?? [])
+        .filter((t): t is { name: string; description?: string; inputSchema?: Record<string, unknown> } =>
+          typeof t.name === "string" && t.name !== "")
+        .map((t) => ({
+          name: t.name,
+          ...(typeof t.description === "string" ? { description: t.description } : {}),
+          ...(t.inputSchema !== undefined && t.inputSchema !== null ? { inputSchema: t.inputSchema } : {}),
+        }));
+      this.toolsAvailable = this.toolDescriptors.map((t) => t.name);
     } catch {
       // tools/list unsupported — leave toolsAvailable empty; manifest
       // will reflect "unknown".
@@ -308,6 +319,18 @@ export class RemoteMcpConnector implements McpConnector {
   /** For tests + observability — names of tools surfaced by the initialize handshake. */
   getToolsAvailable(): readonly string[] {
     return this.toolsAvailable;
+  }
+
+  /**
+   * v0.23.0 — warmed tool descriptors for connector-aware lint + discovery.
+   * Ensures the child is started (which runs the tools/list handshake), then
+   * returns the cached descriptors. Read-only protocol introspection, no tool
+   * dispatch. Rejects if the child can't start; caller treats that as "no
+   * schema available."
+   */
+  async describeTools(): Promise<McpToolDescriptor[]> {
+    await this.start();
+    return this.toolDescriptors;
   }
 
   // ─── Internal: JSON-RPC plumbing ────────────────────────────────────────
