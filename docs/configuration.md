@@ -375,7 +375,7 @@ Underscore-prefixed top-level keys (`_comment`, `_note_security`, etc.) are igno
 
 Write `class FooSkillStore implements SkillStore { ... }` (or DataStore, LocalModel). Wire it via either:
 
-**(a) Programmatic bootstrap (recommended today)** — write your own bootstrap script that constructs the registry directly:
+**(a) Programmatic bootstrap (recommended today)** — for the common case (wire everything from `$SKILLSCRIPT_HOME` like the CLI does), call **`bootstrapFromEnv()`** and declare your substrate in `connectors.json`; it loads `.env` + config + `connectors.json`, resolves the env cascade, and returns a fully-wired `{ wired, server }` (both unstarted). Reach for the raw-`Registry` assembly below only when hand-constructing a substrate `connectors.json` can't express:
 
 ```typescript
 import { Registry, McpServer, Scheduler } from "skillscript-runtime";
@@ -386,7 +386,7 @@ registry.registerSkillStore("primary", new FooSkillStore({ /* config */ }));
 // ... register other substrates, then construct Scheduler + McpServer + DashboardServer
 ```
 
-See [`docs/adopter-playbook.md`](adopter-playbook.md) for the full pattern.
+See [`docs/adopter-playbook.md`](adopter-playbook.md) §"Programmatic bootstrap path" for both — `bootstrapFromEnv()` (recommended) and the raw pattern.
 
 **(b) `connectors.json` custom form** (deferred to follow-up):
 

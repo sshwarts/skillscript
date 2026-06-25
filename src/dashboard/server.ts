@@ -272,6 +272,11 @@ export class DashboardServer {
     return typeof addr === "object" && addr !== null ? addr.port : this.port;
   }
 
+  /** The configured bind address (after env/config resolution). For startup logging. */
+  boundAddress(): string {
+    return this.bindAddress;
+  }
+
   async stop(): Promise<void> {
     if (this.httpServer === null) return;
     return new Promise<void>((resolve, reject) => {

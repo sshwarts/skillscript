@@ -24,8 +24,8 @@ const REPO_ROOT = join(__dirname, "..");
 const PACKAGE_JSON = JSON.parse(readFileSync(join(REPO_ROOT, "package.json"), "utf8")) as Record<string, unknown>;
 
 describe("T7 — package.json polish", () => {
-  it("1. version is 0.23.1 (fixes: RemoteMcpConnector respawns a dead child instead of latching a permanent outage [15463781]; tier-3 unverified-qualified-tool no longer co-fires against a describeTools connector + contradicts tier-2 connector-arg validation [262d5ab9])", () => {
-    expect(PACKAGE_JSON["version"]).toBe("0.23.1");
+  it("1. version is 0.24.0 (adopter wishlist 82e17077: bootstrapFromEnv() programmatic entry point; optional SkillStore.version() change-token + skill_list if_none_match to kill the remote-store catalog N+1; Registry.disposeAll() reaps connector children on shutdown; SPA poll visibility-gate)", () => {
+    expect(PACKAGE_JSON["version"]).toBe("0.24.0");
   });
 
   it("2. main + types + bin + engines.node ≥ 22.5 declared", () => {

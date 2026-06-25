@@ -460,6 +460,17 @@ export interface SkillStore {
   /** Returns a `VersionInfo` with `previous_status` populated. */
   update_status(name: string, status: SkillStatus): Promise<VersionInfo>;
   manifest(): Promise<ManifestInfo>;
+  /**
+   * v0.23.x — OPTIONAL cheap change-token over the store's whole namespace,
+   * computable WITHOUT loading skill bodies. Any add / remove / edit / status
+   * change must move the token. `skill_list` returns it and honors a caller's
+   * `if_none_match`, so an unchanged poll skips the N+1 catalog rebuild (each
+   * entry otherwise costs a `load()` — free locally, a network call against a
+   * remote store). Optional: a store without it just always rebuilds (today's
+   * behavior). Implementations hash whatever they know is cheap + sufficient
+   * (bundled FS: per-file mtimes; sqlite: name/status/current_version).
+   */
+  version?(): Promise<string>;
 }
 
 export interface SkillStoreClass {

@@ -141,7 +141,7 @@ SqliteSkillStore is the storage layer. Authoring happens above:
 - **MCP tool**: agents call `skill_write` directly; same path as the dashboard
 - **Programmatic**: your code calls `store.store(name, source, metadata?)` directly
 
-The dashboard does NOT default to SqliteSkillStore today — `skillfile dashboard` bootstraps with FilesystemSkillStore. If you want a SqliteSkillStore-backed dashboard, write a custom bootstrap (small surface; see the runtime `Registry` API).
+The dashboard defaults to FilesystemSkillStore. For a SqliteSkillStore-backed dashboard, set `substrate.skill_store: "sqlite"` in `connectors.json` — both `skillfile dashboard` and the programmatic `bootstrapFromEnv()` honor it; no custom bootstrap needed.
 
 ---
 
@@ -164,6 +164,7 @@ When forking into your codebase:
 2. Replace the SQL with your substrate's API (HTTP, DataStore, vector DB, etc.)
 3. Update `staticCapabilities()` to match what your substrate actually supports — drop `supports_versioning` if you can't track history, drop `supports_tag_filter` if querying tags isn't tractable
 4. Update `manifest()` to describe your substrate (`kind: "amp"` or whatever)
-5. Tests: copy `tests/SqliteSkillStore.test.ts` as a starting point + run the conformance suite (`SkillStoreConformance.buildTests()` from `skillscript-runtime/testing`)
+5. **Optional but high-value for network-backed forks: implement `version()`** — a cheap store-wide change-token computed WITHOUT loading bodies (a list ETag, max-revision, or metadata digest), where any add/remove/edit/status-change moves it. It lets `skill_list` skip its N+1 catalog rebuild on unchanged polls (each entry otherwise costs a `load()` — one network round-trip per skill against a remote store). `SqliteSkillStore` hashes `(name, status, current_version)` in one body-free query. Skip it and `skill_list` just always rebuilds.
+6. Tests: copy `tests/SqliteSkillStore.test.ts` as a starting point + run the conformance suite (`SkillStoreConformance.buildTests()` from `skillscript-runtime/testing`)
 
 The conformance suite catches drift from the contract surface. If your fork passes, the runtime treats it interchangeably with FilesystemSkillStore / SqliteSkillStore / etc.

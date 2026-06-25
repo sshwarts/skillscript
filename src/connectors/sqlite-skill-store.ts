@@ -427,6 +427,19 @@ export class SqliteSkillStore implements SkillStore {
     return info;
   }
 
+  async version(): Promise<string> {
+    // v0.23.x — cheap change-token: one indexed query over (name, status,
+    // current_version) — NO source/body column. current_version is the content
+    // hash, so any body edit moves it; status covers approve/disable; row
+    // add/remove covers create/delete. Exact regardless of write timing (unlike
+    // a coarse updated_at second), and still no body load.
+    const rows = this.db.prepare(
+      `SELECT name, status, current_version FROM skills ORDER BY name`,
+    ).all() as Array<{ name: string; status: string; current_version: string }>;
+    const parts = rows.map((r) => `${r.name}:${r.status}:${r.current_version}`);
+    return createHash("sha256").update(parts.join("\n"), "utf8").digest("hex").slice(0, 16);
+  }
+
   async delete(name: string): Promise<void> {
     // Destructive hard-cascade — both tables purged, no tombstone, no restore.
     // The dashboard/CLI delete flow gates this behind an explicit confirm plus a

@@ -2,6 +2,16 @@
 
 Each release carries an **Upgrade impact:** line (first in its section) so a bump's requirements are visible at a glance. Tags (closed set): **BREAKING** (a manual change is needed to keep working) · **RE-APPROVE** (secured-mode signature invalidation — skills must be re-approved before they run) · **CONFIG** (`connectors.json` / config edit needed) · **none (additive)** (no action; backward-compatible). Standard from 0.20.0 forward; the pre-0.20 transitions that need action are flagged inline below (0.14.0, 0.18.8, 0.19.0). Full walkthrough: [UPGRADING.md](UPGRADING.md).
 
+## 0.24.0 — 2026-06-25 — adopter wishlist: bootstrapFromEnv + remote-store polling + connector reaping
+
+**Upgrade impact:** none (additive). All four items are backward-compatible — a new export, an optional contract method, an opt-in tool param, and an internal lifecycle fix. Existing programmatic `bootstrap()` code keeps working; `bootstrapFromEnv()` is an *optional* simplification.
+
+From an AMP-backed remote-store adopter dogfooding the runtime:
+
+- **`bootstrapFromEnv()` — a blessed programmatic entry point.** Most adopters run `skillfile init` once, then operate via the web dashboard. This new exported helper stands that dashboard up from your own code *exactly the way the CLI does*: it loads `$SKILLSCRIPT_HOME/.env` + `skillscript.config.json` + `connectors.json`, resolves the full `SKILLSCRIPT_*` env cascade, calls `bootstrap()`, wires declarative triggers, and assembles the `DashboardServer`. Returns `{ wired, server }` (both unstarted; the caller `start()`s them and calls `wired.registry.disposeAll()` on shutdown). Precedence: explicit option > env > config.json > default. The CLI's `dashboard`/`serve` commands are now thin wrappers over it — closing the silent "every capability the CLI auto-wires had to be hand-assembled programmatically, and each omission failed silently" asymmetry.
+- **`SkillStore.version()` — optional change-token kills the skill_list N+1 for remote stores.** Building the `skill_list` catalog loads every skill's body to parse its effectful footprint — free against a local store, but a network round-trip *per skill* against a remote one, so a polling dashboard hammered the substrate. A new optional `version()` returns a cheap store-wide token (no body loads); `skill_list` returns it as `catalog_version` and honors a caller's `if_none_match`, replying `{ not_modified: true }` and skipping the rebuild when nothing changed. The SPA now sends it (and pauses its poll when the browser tab is backgrounded). Bundled stores implement it (FS: per-file mtimes; sqlite: `(name, status, current_version)` in one query). Optional — a store without it just always rebuilds.
+- **Connector reaping on shutdown.** `Registry.disposeAll()` (new) disposes connectors holding child processes on runtime shutdown, so a stdio-bridged MCP server child (`RemoteMcpConnector`) is reaped rather than orphaned to a dead parent across restarts. The CLI shutdown handler calls it; `bootstrapFromEnv()` callers should too. (Distinct from 0.23.1's respawn-on-death, which self-heals a child that dies *while running* — this reaps a child on *intentional* shutdown.)
+
 ## 0.23.1 — 2026-06-23 — fixes: connector-arg lint advisory + RemoteMcpConnector self-heal
 
 **Upgrade impact:** none (additive).

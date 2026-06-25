@@ -149,7 +149,7 @@ $ my_store.search query="customer feedback" region="eu-west" cluster="prod" -> C
 
 This skill body is locked to `my_store` — its specific kwargs (`region`, `cluster`) and response shape. To move to a different substrate, every call site has to be rewritten.
 
-**⚠ Programmatic `bootstrap()` adopters: `connectors.json` is NOT auto-loaded.** The CLI (`skillfile dashboard` / `serve`) discovers and loads `$SKILLSCRIPT_HOME/connectors.json` automatically. The programmatic path does NOT — `bootstrap()` only reads `connectors.json` when you pass `connectorsConfigPath`. Skip it and your `$ name.tool` calls fail at runtime with `unknown-connector` and no hint that the file simply wasn't read. See §"Programmatic bootstrap path" below for the explicit-wiring pattern. (Same CLI-auto-vs-programmatic-explicit asymmetry as `.env` and `SKILLSCRIPT_*` env vars — three instances of the same pattern now.)
+**⚠ Programmatic adopters:** use **`bootstrapFromEnv()`** and it loads `$SKILLSCRIPT_HOME/connectors.json` (plus `.env` + `SKILLSCRIPT_*`) for you, exactly like the CLI. Only **raw `bootstrap()`** skips them — it reads `connectors.json` solely when you pass `connectorsConfigPath`, and skipping it makes `$ name.tool` calls fail at runtime with `unknown-connector` and no hint that the file simply wasn't read. See §"Programmatic bootstrap path" below — `bootstrapFromEnv()` is the recommended default; the raw-`bootstrap()` explicit-wiring pattern is for hand-assembled custom substrates.
 
 ### Picking — the tradeoff
 
@@ -481,9 +481,42 @@ skillfile shell-audit
 
 Paste into your `$SKILLSCRIPT_HOME/.env` (review/narrow as desired). The audit is the canonical path — running it lets you make explicit policy decisions instead of discovering refusals through runtime errors.
 
-### Programmatic bootstrap path (`bootstrap()` adopters)
+### Programmatic bootstrap path
 
-**The CLI-auto-vs-programmatic-explicit asymmetry.** The CLI (`skillfile dashboard` / `serve`) does several discovery steps automatically — load `$SKILLSCRIPT_HOME/.env`, read `SKILLSCRIPT_*` env vars, load `$SKILLSCRIPT_HOME/connectors.json`. The programmatic path (`bootstrap()` from your own embedder code) does NOT do any of these automatically. Each surface needs explicit wiring on the programmatic path:
+**Most adopters operate via the web dashboard** after a one-time `skillfile init`. To stand that dashboard up from your own code, use **`bootstrapFromEnv()`** — the blessed entry point that wires a full runtime + `DashboardServer` from `$SKILLSCRIPT_HOME` *exactly the way the CLI does*: it loads `.env`, `skillscript.config.json`, and `connectors.json`, resolves the whole `SKILLSCRIPT_*` env cascade, calls `bootstrap()`, wires declarative triggers, and assembles the server.
+
+```typescript
+import { bootstrapFromEnv } from "skillscript-runtime";
+
+const { wired, server } = await bootstrapFromEnv({ mode: "dashboard" /* or "serve" */ });
+wired.scheduler.start();
+await server.start();
+// On shutdown, reap stdio-bridged connector children (RemoteMcpConnector):
+process.on("SIGTERM", async () => {
+  await wired.scheduler.stop();
+  await server.stop();
+  await wired.registry.disposeAll();
+});
+```
+
+Both are returned **unstarted** — you decide when to `start()`. Options: `mode`, `home` (default `$SKILLSCRIPT_HOME`), `configPath`, `connectorsConfigPath`, `port`, `host`, and `overrides`. **Precedence**: explicit option > `overrides` (passed to `bootstrap()`, wins last) > `SKILLSCRIPT_*` env > `skillscript.config.json` > default.
+
+To wire your **own custom substrate** (e.g. a remote `SkillStore`), two paths:
+- **Declarative** — if it's expressible in `connectors.json` via the `{ "type": "custom", "module": "./my-store.js", "export": "MyStore" }` substrate form, just declare it; `bootstrapFromEnv()` honors `substrate.*` like the CLI.
+- **Instance injection** — pass a pre-built instance through `overrides`, the common path for a store that needs constructor wiring you hold in code:
+  ```typescript
+  const { wired, server } = await bootstrapFromEnv({
+    mode: "dashboard",
+    overrides: { skillStore: new MyRemoteSkillStore({ /* client, auth, ... */ }) },
+  });
+  ```
+  Everything else (data store, models, connectors, env cascade) still auto-wires from `$SKILLSCRIPT_HOME`. `overrides` accepts any `bootstrap()` option (`skillStore` / `dataStore` / `localModel` / `agentConnector` / allowlists / …).
+
+This closes the silent CLI-vs-programmatic asymmetry described below; reach for raw `bootstrap()` only when you're hand-assembling a registry that neither `connectors.json` nor `overrides` can express.
+
+#### Raw `bootstrap()` — the CLI-auto-vs-programmatic-explicit asymmetry
+
+`bootstrapFromEnv()` does the discovery steps below for you. If you call **`bootstrap()` directly** instead (hand-assembling substrates), be aware the CLI (`skillfile dashboard` / `serve`) does several discovery steps automatically — load `$SKILLSCRIPT_HOME/.env`, read `SKILLSCRIPT_*` env vars, load `$SKILLSCRIPT_HOME/connectors.json` — that raw `bootstrap()` does NOT. Each surface then needs explicit wiring:
 
 | Surface | CLI path | Programmatic path |
 |---|---|---|
@@ -1103,7 +1136,9 @@ The `// ADOPTER:myorg —` prefix is greppable across merges; your future-self c
 
 ### 4. Treat `src/bootstrap.ts` as reference, not canonical
 
-The bundled `bootstrap()` is a starting point. For deployments with custom substrates, write your own bootstrap that imports the public APIs (`Registry`, the connector classes, `loadConnectorsConfig`, `loadSkillscriptConfig`, etc.). Modifying the bundled bootstrap creates churn on every upstream release.
+For the standard "wire the whole runtime + dashboard from `$SKILLSCRIPT_HOME` like the CLI does" case — which is most adopters — call **`bootstrapFromEnv()`** (see §"Programmatic bootstrap path"). It's the supported public entry point; you don't hand-assemble anything, and you swap substrates declaratively via `connectors.json`. Remember to `await wired.registry.disposeAll()` on shutdown so stdio-bridged connector children (RemoteMcpConnector) are reaped, not orphaned — `bootstrapFromEnv()` callers own teardown (the CLI does it for you).
+
+Drop to raw `bootstrap()` + `Registry` only when you're hand-assembling a substrate that `connectors.json` can't express — import the public APIs (`Registry`, the connector classes, `loadConnectorsConfig`, `loadSkillscriptConfig`, etc.) rather than modifying the bundled bootstrap, which churns on every upstream release.
 
 See `examples/custom-bootstrap.example.ts` for a worked walkthrough.
 

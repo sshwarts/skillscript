@@ -77,14 +77,18 @@ describe("v0.4.3 — bootstrap default connectorsConfigPath path resolution", ()
   });
 });
 
-describe("v0.4.3 — CLI source verifies connectorsConfigPath wiring", () => {
-  it("cmdRuntimeHost passes connectorsConfigPath to bootstrap", () => {
-    // Source-level check: the CLI source includes the connectorsConfigPath
-    // wire-up. Guards against silent regression of the v0.4.3 fix.
-    const src = readFileSync(join(REPO_ROOT, "src", "cli.ts"), "utf8");
-    // The CLI builds the path via extractFlag (or HOME_DIR fallback) then
-    // passes it to bootstrap() via the shorthand `connectorsConfigPath,`.
-    expect(src).toMatch(/const connectorsConfigPath = extractFlag\(args, "--connectors"\)/);
+describe("v0.4.3 — connectorsConfigPath wiring (v0.23.x: moved into bootstrapFromEnv)", () => {
+  it("bootstrapFromEnv resolves connectorsConfigPath + passes it to bootstrap", () => {
+    // The env-cascade + bootstrap assembly moved out of cmdRuntimeHost into the
+    // reusable bootstrapFromEnv(); the connectors.json wire-up lives there now.
+    const src = readFileSync(join(REPO_ROOT, "src", "bootstrap-from-env.ts"), "utf8");
+    expect(src).toMatch(/connectorsConfigPath = opts\.connectorsConfigPath \?\? fileConfig\.connectorsConfigPath \?\? join\(home, "connectors\.json"\)/);
     expect(src).toMatch(/bootstrap\(\{[\s\S]*?connectorsConfigPath,/);
+  });
+
+  it("the CLI passes the --connectors flag through to bootstrapFromEnv", () => {
+    const src = readFileSync(join(REPO_ROOT, "src", "cli.ts"), "utf8");
+    expect(src).toMatch(/bootstrapFromEnv\(/);
+    expect(src).toMatch(/connectorsConfigPath: extractFlag\(args, "--connectors"\)/);
   });
 });

@@ -31,6 +31,7 @@ import { FilesystemTraceStore } from "./trace.js";
 import { healthMetrics } from "./metrics.js";
 import { DashboardServer } from "./dashboard/server.js";
 import { bootstrap, defaultRegistry, wireDeclarativeTriggers, ensureApprovalKeys, defaultApprovalKeyFile, defaultApprovalPublicKeyFile } from "./bootstrap.js";
+import { bootstrapFromEnv } from "./bootstrap-from-env.js";
 import { loadSkillscriptConfig } from "./runtime-config.js";
 import { loadEnvFile } from "./dotenv-loader.js";
 import { createHash } from "node:crypto";
@@ -954,32 +955,6 @@ async function cmdReapprove(args: string[]): Promise<number> {
   return fail === 0 ? 0 : 1;
 }
 
-// v0.20.1 — secured-mode startup nudge. Scans the store for skills that are
-// Approved but fail the gate (no/legacy/invalid signature) and warns once at
-// boot, pointing at `skillfile reapprove`. Best-effort: never blocks startup.
-async function warnStaleApprovals(skillStore: SkillStore): Promise<void> {
-  if (!isSecuredMode()) return;
-  try {
-    const approved = await skillStore.query({ status: "Approved" });
-    const stale: string[] = [];
-    for (const m of approved) {
-      const loaded = await skillStore.load(m.name);
-      if (!evaluateApprovalGate(loaded.source).ok) stale.push(m.name);
-    }
-    if (stale.length === 0) return;
-    const shown = stale.slice(0, 5).join(", ");
-    const more = stale.length > 5 ? `, +${stale.length - 5} more` : "";
-    process.stderr.write(
-      `\n⚠  Secured mode: ${stale.length} stored skill${stale.length === 1 ? "" : "s"} ` +
-      `${stale.length === 1 ? "is" : "are"} Approved but carry no valid signature — ` +
-      `they will be REFUSED until re-approved.\n` +
-      `   Re-bless the set:  skillfile reapprove --apply\n` +
-      `   (${shown}${more})\n\n`,
-    );
-  } catch {
-    /* best-effort — a scan failure must never block the runtime starting */
-  }
-}
 
 // ─── Helpers ──────────────────────────────────────────────────────────────
 
@@ -1133,143 +1108,23 @@ async function copyScaffoldFile(src: string, dest: string): Promise<void> {
 }
 
 async function cmdRuntimeHost(args: string[], opts: { mode: "serve" | "dashboard" }): Promise<number> {
-  // v0.7.3 — load skillscript.config.json if present. CLI flags override
-  // config-file values; config-file values override defaults.
-  const configPath = extractFlag(args, "--config") ?? join(HOME_DIR, "skillscript.config.json");
-  const { config: fileConfig, errors: configErrors } = loadSkillscriptConfig({ path: configPath });
-  for (const err of configErrors) process.stderr.write(`[cli] ${err}\n`);
-  // v0.17.4 — env-cascade for operator-config switches. Precedence:
-  // CLI flag (most specific, per-invocation) > env var (per-process,
-  // drop in `.env`) > JSON config (per-deployment) > built-in default.
-  // This mirrors the standard layered-config pattern adopters expect
-  // from any well-behaved Node service.
-  const portStr = extractFlag(args, "--port") ?? process.env["SKILLSCRIPT_PORT"];
-  const port = portStr !== undefined ? parseInt(portStr, 10) : fileConfig.dashboard?.port ?? 7878;
-  // --host is the bind address inside the running process. 127.0.0.1 is
-  // the safe default for local invocation; container deployments pass
-  // --host 0.0.0.0 so the host-side port-forward can reach the listener
-  // (host port mapping still enforces 127.0.0.1 externally).
-  const host = extractFlag(args, "--host") ?? process.env["SKILLSCRIPT_HOST"] ?? fileConfig.dashboard?.host ?? "127.0.0.1";
-  // v0.17.4 — env cascade for the v0.17.0 inbound caller-identity header.
-  // Operator-config surface; env-natural for installer workflows.
-  const mcpCallerIdentityHeader = process.env["SKILLSCRIPT_MCP_CALLER_IDENTITY_HEADER"] ?? fileConfig.dashboard?.mcpCallerIdentityHeader;
-  // v0.17.4 — env cascade for the unsafe-shell posture switch.
-  // Security-relevant; env-natural so operators can flip without
-  // editing JSON.
-  const envUnsafeShell = process.env["SKILLSCRIPT_ENABLE_UNSAFE_SHELL"];
-  const enableUnsafeShell = envUnsafeShell !== undefined
-    ? envUnsafeShell === "true"
-    : fileConfig.enableUnsafeShell;
-  const triggersFilePath = fileConfig.triggersFilePath ?? join(HOME_DIR, "triggers.json");
-  // v0.4.3 — auto-discover connectors.json from HOME_DIR. Closes the
-  // last-mile gap of the v0.4.x arc: pre-v0.4.3 the loader + lint +
-  // runtime + allowlist all worked, but the canonical CLI entry point
-  // didn't read connectors.json. --connectors <path> overrides the
-  // default for non-standard layouts. Loader is graceful on missing.
-  const connectorsConfigPath = extractFlag(args, "--connectors") ?? fileConfig.connectorsConfigPath ?? join(HOME_DIR, "connectors.json");
-  // v0.17.4 — forceAlwaysDraft cascade: env var > config file > default
-  // false. SKILLSCRIPT_FORCE_ALWAYS_DRAFT=true forces every outside-MCP
-  // skill_write to land Draft regardless of body declaration. Closes
-  // the agent-self-approval path for adopters wanting a human approval
-  // gate. Drop a `.env` with the value, restart — done.
-  const envForceAlwaysDraft = process.env["SKILLSCRIPT_FORCE_ALWAYS_DRAFT"];
-  const forceAlwaysDraft = envForceAlwaysDraft !== undefined
-    ? envForceAlwaysDraft === "true"
-    : fileConfig.forceAlwaysDraft;
-  // v0.18.7 — env cascade for three previously-hidden operator knobs.
-  // Each follows the same cascade shape: env > config > default. Parsing
-  // errors (non-numeric / non-positive) are silently ignored — the
-  // config-layer schema parser is the authoritative validator for these
-  // fields, and env values failing here fall through to config/default.
-  const envPollSecondsRaw = process.env["SKILLSCRIPT_POLL_INTERVAL_SECONDS"];
-  const envPollSeconds = envPollSecondsRaw !== undefined ? Number(envPollSecondsRaw) : undefined;
-  const pollIntervalSeconds = envPollSeconds !== undefined && Number.isFinite(envPollSeconds) && envPollSeconds > 0
-    ? envPollSeconds
-    : fileConfig.pollIntervalSeconds;
-  const envAbsoluteTimeoutRaw = process.env["SKILLSCRIPT_ABSOLUTE_TIMEOUT_MS"];
-  const envAbsoluteTimeout = envAbsoluteTimeoutRaw !== undefined ? Number(envAbsoluteTimeoutRaw) : undefined;
-  const absoluteTimeoutMs = envAbsoluteTimeout !== undefined && Number.isInteger(envAbsoluteTimeout) && envAbsoluteTimeout > 0
-    ? envAbsoluteTimeout
-    : fileConfig.absoluteTimeoutMs;
-  const envMaxRecursionRaw = process.env["SKILLSCRIPT_MAX_RECURSION_DEPTH"];
-  const envMaxRecursion = envMaxRecursionRaw !== undefined ? Number(envMaxRecursionRaw) : undefined;
-  const maxRecursionDepth = envMaxRecursion !== undefined && Number.isInteger(envMaxRecursion) && envMaxRecursion >= 1
-    ? envMaxRecursion
-    : fileConfig.maxRecursionDepth;
-  // v0.18.8 — shell binary allowlist. Comma-separated env value, trimmed.
-  // Default-deny: when neither env nor config is set, leave undefined →
-  // runtime refuses ALL shell() ops. Empty env string is an explicit
-  // empty list (also refuses all) — distinct from undefined for
-  // observability (operator can declare "no shell at all" intentionally).
-  const envShellAllowlistRaw = process.env["SKILLSCRIPT_SHELL_ALLOWLIST"];
-  const shellAllowlist = envShellAllowlistRaw !== undefined
-    ? envShellAllowlistRaw.split(",").map((b) => b.trim()).filter((b) => b.length > 0)
-    : fileConfig.shellAllowlist;
-  // v1.0 Gate #7 — filesystem path allowlist (env > config.json), same shape as
-  // SKILLSCRIPT_SHELL_ALLOWLIST. Default-deny when unset.
-  const envFsAllowlistRaw = process.env["SKILLSCRIPT_FS_ALLOWLIST"];
-  const fsAllowlist = envFsAllowlistRaw !== undefined
-    ? envFsAllowlistRaw.split(",").map((p) => p.trim()).filter((p) => p.length > 0)
-    : fileConfig.fsAllowlist;
-  // v0.19.0 — event ingress (memory `ceaf4579`). Two env knobs:
-  //   - SKILLSCRIPT_EVENT_INGRESS_ENABLED=true  (opt-in; default off)
-  //   - SKILLSCRIPT_EVENT_INGRESS_AUTH_TOKEN=… (optional bearer-token;
-  //     when set, every POST /event requires Authorization: Bearer <token>)
-  const envEventIngressEnabled = process.env["SKILLSCRIPT_EVENT_INGRESS_ENABLED"];
-  const eventIngressEnabled = envEventIngressEnabled !== undefined
-    ? envEventIngressEnabled === "true"
-    : false;
-  const eventIngressAuthToken = process.env["SKILLSCRIPT_EVENT_INGRESS_AUTH_TOKEN"];
-  const wired = bootstrap({
-    skillsDir: fileConfig.skillsDir ?? SKILLS_DIR,
-    traceDir: fileConfig.traceDir ?? TRACE_DIR,
-    dataDbPath: fileConfig.dataDbPath ?? DATA_DB,
-    triggersFilePath,
-    connectorsConfigPath,
+  // v0.23.x — the env-cascade + bootstrap + DashboardServer assembly lives in
+  // the reusable `bootstrapFromEnv()` (so programmatic adopters wire it
+  // identically). The CLI is a thin wrapper: CLI flags become explicit
+  // overrides (highest precedence), then start + handle shutdown.
+  const portFlag = extractFlag(args, "--port");
+  const { wired, server } = await bootstrapFromEnv({
     mode: opts.mode,
-    ...(pollIntervalSeconds !== undefined ? { pollIntervalSeconds } : {}),
-    ...(absoluteTimeoutMs !== undefined ? { absoluteTimeoutMs } : {}),
-    ...(maxRecursionDepth !== undefined ? { maxRecursionDepth } : {}),
-    ...(shellAllowlist !== undefined ? { shellAllowlist } : {}),
-    ...(fsAllowlist !== undefined ? { fsAllowlist } : {}),
-    ...(enableUnsafeShell !== undefined ? { enableUnsafeShell } : {}),
-    ...(forceAlwaysDraft === true ? { forceAlwaysDraft: true } : {}),
-    // Scheduler-fired skills record traces by default; `fires` / `health` /
-    // `health_metrics` (MCP) all read from the trace store.
-    trace: { mode: "on" },
+    home: HOME_DIR,
+    ...(extractFlag(args, "--config") !== undefined ? { configPath: extractFlag(args, "--config")! } : {}),
+    ...(extractFlag(args, "--connectors") !== undefined ? { connectorsConfigPath: extractFlag(args, "--connectors")! } : {}),
+    ...(portFlag !== undefined ? { port: parseInt(portFlag, 10) } : {}),
+    ...(extractFlag(args, "--host") !== undefined ? { host: extractFlag(args, "--host")! } : {}),
   });
-  // Register declarative `# Triggers:` headers BEFORE arming the tick loop
-  // so the first tick can fire any minute-aligned cron entries.
-  await wireDeclarativeTriggers(wired);
-  // v0.20.1 — when secured mode is armed, loudly flag any stored skill that's
-  // Approved-but-unsigned (e.g. a pre-secured v1 corpus) so the operator runs
-  // `reapprove` instead of discovering refusals skill-by-skill at runtime.
-  await warnStaleApprovals(wired.skillStore);
   wired.scheduler.start();
-  // v0.2.7: dashboard mounts the SPA; serve runs headless on /rpc only.
-  const server = new DashboardServer({
-    mcpServer: wired.mcpServer,
-    port,
-    bindAddress: host,
-    mountSpa: opts.mode === "dashboard",
-    ...(mcpCallerIdentityHeader !== undefined ? { mcpCallerIdentityHeader } : {}),
-    // v0.19.0 — event ingress, off-by-default, scheduler reference required
-    eventIngressEnabled,
-    ...(eventIngressAuthToken !== undefined ? { eventIngressAuthToken } : {}),
-    // Scheduler is passed unconditionally: the /event route is gated on
-    // eventIngressEnabled, but the dashboard /approve route also needs the
-    // scheduler to re-register a skill's declarative triggers on approval
-    // (without it, dashboard-approved cron/event skills don't fire / don't
-    // show in the Triggers view).
-    scheduler: wired.scheduler,
-    // v0.20.2 — in-browser approval (passcode session-unlock). Mounts /unlock +
-    // /approve only when SKILLSCRIPT_APPROVAL_PASSCODE is set + secured + keyed.
-    skillStore: wired.skillStore,
-    approvalKeyFile: process.env["SKILLSCRIPT_APPROVAL_KEY_FILE"] ?? defaultApprovalKeyFile(),
-  });
   await server.start();
   const label = opts.mode === "dashboard" ? "dashboard" : "serve (headless)";
-  process.stdout.write(`skillfile ${label} running on http://${host}:${port}\nctrl-C to stop\n`);
+  process.stdout.write(`skillfile ${label} running on http://${server.boundAddress()}:${server.boundPort()}\nctrl-C to stop\n`);
   await new Promise<void>((resolve) => {
     let shuttingDown = false;
     const shutdown = (): void => {
@@ -1278,6 +1133,9 @@ async function cmdRuntimeHost(args: string[], opts: { mode: "serve" | "dashboard
       void (async (): Promise<void> => {
         await wired.scheduler.stop();
         await server.stop();
+        // Reap connector child processes (stdio-bridged MCP servers) so they
+        // don't orphan to a dead parent across restarts.
+        await wired.registry.disposeAll();
         resolve();
       })();
     };
@@ -1287,6 +1145,8 @@ async function cmdRuntimeHost(args: string[], opts: { mode: "serve" | "dashboard
   return 0;
 }
 
+// Retired: the body below is superseded by bootstrapFromEnv(); kept only as a
+// marker so the diff is legible. Removed in the edit that follows.
 async function cmdFires(args: string[]): Promise<number> {
   const skill = args.find((a) => !a.startsWith("--"));
   if (skill === undefined) {

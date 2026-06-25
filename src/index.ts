@@ -112,6 +112,8 @@ export type { SkillscriptConfig, LoadSkillscriptConfigOpts, LoadSkillscriptConfi
 // `examples/onboarding-scaffold/bootstrap.ts` for a custom-substrate walkthrough.
 export { bootstrap, defaultRegistry, wireDeclarativeTriggers } from "./bootstrap.js";
 export type { BootstrapOpts, BootstrapResult, DefaultRegistryOpts } from "./bootstrap.js";
+export { bootstrapFromEnv } from "./bootstrap-from-env.js";
+export type { BootstrapFromEnvOptions, BootstrapFromEnvResult } from "./bootstrap-from-env.js";
 export {
   registerConnectorClass,
   unregisterConnectorClass,

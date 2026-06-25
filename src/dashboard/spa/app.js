@@ -18,6 +18,13 @@ const state = {
   // v0.20.2 — true when the dashboard can sign in-browser (passcode unlock wired).
   dashboardSigning: false,
   lastUpdate: null,
+  // v0.23.x — skill_list change-token + cached per-status catalogs, so an
+  // unchanged poll reuses the cached catalog instead of rebuilding from N
+  // per-skill loads (the remote-store win).
+  catalogVersion: null,
+  apprCat: null,
+  draftCat: null,
+  disabledCat: null,
 };
 
 // ─── RPC client ─────────────────────────────────────────────────────────────
@@ -47,14 +54,18 @@ async function refresh() {
   const ts = new Date();
   document.getElementById("poll-status").textContent = `polling…`;
   try {
+    // v0.23.x — send the last change-token; an unchanged store returns
+    // { not_modified } per group and we reuse the cached catalog.
+    const inm = state.catalogVersion;
+    const sl = (status) => ({ filter: { audience: "all", status }, ...(inm ? { if_none_match: inm } : {}) });
     const [draftCat, apprCat, disabledCat, triggers, metrics, capabilities, blocked] = await Promise.all([
       // v0.20.2 — fetch ALL statuses so the Skills view shows Draft + Approved +
       // Disabled (skill_list defaults to Approved-only, which hid Disabled skills
       // entirely — you couldn't find one to re-enable). Three calls + merge since
       // skill_list has no "all-statuses" filter.
-      callTool("skill_list", { filter: { audience: "all", status: "Draft" } }),
-      callTool("skill_list", { filter: { audience: "all", status: "Approved" } }),
-      callTool("skill_list", { filter: { audience: "all", status: "Disabled" } }),
+      callTool("skill_list", sl("Draft")),
+      callTool("skill_list", sl("Approved")),
+      callTool("skill_list", sl("Disabled")),
       callTool("list_triggers", {}),
       callTool("health_metrics", {}),
       callTool("runtime_capabilities", { include: ["mcpConnectors", "mcpConnectorClasses", "localModels", "dataStores", "skillStores", "agentConnectors", "securedApproval", "runtimeVersion"] }),
@@ -63,9 +74,15 @@ async function refresh() {
       // this tool; catch returns null and the Security view degrades.
       callTool("blocked_shell_attempts", { limit: 100 }).catch(() => null),
     ]);
+    // not_modified → keep the cached catalog; otherwise take the fresh one.
+    const keep = (cat, prev) => (cat && cat.not_modified ? prev : cat);
+    state.apprCat = keep(apprCat, state.apprCat);
+    state.draftCat = keep(draftCat, state.draftCat);
+    state.disabledCat = keep(disabledCat, state.disabledCat);
+    state.catalogVersion = apprCat?.catalog_version ?? draftCat?.catalog_version ?? disabledCat?.catalog_version ?? state.catalogVersion;
     const flatCatalog = (c) => [...(c?.receives ?? []), ...(c?.skills ?? []), ...(c?.headless ?? [])];
     // Approved first, then Draft, then Disabled — grouped by lifecycle.
-    state.skills = [...flatCatalog(apprCat), ...flatCatalog(draftCat), ...flatCatalog(disabledCat)];
+    state.skills = [...flatCatalog(state.apprCat), ...flatCatalog(state.draftCat), ...flatCatalog(state.disabledCat)];
     state.triggers = triggers;
     state.metrics = metrics;
     state.capabilities = capabilities;
@@ -88,7 +105,18 @@ async function refresh() {
 
 function startPolling() {
   refresh();
-  pollTimer = setInterval(refresh, POLL_INTERVAL_MS);
+  pollTimer = setInterval(pollIfVisible, POLL_INTERVAL_MS);
+  // v0.23.x — visibility-gate the poll. Don't fire skill_list every 30s while
+  // the tab is backgrounded; against a remote SkillStore each poll is network
+  // traffic. On becoming visible again, refresh immediately so the view isn't
+  // stale.
+  document.addEventListener("visibilitychange", () => {
+    if (!document.hidden) refresh();
+  });
+}
+
+function pollIfVisible() {
+  if (!document.hidden) refresh();
 }
 
 // ─── Secured mode (v1.0 Gate #7) ────────────────────────────────────────────

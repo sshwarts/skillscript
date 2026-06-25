@@ -1,13 +1,23 @@
 // Worked example: writing a custom bootstrap that wires adopter-specific
 // substrates against skillscript-runtime's public APIs.
 //
-// **When to write your own bootstrap.** The bundled `bootstrap()` from
-// `skillscript-runtime` wires `FilesystemSkillStore` + `OllamaLocalModel` +
-// `SqliteDataStore` + the typed-contract bridges. If your deployment uses
-// different substrates (your own data store, a hosted LLM API, an MCP
-// server for agent delivery, etc.), write your own bootstrap rather than
-// modifying the bundled one. Prevents merge conflicts on every upstream
-// release that touches `src/bootstrap.ts`.
+// **First: do you even need this?** For the common case — wire the whole
+// runtime + dashboard from `$SKILLSCRIPT_HOME` exactly like the CLI does —
+// call `bootstrapFromEnv()` instead (it loads `.env` + `skillscript.config.json`
+// + `connectors.json`, resolves the SKILLSCRIPT_* env cascade, and returns
+// `{ wired, server }` unstarted). You can swap substrates declaratively via
+// `connectors.json` (`substrate.skill_store: "sqlite"`, a custom class, etc.)
+// without writing any of the assembly below. See docs/adopter-playbook.md
+// §"Programmatic bootstrap path".
+//
+// **When to write your own bootstrap (this file).** Reach for raw `bootstrap()`
+// + `Registry` only when hand-assembling a substrate `connectors.json` can't
+// express. The bundled `bootstrap()` from `skillscript-runtime` wires
+// `FilesystemSkillStore` + `OllamaLocalModel` + `SqliteDataStore` + the typed-
+// contract bridges. If your deployment uses different substrates (your own data
+// store, a hosted LLM API, an MCP server for agent delivery, etc.), assemble
+// your own here rather than modifying the bundled one. Prevents merge conflicts
+// on every upstream release that touches `src/bootstrap.ts`.
 //
 // **What to copy from this file.** Take what fits your deployment and
 // drop the rest. The shape is: construct a Registry, register your

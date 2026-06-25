@@ -326,6 +326,30 @@ export class FilesystemSkillStore implements SkillStore {
     }
   }
 
+  async version(): Promise<string> {
+    // v0.23.x — cheap change-token: hash over each skill file's (name, mtime).
+    // No body reads. Any add/remove moves the file set; any edit OR status
+    // change rewrites the file → mtime moves → token moves. Sufficient + cheap.
+    let entries: string[];
+    try {
+      entries = await readdir(this.rootDir);
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === "ENOENT") return "empty";
+      throw err;
+    }
+    const parts: string[] = [];
+    for (const entry of entries.sort()) {
+      if (!entry.endsWith(".skill.md")) continue;
+      try {
+        const s = await stat(join(this.rootDir, entry));
+        parts.push(`${entry}:${Math.floor(s.mtimeMs)}`);
+      } catch {
+        // Raced away between readdir + stat — skip; the next poll reconciles.
+      }
+    }
+    return createHash("sha256").update(parts.join("\n"), "utf8").digest("hex").slice(0, 16);
+  }
+
   async delete(name: string): Promise<void> {
     // Destructive — unlink the skill file and its version sidecar. There is no
     // trash and no restore: the dashboard/CLI delete flow gates this behind an

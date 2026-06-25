@@ -228,6 +228,27 @@ export class Registry {
   }
   listAgentConnectors(): Array<{ name: string; instance: AgentConnector; ctor: AgentConnectorClass }> { return entries(this.agentConnectors); }
 
+  /**
+   * v0.23.x — best-effort teardown of connectors that hold external resources
+   * (stdio child processes, network sessions). Called on runtime shutdown so a
+   * stdio-bridged connector child (e.g. RemoteMcpConnector's spawned MCP server)
+   * is reaped rather than orphaned to a dead parent. Duck-typed: any mcp/agent
+   * connector exposing `dispose()` is disposed; errors are swallowed (teardown
+   * must never throw). Stores are in-process (no orphanable child) and excluded.
+   */
+  async disposeAll(): Promise<void> {
+    const instances: unknown[] = [
+      ...this.listMcpConnectors().map((e) => e.instance),
+      ...this.listAgentConnectors().map((e) => e.instance),
+    ];
+    await Promise.all(instances.map(async (inst) => {
+      const d = inst as { dispose?: () => Promise<void> | void };
+      if (typeof d.dispose === "function") {
+        try { await d.dispose(); } catch { /* best-effort teardown */ }
+      }
+    }));
+  }
+
   // ─── Aggregate view for the linter ──────────────────────────────────────
 
   /**

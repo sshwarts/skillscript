@@ -304,11 +304,27 @@ export class McpServer {
             },
             additionalProperties: false,
           },
+          if_none_match: { type: "string", description: "Change-token from a prior response's `catalog_version`. If the store's current token matches, the response is `{ not_modified: true, catalog_version }` and the catalog rebuild is skipped — a cheap unchanged-poll path for remote stores." },
         },
       },
       handler: async (args) => {
         const filter = (args["filter"] as SkillListFilter | undefined) ?? {};
-        return buildSkillCatalog(this.deps.skillStore, filter);
+        // v0.23.x — change-token / ETag. If the store can cheaply fingerprint
+        // its state (optional version()) and the caller's if_none_match still
+        // matches, skip the N+1 catalog rebuild entirely (each entry otherwise
+        // costs a load() — a network call against a remote store). Stores
+        // without version() always rebuild (today's behavior).
+        const store = this.deps.skillStore as SkillStore & { version?: () => Promise<string> };
+        const ifNoneMatch = typeof args["if_none_match"] === "string" ? args["if_none_match"] : undefined;
+        let catalogVersion: string | undefined;
+        if (typeof store.version === "function") {
+          try { catalogVersion = await store.version(); } catch { catalogVersion = undefined; }
+        }
+        if (catalogVersion !== undefined && ifNoneMatch === catalogVersion) {
+          return { not_modified: true, catalog_version: catalogVersion };
+        }
+        const catalog = await buildSkillCatalog(this.deps.skillStore, filter);
+        return catalogVersion !== undefined ? { ...catalog, catalog_version: catalogVersion } : catalog;
       },
     });
 

@@ -8,6 +8,7 @@
  */
 import { describe, it, expect } from "vitest";
 import { RemoteMcpConnector } from "../src/connectors/mcp-remote.js";
+import { Registry } from "../src/connectors/registry.js";
 
 // A minimal newline-framed stdio MCP server. `echo` returns its args; `die`
 // exits the process with code 143 (the SIGTERM exit the adopter saw).
@@ -67,5 +68,16 @@ describe("v0.23.1 — RemoteMcpConnector respawn-on-child-death", () => {
     } finally {
       await conn.dispose();
     }
+  });
+
+  // #3b — registry.disposeAll() reaps connector children on shutdown.
+  it("Registry.disposeAll() disposes a wired RemoteMcpConnector (reaps the child)", async () => {
+    const registry = new Registry();
+    const conn = mk();
+    registry.registerMcpConnector("mini", conn);
+    expect(textOf(await conn.call("echo", { msg: "x" }))).toEqual({ msg: "x" }); // spawns the child
+    await registry.disposeAll();
+    // Post-dispose dispatch must throw — proves dispose() ran (child killed + disposed flag set).
+    await expect(conn.call("echo", { msg: "y" })).rejects.toThrow(/disposed/);
   });
 });

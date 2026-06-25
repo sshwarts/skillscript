@@ -222,4 +222,23 @@ export class SkillStoreTemplate implements SkillStore {
     //   - Return VersionInfo with previous_status populated
     throw new Error("TODO: update_status() — atomic status transition + audit row.");
   }
+
+  // OPTIONAL (v0.24.0) — implement this on a NETWORK-BACKED store. It returns a
+  // cheap store-wide change-token computed WITHOUT loading skill bodies. The MCP
+  // `skill_list` tool returns it as `catalog_version` and honors a caller's
+  // `if_none_match`: when the token is unchanged it replies `{ not_modified: true }`
+  // and skips the catalog rebuild — which otherwise loads EVERY skill body (one
+  // network round-trip per skill) to parse its effectful footprint. For a remote
+  // store this is the difference between a chatty poll and a single cheap probe.
+  //
+  // Fingerprint whatever your substrate exposes cheaply (a list ETag, a
+  // max-revision/seq, or a metadata digest), as long as ANY add/remove/edit/
+  // status-change moves the token. DELETE this method if you can't compute one
+  // cheaply — it's optional, and `skill_list` just always rebuilds without it.
+  async version(): Promise<string> {
+    // TODO — e.g. a single metadata-only list:
+    //   const rows = await this.api.list({ fields: ["id", "status", "rev"] }); // NO bodies
+    //   return sha256(rows.map(r => `${r.id}:${r.status}:${r.rev}`).join("\n")).slice(0, 16);
+    throw new Error("TODO: version() — optional cheap change-token (no body loads). Delete if unsupported.");
+  }
 }
