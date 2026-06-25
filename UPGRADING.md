@@ -95,7 +95,15 @@ Current shape:
   sources (`session` / `webhook` / `file-watch` / `sensor`) fail to parse — rewrite
   those `# Triggers:` as `cron`, or drive them by `POST /event`.
 
-## 6. Going forward
+## 6. Migrating a programmatic bootstrap to `bootstrapFromEnv()` (0.24.0, optional)
+
+0.24.0 adds `bootstrapFromEnv()` — the programmatic equivalent of `skillfile dashboard`/`serve` (loads `.env` + `connectors.json` + the `SKILLSCRIPT_*` cascade, returns `{ wired, server }`). Adopting it is optional; existing hand-assembled `bootstrap()` code keeps working. **If you do migrate**, move any options you hardcoded on `bootstrap()` / `new DashboardServer({...})` to their `SKILLSCRIPT_*` env equivalents — `bootstrapFromEnv()` resolves them from env, so a dropped value reverts to default. The one that bites:
+
+- **`mcpCallerIdentityHeader` → `SKILLSCRIPT_MCP_CALLER_IDENTITY_HEADER`** fails **silently** — drop it and skill-author attribution reverts to the store's default writer identity, no error. (`enableUnsafeShell` → `SKILLSCRIPT_ENABLE_UNSAFE_SHELL` fails loud — unsafe ops just refuse.)
+
+After migrating, verify: send your identity header on a `/rpc` `skill_write` and confirm the captured `author`. (`bootstrap()`-level opts can also go via `bootstrapFromEnv`'s `overrides`; `DashboardServer`-level ones are env-only.)
+
+## 7. Going forward
 
 Every CHANGELOG entry carries an **Upgrade impact:** line — `BREAKING` / `RE-APPROVE` /
 `CONFIG` / `none (additive)`. Scan it before you bump. Making a specific jump and not
