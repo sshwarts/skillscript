@@ -499,3 +499,63 @@ default: t
     expect(result.output).toMatch(/Hello/);
   });
 });
+
+describe("v0.25.3 — dogfound lint follow-ups (thread 6655eac4)", () => {
+  it("undeclared-var now scans ${VAR} refs inside shell(argv=[...]) elements", async () => {
+    const src = `# Skill: t
+# Status: Draft
+t:
+    shell(argv=["curl","-H","X: \${MISSING}","https://api/x"]) -> R
+    emit(text="done")
+
+default: t
+`;
+    const r = await lint(src, { shellAllowlist: ["curl"] });
+    const f = r.findings.find((f) => f.rule === "undeclared-var");
+    expect(f).toBeDefined();
+    expect(f!.severity).toBe("error");
+  });
+
+  it("a DECLARED ${VAR} inside an argv element does not trip undeclared-var", async () => {
+    const src = `# Skill: t
+# Status: Draft
+# Vars: HOST
+t:
+    shell(argv=["curl","https://\${HOST}/x"]) -> R
+    emit(text="done")
+
+default: t
+`;
+    const r = await lint(src, { shellAllowlist: ["curl"] });
+    expect(r.findings.map((f) => f.rule)).not.toContain("undeclared-var");
+  });
+
+  it("space-separated-vars (tier-2) flags a # Vars: entry with whitespace", async () => {
+    const src = `# Skill: t
+# Status: Draft
+# Vars: ALPHA BETA GAMMA
+t:
+    emit(text="hi")
+
+default: t
+`;
+    const r = await lint(src);
+    const f = r.findings.find((f) => f.rule === "space-separated-vars");
+    expect(f).toBeDefined();
+    expect(f!.severity).toBe("warning");
+    expect(f!.message).toContain("ALPHA, BETA, GAMMA");
+  });
+
+  it("comma-separated # Vars: does not trip space-separated-vars", async () => {
+    const src = `# Skill: t
+# Status: Draft
+# Vars: ALPHA, BETA, GAMMA
+t:
+    emit(text="hi")
+
+default: t
+`;
+    const r = await lint(src);
+    expect(r.findings.map((f) => f.rule)).not.toContain("space-separated-vars");
+  });
+});

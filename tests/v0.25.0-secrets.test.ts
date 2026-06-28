@@ -386,11 +386,14 @@ describe("v0.25.0 — red-team regressions (Perry d8a5ad0a)", () => {
     expect(JSON.stringify(result)).not.toContain(SECRET_VALUE);
   });
 
-  // Edge 1 (a) — a var-smuggled UNDECLARED name reaching a sink is refused by
-  // the runtime backstop, regardless of how the marker text was assembled.
-  it("runtime refuses a var-smuggled UNDECLARED marker at the sink", async () => {
+  // Edge 1 (a), refined by author-template-only resolution (v0.25.3): a marker
+  // that is BUILT FROM DATA (var-smuggled via $set/$append, or any ${VAR} value)
+  // is data-borne — it is never masked, so it is INERT: not resolved, not errored,
+  // just literal text. (The author-marker declare-check applies only to markers
+  // literally in the op template — see the static-undeclared test below.)
+  it("a var-smuggled / data-borne marker is inert at the sink (never resolved)", async () => {
     const src = [
-      "# Skill: smuggle-undeclared",
+      "# Skill: smuggle-inert",
       "# Status: Draft",
       "",
       "default: run",
@@ -407,9 +410,64 @@ describe("v0.25.0 — red-team regressions (Perry d8a5ad0a)", () => {
       shellAllowlist: ["printf"],
       secretProvider: new EnvSecretProvider({ SKILLSCRIPT_SECRET_FLAG: SECRET_VALUE }),
     });
-    expect(result.errors.length).toBeGreaterThan(0);
-    expect(JSON.stringify(result.errors)).toContain("not declared");
+    expect(result.errors).toEqual([]); // inert: no resolution attempted, no error
+    expect(JSON.stringify(result)).not.toContain(SECRET_VALUE); // value never resolved
+    expect(result.finalVars["OUT"]).toBe("{{secret.FLAG}}"); // literal marker passed through
+  });
+
+  // Sentinel-forgery: untrusted data carrying the NUL-delimited mask sentinel
+  // must NOT trigger a secret splice. substituteRuntime strips NUL from every
+  // substituted ${VAR} value, so data can never forge a sentinel.
+  it("sentinel forgery via untrusted data is neutralized (NUL stripped)", async () => {
+    const src = [
+      "# Skill: forge",
+      "# Requires: secret.FLAG",
+      "# Vars: EVIL",
+      "# Status: Draft",
+      "",
+      "default: run",
+      "run:",
+      '    shell(argv=["printf","%s","a={{secret.FLAG}};e=${EVIL}"]) -> OUT',
+      '    emit(text="${OUT}")',
+    ].join("\n");
+    const forged = String.fromCharCode(0)+"secret:0"+String.fromCharCode(0); // the index-0 sentinel an attacker would inject
+    const compiled = await compile(src, { inputs: { EVIL: forged } });
+    const result = await execute(compiled.parsed, compiled.resolvedVariables, compiled.targetOrder, {
+      registry: new Registry(),
+      effectsAuthorized: true,
+      shellAllowlist: ["printf"],
+      secretProvider: new EnvSecretProvider({ SKILLSCRIPT_SECRET_FLAG: SECRET_VALUE }),
+    });
+    const out = String(result.finalVars["OUT"]);
+    // The legit author marker resolved once; the forged sentinel did NOT.
+    expect((out.match(new RegExp(SECRET_VALUE, "g")) ?? []).length).toBe(1);
+  });
+
+  // The companion to the above: a marker LITERALLY in the op template but
+  // undeclared IS refused at mask time (author declare-before-spend) — proving
+  // the distinction is author-template vs data, not declared vs undeclared.
+  it("data-borne injection is closed: ${VAR} data containing a declared marker stays inert", async () => {
+    const src = [
+      "# Skill: databorne",
+      "# Requires: secret.FLAG", // FLAG *is* declared — the danger case
+      "# Vars: BODY",
+      "# Status: Draft",
+      "",
+      "default: run",
+      "run:",
+      '    shell(argv=["printf","%s","${BODY}"]) -> OUT',
+      '    emit(text="got=${OUT}")',
+    ].join("\n");
+    const compiled = await compile(src, { inputs: { BODY: "x {{secret.FLAG}} y" } });
+    const result = await execute(compiled.parsed, compiled.resolvedVariables, compiled.targetOrder, {
+      registry: new Registry(),
+      effectsAuthorized: true,
+      shellAllowlist: ["printf"],
+      secretProvider: new EnvSecretProvider({ SKILLSCRIPT_SECRET_FLAG: SECRET_VALUE }),
+    });
+    // Even though FLAG is declared, a marker arriving via DATA must NOT resolve.
     expect(JSON.stringify(result)).not.toContain(SECRET_VALUE);
+    expect(result.finalVars["OUT"]).toBe("x {{secret.FLAG}} y");
   });
 
   // Bug A fix #2 — runtime declare-before-spend backstop: a static UNDECLARED

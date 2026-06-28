@@ -1772,6 +1772,26 @@ const SECRET_DYNAMIC_NAME: LintRule = {
   },
 };
 
+const SPACE_SEPARATED_VARS: LintRule = {
+  id: "space-separated-vars",
+  severity: "warning",
+  description: "A `# Vars:` entry name contains whitespace — `# Vars:` is comma-separated, so a space-separated list collapses into a single malformed variable name (the rest are silently lost).",
+  remediation: "Separate variables with commas: `# Vars: A, B, C` (not `# Vars: A B C`). Defaults still use `=`: `# Vars: A=\"x\", B`.",
+  check: (ctx) => {
+    const findings: LintFinding[] = [];
+    for (const v of ctx.parsed.vars) {
+      if (/\s/.test(v.name)) {
+        findings.push({
+          rule: "space-separated-vars",
+          severity: "warning",
+          message: `\`# Vars:\` entry '${v.name}' contains whitespace — looks space-separated. \`# Vars:\` is comma-separated; only commas split declarations. Did you mean \`${v.name.trim().split(/\s+/).join(", ")}\`?`,
+        });
+      }
+    }
+    return findings;
+  },
+};
+
 const STATUS_DISABLED: LintRule = {
   id: "status-disabled",
   severity: "error",
@@ -3670,6 +3690,7 @@ const RULES: LintRule[] = [
   MISSING_SKILLSTORE_FOR_DATA_REF,
   // Tier-2 (warning)
   DEPRECATED_QUESTION,
+  SPACE_SEPARATED_VARS,
   DEPRECATED_SUBSTITUTION_SHAPE,
   UNSAFE_SHELL_AMBIGUOUS_SUBST,
   UNSAFE_SHELL_UNESCAPED_SUBST,
@@ -3805,6 +3826,11 @@ function collectOpText(op: SkillOp): string {
   let text = op.body;
   if (op.setValue !== undefined) text += " " + op.setValue;
   if (op.foreachList !== undefined) text += " " + op.foreachList;
+  // v0.25.3 (adopter finding 6655eac4) — include `shell(argv=[...])` elements so
+  // `${VAR}` refs inside an argv element are seen by the var-ref scans
+  // (undeclared-var, unknown-filter, legacy-substitution-shape). Previously argv
+  // refs escaped every check that routes through collectOpText.
+  if (op.argv !== undefined) text += " " + op.argv.join(" ");
   return text;
 }
 

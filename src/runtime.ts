@@ -34,8 +34,8 @@ import {
 import { TraceBuilder, shouldTraceFire } from "./trace.js";
 import type { TraceConfig, TraceStore } from "./trace.js";
 import { describeValueShape, isShapeWorthRecording } from "./observed-shape.js";
-import { expandSecretMarkers, expandSecretMarkersInList, hasSecretMarker, extractSecretRefs } from "./secrets.js";
-import type { SecretProvider } from "./secrets.js";
+import { maskAuthorSecrets, spliceSecrets, unmaskSecretSentinels } from "./secrets.js";
+import type { SecretProvider, MaskedSecrets } from "./secrets.js";
 
 /**
  * Runtime executor. Pure mechanical execution: walks the parsed skill
@@ -853,22 +853,19 @@ async function execOpInner(
     }
     return ctx.secretProvider;
   };
-  // Runtime declare-before-spend enforcement. A marker can be built dynamically
-  // (`{{secret.${VAR}}}` → substituteRuntime makes `{{secret.FLAG}}`), which the
-  // static lint can't see — so the runtime independently refuses any secret name
-  // not in the skill's `# Requires: secret.NAME` set. Fail-closed; keeps the
-  // approver-visible declaration an enforced contract, not just a lint hint.
-  const enforceDeclared = (text: string): void => {
+  // Runtime declare-before-spend enforcement, applied per author marker as it is
+  // masked. The runtime independently refuses any secret name not in the skill's
+  // `# Requires: secret.NAME` set — fail-closed; keeps the approver-visible
+  // declaration an enforced contract, not just a lint hint.
+  const declareCheck = (name: string): void => {
     const declared = ctx._currentSkillSecretRequires ?? [];
-    for (const name of extractSecretRefs(text)) {
-      if (!declared.includes(name)) {
-        throw new OpError(
-          `\`${op.kind}\` op references secret '${name}' which is not declared in the skill's \`# Requires:\`.`,
-          op.kind,
-          `Add \`# Requires: secret.${name}\` to the frontmatter. Secrets must be declared up-front so an approver can see which credentials the skill reaches (dynamically-named markers are refused for the same reason).`,
-          targetName,
-        );
-      }
+    if (!declared.includes(name)) {
+      throw new OpError(
+        `\`${op.kind}\` op references secret '${name}' which is not declared in the skill's \`# Requires:\`.`,
+        op.kind,
+        `Add \`# Requires: secret.${name}\` to the frontmatter. Secrets must be declared up-front so an approver can see which credentials the skill reaches (dynamically-named markers are refused for the same reason).`,
+        targetName,
+      );
     }
   };
   // Per-op set of resolved secret VALUES. Populated as markers resolve; used by
@@ -899,16 +896,17 @@ async function execOpInner(
     if (typeof withRem.remediation === "string") withRem.remediation = redactSecrets(withRem.remediation);
     return err;
   };
-  const resolveSecretsAtSink = async (text: string): Promise<string> => {
-    if (!hasSecretMarker(text)) return text;
-    enforceDeclared(text);
-    return expandSecretMarkers(text, requireSecretProvider(), { skillName: ctx._currentSkillName }, collectSecret);
-  };
-  const resolveSecretsAtSinkList = async (items: string[]): Promise<string[]> => {
-    if (!items.some(hasSecretMarker)) return items;
-    for (const item of items) enforceDeclared(item);
-    return expandSecretMarkersInList(items, requireSecretProvider(), { skillName: ctx._currentSkillName }, collectSecret);
-  };
+  // Author-template-only resolution (v0.25.3): mask author markers in a RAW op
+  // template (enforcing declare-before-spend per marker), then — after ${VAR}
+  // substitution + the binary gate — splice the resolved values in LAST. A marker
+  // that arrives via runtime data (a `${VAR}` value containing `{{secret.X}}`
+  // text) is never masked, so it can never resolve — closing the data-borne
+  // injection path. The value exists only at the splice, at the sink boundary.
+  const maskSecrets = (tpl: string): MaskedSecrets => maskAuthorSecrets(tpl, declareCheck);
+  const spliceSecretsAtSink = (text: string, names: string[]): Promise<string> =>
+    names.length === 0
+      ? Promise.resolve(text)
+      : spliceSecrets(text, names, requireSecretProvider(), { skillName: ctx._currentSkillName }, collectSecret);
   switch (op.kind) {
     case "$set": {
       // v0.5.0 item 3 — `$set X = "...$(REF)..."` now resolves $(REF) at
@@ -1028,21 +1026,21 @@ async function execOpInner(
         }
         let stdoutArgv: string;
         try {
-          // v0.18.8 binary-scope gate. argv[0] IS the binary by construction.
-          // v0.25.0 — gate the binary BEFORE resolving secrets, so a refused
-          // op never resolves the credential and never lands it in the error
-          // message (which is built from the binary token). The binary itself
-          // is never a secret.
-          const bin0 = substArgv[0];
+          // v0.25.3 — author-template-only secret resolution. Mask author
+          // markers in each RAW argv element (declare-checked), THEN substitute
+          // ${VAR}: a data-borne `{{secret.X}}` arriving via ${VAR} is never
+          // masked, so it can't resolve. The marker value stays one argv element
+          // (no re-tokenization). Gate the binary BEFORE splicing, so a refused
+          // op never resolves the credential and the error shows the binary, not
+          // a secret. Values are spliced LAST, straight into spawn.
+          const maskedArgv = op.argv.map((el) => maskSecrets(el));
+          const realArgv = maskedArgv.map((m) => substituteRuntime(m.masked, vars));
+          const bin0 = realArgv[0];
           if (!isBinaryAllowed(bin0!, ctx.shellAllowlist)) {
             throw new ShellBinaryNotAllowedError(bin0!, ctx.shellAllowlist, targetName);
           }
-          // Resolve `{{secret.NAME}}` markers per-element AFTER the gate so a
-          // secret value with spaces/quotes stays one argv element (the argv
-          // form never re-tokenizes). Use-only: spliced straight into spawn,
-          // never bound or traced.
-          const resolvedArgv = await resolveSecretsAtSinkList(substArgv);
-          const [bin, ...args] = resolvedArgv;
+          const finalArgv = await Promise.all(realArgv.map((el, i) => spliceSecretsAtSink(el, maskedArgv[i]!.names)));
+          const [bin, ...args] = finalArgv;
           stdoutArgv = await execShellCommand(bin!, args, shellTimeoutMs);
         } catch (err) {
           if (shellFallback !== undefined) {
@@ -1080,6 +1078,15 @@ async function execOpInner(
       }
       let stdout: string;
       try {
+        // v0.25.3 — author-template-only resolution. Mask author markers in the
+        // RAW op.body (declare-checked) BEFORE substitution, so a data-borne
+        // `{{secret.X}}` arriving via ${VAR} is never masked and can't resolve.
+        // Gate the binary BEFORE splicing; splice values LAST. (`body` above
+        // keeps markers literal — used for the marker-form error messages.)
+        const { masked, names } = maskSecrets(op.body);
+        const realBody = op.policy === "unsafe"
+          ? substituteRuntimeUnsafe(masked, vars)
+          : substituteRuntime(masked, vars);
         if (op.policy === "unsafe") {
           if (ctx.enableUnsafeShell !== true) {
             throw new UnsafeShellDisabledError(body, targetName);
@@ -1094,15 +1101,14 @@ async function execOpInner(
           if (!isBinaryAllowed("bash", ctx.shellAllowlist)) {
             throw new ShellBinaryNotAllowedError("bash", ctx.shellAllowlist, targetName);
           }
-          // v0.25.0 — resolve markers into the bash script. NOTE: the
-          // resolved value lands in the `bash -c <script>` argv, which is
-          // process-list visible (the documented argv/`ps` leak window);
-          // vault-era sink-aware injection closes it. Unsafe shell is
-          // already operator-gated, so a secret here is a deliberate choice.
-          const resolvedUnsafeBody = await resolveSecretsAtSink(body);
-          stdout = await execShellCommand("bash", ["-c", resolvedUnsafeBody], shellTimeoutMs);
+          // Splice the resolved value into the bash script. NOTE: it lands in
+          // the `bash -c <script>` argv, process-list visible (the documented
+          // argv/`ps` leak window; vault-era sink-aware injection closes it).
+          // Unsafe shell is operator-gated, so a secret here is deliberate.
+          const finalBody = await spliceSecretsAtSink(realBody, names);
+          stdout = await execShellCommand("bash", ["-c", finalBody], shellTimeoutMs);
         } else {
-          const tokens = tokenizeShellArgs(body);
+          const tokens = tokenizeShellArgs(realBody);
           if (tokens.length === 0) {
             throw new OpError(
               `Empty \`shell(...)\` op body in target '${targetName}'.`,
@@ -1113,18 +1119,16 @@ async function execOpInner(
           }
           // v0.18.8 — binary-scope gate. Safe-path grammar guarantees one
           // binary + no metacharacters, so the first token IS the binary.
-          // Default-deny when allowlist unset (BREAKING). v0.25.0 — gate
-          // BEFORE resolving secrets so a refused op never resolves the
-          // credential and the error message (built from the binary token)
-          // carries the marker, never the value. The binary is never a secret.
+          // Default-deny when allowlist unset (BREAKING). Gated BEFORE the
+          // secret splice, so a refused op never resolves the credential and
+          // the error (built from the binary token) carries no value.
           if (!isBinaryAllowed(tokens[0]!, ctx.shellAllowlist)) {
             throw new ShellBinaryNotAllowedError(tokens[0]!, ctx.shellAllowlist, targetName);
           }
-          // Resolve `{{secret.NAME}}` markers AFTER tokenization + gate so a
-          // secret value with spaces/quotes stays one argv element and never
-          // reaches a shell for re-splitting. Use-only.
-          const resolvedTokens = await resolveSecretsAtSinkList(tokens);
-          const [bin, ...args] = resolvedTokens;
+          // Splice markers per-token (values last) so a secret value with
+          // spaces/quotes stays one argv element and never reaches a shell.
+          const finalTokens = await Promise.all(tokens.map((t) => spliceSecretsAtSink(t, names)));
+          const [bin, ...args] = finalTokens;
           stdout = await execShellCommand(bin!, args, shellTimeoutMs);
         }
       } catch (err) {
@@ -1369,11 +1373,18 @@ async function execOpInner(
           );
         }
       }
-      const body = substituteRuntime(op.body, vars);
+      // v0.25.3 — author-template-only secret resolution. Mask author markers in
+      // the RAW op.body (declare-checked) BEFORE substitution, so a `{{secret.X}}`
+      // arriving via ${VAR} runtime data is never masked and can't resolve into a
+      // connector arg. Arg values carry opaque sentinels; the real value is
+      // spliced in just before dispatch (below). `body` is used for tool-name
+      // parsing only (the tool name never contains a marker).
+      const { masked: maskedBody, names: secretNames } = maskSecrets(op.body);
+      const body = substituteRuntime(maskedBody, vars);
       const m = /^([A-Za-z_][\w:-]*)\s*([\s\S]*)$/.exec(body);
       if (m === null) {
         throw new OpError(
-          `Malformed \`$\` op body: '${body}' — expected 'TOOL_NAME key=value ...'`,
+          `Malformed \`$\` op body: '${unmaskSecretSentinels(body, secretNames)}' — expected 'TOOL_NAME key=value ...'`,
           "$",
           "Use `$ tool_name key=value ...` syntax. See `help({topic: 'ops'})` for examples.",
           targetName,
@@ -1396,8 +1407,14 @@ async function execOpInner(
 
       // Mechanical preview, registry-routed, test escape hatch, no-dispatcher.
       if (ctx.mechanical === true) {
+        // Render the marker form (never the sentinel, never the value) in preview.
+        const previewArgs = secretNames.length === 0
+          ? args
+          : Object.fromEntries(
+              Object.entries(args).map(([k, v]) => [k, typeof v === "string" ? unmaskSecretSentinels(v, secretNames) : v]),
+            );
         emissions.push(
-          `Would call tool ${connectorLabel}${toolName} with ${JSON.stringify(args)} (mechanical: true preview).`,
+          `Would call tool ${connectorLabel}${toolName} with ${JSON.stringify(previewArgs)} (mechanical: true preview).`,
         );
         // Bind a placeholder that responds to dotted access (`$(X.field)`)
         // so cold-agent skills using `$ tool -> X` then `$(X.title)` etc.
@@ -1516,16 +1533,18 @@ async function execOpInner(
       // fallback present, ditto.
       const dollarFallback = op.fallback !== undefined ? coerceLiteralValue(op.fallback) : undefined;
       try {
-        // v0.25.0 — resolve `{{secret.NAME}}` markers in string-valued args
-        // just before the real connector dispatch (use-only). The built-in
-        // execute_skill / json_parse intercepts ran earlier and never reach
-        // here, so a secret value can't leak into a child skill's scope or a
-        // parsed/bound var — it exists only for this one dispatch call.
+        // v0.25.3 — splice author-masked secret sentinels into string-valued args
+        // just before the real connector dispatch (use-only). Only sentinels from
+        // the authored op template carry values; a `{{secret.X}}` that arrived via
+        // ${VAR} data was never masked, so it stays inert literal text. The
+        // built-in execute_skill / json_parse intercepts ran earlier and never
+        // reach here, so a value can't leak into a child scope or a parsed var —
+        // it exists only for this one dispatch call.
         let dispatchArgs = args;
-        if (Object.values(args).some((v) => typeof v === "string" && hasSecretMarker(v))) {
+        if (secretNames.length > 0) {
           dispatchArgs = { ...args };
           for (const [k, v] of Object.entries(args)) {
-            if (typeof v === "string") dispatchArgs[k] = await resolveSecretsAtSink(v);
+            if (typeof v === "string") dispatchArgs[k] = await spliceSecretsAtSink(v, secretNames);
           }
         }
         if (ctx.registry.hasMcpConnector(connectorName)) {
@@ -2133,7 +2152,13 @@ export function substituteRuntime(text: string, vars: Map<string, unknown>): str
       if (value === undefined) {
         throw new UnresolvedVariableError(ref, "?");
       }
-      return stringifyValue(value);
+      // v0.25.3 — strip NUL from substituted data. Secret masking uses a
+      // NUL-delimited sentinel; stripping NUL from every `${VAR}` value means
+      // untrusted data can never forge a sentinel to trigger a secret splice
+      // (the author sentinels live in the template literal, not in a substituted
+      // value, so they're untouched). NUL is never valid in skill data anyway —
+      // `spawn` rejects it — so this is loss-free.
+      return stringifyValue(value).replace(new RegExp(String.fromCharCode(0),"g"), "");
     },
   );
 }

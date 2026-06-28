@@ -2,6 +2,19 @@
 
 Each release carries an **Upgrade impact:** line (first in its section) so a bump's requirements are visible at a glance. Tags (closed set): **BREAKING** (a manual change is needed to keep working) · **RE-APPROVE** (secured-mode signature invalidation — skills must be re-approved before they run) · **CONFIG** (`connectors.json` / config edit needed) · **none (additive)** (no action; backward-compatible). Standard from 0.20.0 forward; the pre-0.20 transitions that need action are flagged inline below (0.14.0, 0.18.8, 0.19.0). Full walkthrough: [UPGRADING.md](UPGRADING.md).
 
+## 0.25.3 — 2026-06-28 — security: author-template-only secret resolution (closes data-borne injection)
+
+**Upgrade impact:** none (additive) for the documented usage — a `{{secret.NAME}}` marker written literally in a skill's `shell`/`$` op still resolves exactly as before. **Behavior change for an undocumented edge:** a marker that is *not* in the skill source — one assembled at runtime from `${VAR}` data or `$set`/`$append` — no longer resolves (it stays inert literal text). That path was never intended and was a leak; see below.
+
+- **Closes data-borne secret injection (adopter finding).** Resolution used to run on the post-substitution sink string, so a `{{secret.NAME}}` marker that arrived via runtime *data* (a `${VAR}` value containing the literal text) got resolved — e.g. an email body containing `{{secret.AGENTMAIL_KEY}}` would inject the real key into the outbound message. The runtime now resolves **author-template-only**: it masks markers written literally in the op template *before* `${VAR}` substitution, then splices the values in last. A marker arriving through data is never masked, so it can never resolve — it passes through as inert literal text. (This also refines the var-smuggle edge: a marker built via `$set`/`$append` is data-borne and therefore inert, rather than resolving-if-declared.)
+- **Sentinel forgery neutralized.** The masking uses a NUL-delimited sentinel; `${VAR}` substitution now strips NUL bytes from every substituted value, so untrusted data can't forge a sentinel to trigger a splice. (NUL is never valid in skill data — `spawn` rejects it — so the strip is loss-free.)
+- **Unchanged guarantees:** values never bind/emit/trace; the binary-allowlist gate runs before resolution; errors/traces render the marker, not the value; declare-before-spend (`# Requires`) is enforced on author markers; the three tier-1 lint rules stand. Verified end-to-end across `shell(argv=…)`, `shell(command=…)`, and `$ connector.tool` sinks; the data-borne and forgery paths have regression tests.
+
+Two lint improvements from the same dogfood (both adopter-found):
+
+- **`undeclared-var` now scans `shell(argv=[...])` elements.** A `${VAR}` reference inside an argv element previously escaped the undeclared-var (and unknown-filter, legacy-`$(...)`-shape) checks — the lint's op-text collection skipped `argv`. Now an undeclared `${VAR}` in an argv element is caught at compile, like every other op position.
+- **New tier-2 `space-separated-vars`.** `# Vars:` is comma-separated; writing `# Vars: A B C` silently collapsed into one malformed variable named `"A B C"` (the rest lost). The new warning flags any `# Vars:` entry whose name contains whitespace and suggests the comma form.
+
 ## 0.25.2 — 2026-06-28 — fix: secret-use-only no longer false-positives on a documented marker
 
 **Upgrade impact:** none (additive). Removes a false positive introduced in 0.25.1; no change to valid skills beyond unblocking them.

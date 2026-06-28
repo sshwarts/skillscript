@@ -185,6 +185,77 @@ export async function expandSecretMarkers(
   return text.replace(SECRET_MARKER, (_m, name: string) => resolved.get(name)!);
 }
 
+// ─── author-template-only resolution (mask → substitute → splice) ───────────
+// A secret must resolve ONLY when its marker is literally in the AUTHORED op
+// template — never when `{{secret.X}}` text arrives at the sink via `${VAR}`
+// runtime data (that would be a data-borne injection: untrusted input naming a
+// declared secret could exfiltrate it). The runtime therefore masks author
+// markers to opaque sentinels BEFORE `${VAR}` substitution, then splices the
+// resolved values LAST. Consequence: (a) data/var-borne marker text is inert
+// (it's never a sentinel), (b) secret values are never re-templated by a later
+// substitution pass, (c) the value exists only at the final splice, at the sink.
+
+/** Opaque sentinel for a masked author marker. NUL-delimited so it survives
+ * `${VAR}` substitution (no `$`/`{{`), shell tokenization (no spaces/quotes),
+ * and won't occur in skill source or substituted data. */
+const secretSentinel = (i: number): string => ` secret:${i} `;
+const SECRET_SENTINEL_RE = / secret:(\d+) /g;
+
+export interface MaskedSecrets {
+  /** `tpl` with each author marker replaced by an opaque sentinel. */
+  masked: string;
+  /** index → secret name, parallel to the sentinels in `masked`. */
+  names: string[];
+}
+
+/**
+ * Replace each author-written `{{secret.NAME}}` in `tpl` with an opaque
+ * sentinel, calling `onName(name)` per marker (the caller enforces
+ * declare-before-spend there). Only well-formed static markers match — a
+ * dynamic/malformed `{{secret.${VAR}}}` is left as-is (caught by lint; inert at
+ * runtime since it never becomes a sentinel). Returns the masked text + the
+ * ordered names for {@link spliceSecrets}.
+ */
+export function maskAuthorSecrets(tpl: string, onName: (name: string) => void): MaskedSecrets {
+  const names: string[] = [];
+  const masked = tpl.replace(SECRET_MARKER, (_m, name: string) => {
+    onName(name);
+    const i = names.length;
+    names.push(name);
+    return secretSentinel(i);
+  });
+  return { masked, names };
+}
+
+/**
+ * Replace sentinels in `text` with resolved secret values — the final step,
+ * at the sink boundary. Resolution (the provider call) happens HERE, so the
+ * value's lifetime is the single dispatch. `names` comes from the mask step.
+ * `onResolve` collects values for redaction. No-op when `names` is empty.
+ */
+export async function spliceSecrets(
+  text: string,
+  names: string[],
+  provider: SecretProvider,
+  ctx: SecretResolveCtx,
+  onResolve?: (name: string, value: string) => void,
+): Promise<string> {
+  if (names.length === 0) return text;
+  const resolved = new Map<string, string>();
+  for (const name of new Set(names)) {
+    const value = await provider.resolve(name, ctx);
+    resolved.set(name, value);
+    onResolve?.(name, value);
+  }
+  return text.replace(SECRET_SENTINEL_RE, (_m, idx: string) => resolved.get(names[Number(idx)]!)!);
+}
+
+/** Replace sentinels with their `{{secret.NAME}}` marker form (for previews /
+ * mechanical mode — shows the marker, never the value, never the raw sentinel). */
+export function unmaskSecretSentinels(text: string, names: string[]): string {
+  return text.replace(SECRET_SENTINEL_RE, (_m, idx: string) => `{{secret.${names[Number(idx)]!}}}`);
+}
+
 /**
  * {@link expandSecretMarkers} over a list (the `shell(...)` argv form, where
  * each element is substituted independently). Markerless elements pass

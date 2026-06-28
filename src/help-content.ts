@@ -920,6 +920,7 @@ Three tiers per ERD §3:
 ## Tier-2 (warning)
 
 - \`deprecated-question\` — bare \`?\` op (deprecated; compile-error path)
+- \`space-separated-vars\` — a \`# Vars:\` entry name contains whitespace; \`# Vars:\` is comma-separated, so a space-separated list collapses into one malformed name
 - \`deprecated-substitution-shape\` — \`$(VAR)\` substitution form compiles but warns; rewrite to \`\${VAR}\`.
 - \`unsafe-shell-ambiguous-subst\` — \`$(NAME)\` inside \`shell(command=..., unsafe=true)\` body that isn't a declared variable; collides with bash command-sub syntax
 - \`unsafe-shell-op\` — \`shell(command=..., unsafe=true)\` present; requires human review every time
