@@ -1,11 +1,12 @@
 import { parse, tokenizeKeywordArgs, type ParsedSkill, type SkillOp } from "./parser.js";
+import { extractSecretRefs, findMalformedSecretMarkers } from "./secrets.js";
 import { classifyMutation, authorizationGranted, type MutationAuthState } from "./mutation-gate.js";
 import { KNOWN_FILTERS } from "./filters.js";
 import type { StaticCapabilities, SkillStore, McpToolDescriptor } from "./connectors/types.js";
 import type { Registry } from "./connectors/registry.js";
 
 /**
- * Lint engine. T4 ships 21 rules across three severity tiers:
+ * Lint engine. Ships a growing rule set across three severity tiers:
  *
  *   tier-1 (error)   — hard-block at compile; rule output throws LintFailureError
  *                      from `compile()` when present. Catches structural,
@@ -1599,6 +1600,141 @@ const CREDENTIAL_IN_ARGS: LintRule = {
         }
       });
     }
+    return findings;
+  },
+};
+
+// ─── secret references (v0.25.0) ──────────────────────────────────────────
+// A `{{secret.NAME}}` marker is USE-ONLY: legal only in a sink op (a
+// `shell(...)` op or a `$ connector.tool` dispatch), never where its value
+// could be read, bound, or emitted. These two tier-1 rules enforce the
+// contract at compile time; the runtime resolves markers at the sink
+// (src/secrets.ts holds SECRET_SINK_OP_KINDS, the shared sink list).
+
+/** True when this `$` op is an unqualified built-in intercept (execute_skill /
+ * json_parse) — a `$`-kind op that is NOT a real external sink. A secret
+ * marker in it would flow into a child skill's scope or a parsed/bound var,
+ * never an external credential, so it's a use-only violation. A *qualified*
+ * `$ conn.execute_skill` is a real connector dispatch and not excluded. */
+function isBuiltinNonSinkDollar(op: SkillOp): boolean {
+  if (op.kind !== "$" || op.mcpConnector !== undefined) return false;
+  const tool = /^([A-Za-z_][\w:-]*)/.exec(op.body.trimStart())?.[1];
+  return tool === "execute_skill" || tool === "json_parse";
+}
+
+/** Text positions of `op` where a secret marker is a legal sink injection. */
+function secretSinkText(op: SkillOp): string {
+  if (op.kind === "shell") return `${op.body ?? ""} ${op.argv?.join(" ") ?? ""}`;
+  if (op.kind === "$" && !isBuiltinNonSinkDollar(op)) return op.body ?? "";
+  return "";
+}
+
+/** Text positions of `op` where a secret marker is ILLEGAL (would expose the
+ * value): every author-controlled field except the sink positions above —
+ * the body of a non-sink op, `$set`/`$append` values, foreach lists, op
+ * fallbacks, and condition expressions. */
+function secretNonSinkText(op: SkillOp): string {
+  const parts: string[] = [];
+  const bodyIsSink = op.kind === "shell" || (op.kind === "$" && !isBuiltinNonSinkDollar(op));
+  if (!bodyIsSink && op.body) parts.push(op.body);
+  if (op.setValue !== undefined) parts.push(op.setValue);
+  if (op.foreachList !== undefined) parts.push(op.foreachList);
+  if (op.fallback !== undefined) parts.push(op.fallback);
+  if (op.ifBranches !== undefined) for (const b of op.ifBranches) parts.push(b.cond);
+  return parts.join(" ");
+}
+
+const SECRET_USE_ONLY: LintRule = {
+  id: "secret-use-only",
+  severity: "error",
+  description: "A `{{secret.NAME}}` marker appears outside a secret sink (a `shell(...)` op or a `$ connector.tool` dispatch). Secrets are use-only: the runtime injects the value at the sink and never lets it reach a readable, bindable, or emittable surface.",
+  remediation: "Use the secret only inside a `shell(command=\"... {{secret.NAME}} ...\")` op or a `$ connector.tool arg={{secret.NAME}}` dispatch. Never put it in `$set`, `emit`, a condition, a `# Output:` template, a `file_*`/`notify` op, or an op `(fallback: ...)` — those would expose the value.",
+  check: (ctx) => {
+    const findings: LintFinding[] = [];
+    for (const [targetName, target] of ctx.parsed.targets) {
+      walkOps(target.ops, (op) => {
+        for (const name of extractSecretRefs(secretNonSinkText(op))) {
+          findings.push({
+            rule: "secret-use-only",
+            severity: "error",
+            block: targetName,
+            message: `Secret marker {{secret.${name}}} appears in a '${op.kind}' op position that is not a secret sink. A secret may only be injected into a shell(...) op or a '$ connector.tool' dispatch — never where its value could be read, bound, or emitted.`,
+          });
+        }
+      });
+    }
+    if (ctx.parsed.outputTemplate !== null) {
+      for (const name of extractSecretRefs(ctx.parsed.outputTemplate)) {
+        findings.push({
+          rule: "secret-use-only",
+          severity: "error",
+          message: `Secret marker {{secret.${name}}} appears in the body-text output template. A secret value must never reach an output surface; reference it only inside a shell(...) or '$ connector.tool' sink op.`,
+        });
+      }
+    }
+    return findings;
+  },
+};
+
+const SECRET_UNDECLARED: LintRule = {
+  id: "secret-undeclared",
+  severity: "error",
+  description: "A `{{secret.NAME}}` marker is used without a matching `# Requires: secret.NAME` declaration. Secrets are declared before use so an approver sees which credentials the skill reaches.",
+  remediation: "Add `# Requires: secret.NAME` to the frontmatter for every secret the skill references.",
+  check: (ctx) => {
+    const declared = new Set(ctx.parsed.secretRequires);
+    const findings: LintFinding[] = [];
+    const seen = new Set<string>();
+    const checkText = (text: string, block?: string): void => {
+      for (const name of extractSecretRefs(text)) {
+        if (declared.has(name) || seen.has(name)) continue;
+        seen.add(name);
+        findings.push({
+          rule: "secret-undeclared",
+          severity: "error",
+          message: `Secret marker {{secret.${name}}} is used but not declared. Add \`# Requires: secret.${name}\` to the frontmatter so an approver can see which secrets this skill reaches.`,
+          ...(block !== undefined ? { block } : {}),
+        });
+      }
+    };
+    for (const [targetName, target] of ctx.parsed.targets) {
+      walkOps(target.ops, (op) => {
+        checkText(secretSinkText(op), targetName);
+        checkText(secretNonSinkText(op), targetName);
+      });
+    }
+    if (ctx.parsed.outputTemplate !== null) checkText(ctx.parsed.outputTemplate);
+    return findings;
+  },
+};
+
+const SECRET_DYNAMIC_NAME: LintRule = {
+  id: "secret-dynamic-name",
+  severity: "error",
+  description: "A `{{secret.…}}` marker has a non-literal name (e.g. `{{secret.${VAR}}}`) or is otherwise malformed. The secret name must be a compile-time literal so the declare-before-spend gate and the approver-visible `# Requires` reach cannot be evaded by building the name at runtime.",
+  remediation: "Use a literal secret name: `{{secret.NAME}}` where NAME matches a `# Requires: secret.NAME` declaration. Do not interpolate (`{{secret.${VAR}}}`) — the runtime refuses dynamically-named secrets.",
+  check: (ctx) => {
+    const findings: LintFinding[] = [];
+    const seen = new Set<string>();
+    const scan = (text: string, block?: string): void => {
+      for (const bad of findMalformedSecretMarkers(text)) {
+        if (seen.has(bad)) continue;
+        seen.add(bad);
+        findings.push({
+          rule: "secret-dynamic-name",
+          severity: "error",
+          message: `Malformed/dynamic secret marker '${bad}' — the secret name must be a compile-time literal (\`{{secret.NAME}}\`), not interpolated or built at runtime.`,
+          ...(block !== undefined ? { block } : {}),
+        });
+      }
+    };
+    for (const [targetName, target] of ctx.parsed.targets) {
+      walkOps(target.ops, (op) => {
+        scan(secretSinkText(op), targetName);
+        scan(secretNonSinkText(op), targetName);
+      });
+    }
+    if (ctx.parsed.outputTemplate !== null) scan(ctx.parsed.outputTemplate);
     return findings;
   },
 };
@@ -3492,6 +3628,9 @@ const RULES: LintRule[] = [
   APPEND_TO_NON_LIST,
   DISABLED_SKILL_REFERENCE,
   CREDENTIAL_IN_ARGS,
+  SECRET_USE_ONLY,
+  SECRET_UNDECLARED,
+  SECRET_DYNAMIC_NAME,
   STATUS_DISABLED,
   CIRCULAR_DEPENDENCY,
   MISSING_DEPENDENCY,

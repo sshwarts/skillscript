@@ -34,6 +34,8 @@ import {
 import { TraceBuilder, shouldTraceFire } from "./trace.js";
 import type { TraceConfig, TraceStore } from "./trace.js";
 import { describeValueShape, isShapeWorthRecording } from "./observed-shape.js";
+import { expandSecretMarkers, expandSecretMarkersInList, hasSecretMarker, extractSecretRefs } from "./secrets.js";
+import type { SecretProvider } from "./secrets.js";
 
 /**
  * Runtime executor. Pure mechanical execution: walks the parsed skill
@@ -175,6 +177,14 @@ export interface ExecuteContext {
    */
   _currentSkillName?: string;
   _currentSkillEventType?: string | null;
+  /**
+   * v0.25.0 — the running skill's declared `# Requires: secret.NAME` set.
+   * Stashed by execute() so the sink resolver can enforce declare-before-spend
+   * at RUNTIME, not just at lint: a `{{secret.X}}` whose X isn't declared is
+   * refused even when the marker was built dynamically (e.g. `{{secret.${VAR}}}`
+   * resolved by substituteRuntime), which lint can't see statically. Internal.
+   */
+  _currentSkillSecretRequires?: string[];
   /** Skill identity for trace records. Optional — falls back to parsed.name + version inference. */
   skillVersion?: string;
   /**
@@ -199,6 +209,17 @@ export interface ExecuteContext {
    * Undefined → TraceBuilder mints fresh (existing v1 behavior).
    */
   preMintedTraceId?: string;
+  /**
+   * v0.25.0 — resolver for `{{secret.NAME}}` markers. Wired at every
+   * ExecuteContext build site (bootstrap / scheduler / mcp-server). When a
+   * skill places a marker in a sink op (shell / `$`) the runtime resolves it
+   * here, AT the sink, and injects the value use-only — never binding,
+   * emitting, or tracing it. Undefined → markers are unresolvable: a sink op
+   * carrying one throws (fail-closed) so a misconfigured runtime can't send a
+   * literal `{{secret.X}}` to a credential-expecting sink. The env-backed
+   * provider ships today; a vault provider swaps in here with no other change.
+   */
+  secretProvider?: SecretProvider;
 }
 
 /**
@@ -459,7 +480,7 @@ export async function execute(
   // v0.9.6 — stash skill identity onto ctx so deep-stack op handlers
   // (notify()) can read for DeliveryMeta without threading `parsed`
   // through every call hop. Internal convention; do not set from outside.
-  ctx = { ...ctx, _currentSkillName: skillName, _currentSkillEventType: parsed.eventType };
+  ctx = { ...ctx, _currentSkillName: skillName, _currentSkillEventType: parsed.eventType, _currentSkillSecretRequires: parsed.secretRequires };
   const traceBuilder = shouldTraceFire(ctx.trace, triggerId, skillName)
     ? new TraceBuilder(skillName, ctx.skillVersion ?? "unknown", triggerCtx, { agent_id: ctx.agentId }, ctx.preMintedTraceId)
     : null;
@@ -814,6 +835,80 @@ async function execOpInner(
   if (isEffectfulOpKind(op.kind) && isSecuredMode() && ctx.effectsAuthorized !== true) {
     throw new SecuredModeEffectError(op.kind, targetName);
   }
+  // v0.25.0 — sink-side secret resolution. Expand `{{secret.NAME}}` markers
+  // AFTER ${VAR} substitution, immediately before the value reaches the sink
+  // (spawn argv / connector arg). Resolved values are use-only: they never
+  // bind to a var, emit, or trace. Fail-closed: a marker with no provider
+  // wired throws rather than sending a literal `{{secret.X}}` to a sink. Only
+  // the sink handlers (shell / `$`) call these; lint keeps markers out of
+  // every other op. (No-op when the text has no marker, so call freely.)
+  const requireSecretProvider = (): SecretProvider => {
+    if (ctx.secretProvider === undefined) {
+      throw new OpError(
+        `\`${op.kind}\` op references a secret ({{secret.…}}) but this runtime has no secret provider wired.`,
+        op.kind,
+        "Run via the dashboard/serve runtime (it wires the env secret provider) and provision SKILLSCRIPT_SECRET_<NAME> in the operator's .env.",
+        targetName,
+      );
+    }
+    return ctx.secretProvider;
+  };
+  // Runtime declare-before-spend enforcement. A marker can be built dynamically
+  // (`{{secret.${VAR}}}` → substituteRuntime makes `{{secret.FLAG}}`), which the
+  // static lint can't see — so the runtime independently refuses any secret name
+  // not in the skill's `# Requires: secret.NAME` set. Fail-closed; keeps the
+  // approver-visible declaration an enforced contract, not just a lint hint.
+  const enforceDeclared = (text: string): void => {
+    const declared = ctx._currentSkillSecretRequires ?? [];
+    for (const name of extractSecretRefs(text)) {
+      if (!declared.includes(name)) {
+        throw new OpError(
+          `\`${op.kind}\` op references secret '${name}' which is not declared in the skill's \`# Requires:\`.`,
+          op.kind,
+          `Add \`# Requires: secret.${name}\` to the frontmatter. Secrets must be declared up-front so an approver can see which credentials the skill reaches (dynamically-named markers are refused for the same reason).`,
+          targetName,
+        );
+      }
+    }
+  };
+  // Per-op set of resolved secret VALUES. Populated as markers resolve; used by
+  // redactSecrets() to scrub a value from any error/fallback-reason that gets
+  // recorded or rethrown (Perry Bug B fix #2 — belt-and-suspenders: a secret
+  // value must never appear anywhere but the live sink call, even if a sink or
+  // connector echoes it in a thrown error). The shared invariant: outside the
+  // successful spawn, everything renders the marker, never the value.
+  const injectedSecretValues: string[] = [];
+  const collectSecret = (_name: string, value: string): void => {
+    if (value !== "") injectedSecretValues.push(value);
+  };
+  const redactSecrets = (text: string): string => {
+    let out = text;
+    for (const v of injectedSecretValues) {
+      if (v !== "") out = out.split(v).join("{{secret.REDACTED}}");
+    }
+    return out;
+  };
+  // Scrub resolved secret values from a thrown error's message/remediation in
+  // place (preserves the error class + `instanceof` checks). No-op when no
+  // secret resolved for this op (so pre-resolution errors — e.g. the binary
+  // allowlist gate — pass through untouched).
+  const redactErr = (err: unknown): unknown => {
+    if (injectedSecretValues.length === 0 || !(err instanceof Error)) return err;
+    err.message = redactSecrets(err.message);
+    const withRem = err as Error & { remediation?: string };
+    if (typeof withRem.remediation === "string") withRem.remediation = redactSecrets(withRem.remediation);
+    return err;
+  };
+  const resolveSecretsAtSink = async (text: string): Promise<string> => {
+    if (!hasSecretMarker(text)) return text;
+    enforceDeclared(text);
+    return expandSecretMarkers(text, requireSecretProvider(), { skillName: ctx._currentSkillName }, collectSecret);
+  };
+  const resolveSecretsAtSinkList = async (items: string[]): Promise<string[]> => {
+    if (!items.some(hasSecretMarker)) return items;
+    for (const item of items) enforceDeclared(item);
+    return expandSecretMarkersInList(items, requireSecretProvider(), { skillName: ctx._currentSkillName }, collectSecret);
+  };
   switch (op.kind) {
     case "$set": {
       // v0.5.0 item 3 — `$set X = "...$(REF)..."` now resolves $(REF) at
@@ -931,20 +1026,29 @@ async function execOpInner(
             lastValue: placeholder,
           };
         }
-        const [bin, ...args] = substArgv;
         let stdoutArgv: string;
         try {
-          // v0.18.8 binary-scope gate. argv[0] IS the binary by construction;
-          // the allowlist applies identically to argv mode and command= mode.
-          if (!isBinaryAllowed(bin!, ctx.shellAllowlist)) {
-            throw new ShellBinaryNotAllowedError(bin!, ctx.shellAllowlist, targetName);
+          // v0.18.8 binary-scope gate. argv[0] IS the binary by construction.
+          // v0.25.0 — gate the binary BEFORE resolving secrets, so a refused
+          // op never resolves the credential and never lands it in the error
+          // message (which is built from the binary token). The binary itself
+          // is never a secret.
+          const bin0 = substArgv[0];
+          if (!isBinaryAllowed(bin0!, ctx.shellAllowlist)) {
+            throw new ShellBinaryNotAllowedError(bin0!, ctx.shellAllowlist, targetName);
           }
+          // Resolve `{{secret.NAME}}` markers per-element AFTER the gate so a
+          // secret value with spaces/quotes stays one argv element (the argv
+          // form never re-tokenizes). Use-only: spliced straight into spawn,
+          // never bound or traced.
+          const resolvedArgv = await resolveSecretsAtSinkList(substArgv);
+          const [bin, ...args] = resolvedArgv;
           stdoutArgv = await execShellCommand(bin!, args, shellTimeoutMs);
         } catch (err) {
           if (shellFallback !== undefined) {
-            return recordShellFallback(shellFallback, `shell argv failed: ${messageOf(err)}`);
+            return recordShellFallback(shellFallback, redactSecrets(`shell argv failed: ${messageOf(err)}`));
           }
-          throw err;
+          throw redactErr(err);
         }
         // Empty-stdout fallback (matches $-op trailer empty-result semantic).
         if (shellFallback !== undefined && stdoutArgv.trim() === "") {
@@ -990,7 +1094,13 @@ async function execOpInner(
           if (!isBinaryAllowed("bash", ctx.shellAllowlist)) {
             throw new ShellBinaryNotAllowedError("bash", ctx.shellAllowlist, targetName);
           }
-          stdout = await execShellCommand("bash", ["-c", body], shellTimeoutMs);
+          // v0.25.0 — resolve markers into the bash script. NOTE: the
+          // resolved value lands in the `bash -c <script>` argv, which is
+          // process-list visible (the documented argv/`ps` leak window);
+          // vault-era sink-aware injection closes it. Unsafe shell is
+          // already operator-gated, so a secret here is a deliberate choice.
+          const resolvedUnsafeBody = await resolveSecretsAtSink(body);
+          stdout = await execShellCommand("bash", ["-c", resolvedUnsafeBody], shellTimeoutMs);
         } else {
           const tokens = tokenizeShellArgs(body);
           if (tokens.length === 0) {
@@ -1001,20 +1111,27 @@ async function execOpInner(
               targetName,
             );
           }
-          const [bin, ...args] = tokens;
-          // v0.18.8 — binary-scope gate. Safe-path grammar guarantees
-          // one binary + no metacharacters, so the first token IS the
-          // binary. Default-deny when allowlist unset (BREAKING).
-          if (!isBinaryAllowed(bin!, ctx.shellAllowlist)) {
-            throw new ShellBinaryNotAllowedError(bin!, ctx.shellAllowlist, targetName);
+          // v0.18.8 — binary-scope gate. Safe-path grammar guarantees one
+          // binary + no metacharacters, so the first token IS the binary.
+          // Default-deny when allowlist unset (BREAKING). v0.25.0 — gate
+          // BEFORE resolving secrets so a refused op never resolves the
+          // credential and the error message (built from the binary token)
+          // carries the marker, never the value. The binary is never a secret.
+          if (!isBinaryAllowed(tokens[0]!, ctx.shellAllowlist)) {
+            throw new ShellBinaryNotAllowedError(tokens[0]!, ctx.shellAllowlist, targetName);
           }
+          // Resolve `{{secret.NAME}}` markers AFTER tokenization + gate so a
+          // secret value with spaces/quotes stays one argv element and never
+          // reaches a shell for re-splitting. Use-only.
+          const resolvedTokens = await resolveSecretsAtSinkList(tokens);
+          const [bin, ...args] = resolvedTokens;
           stdout = await execShellCommand(bin!, args, shellTimeoutMs);
         }
       } catch (err) {
         if (shellFallback !== undefined) {
-          return recordShellFallback(shellFallback, `shell failed: ${messageOf(err)}`);
+          return recordShellFallback(shellFallback, redactSecrets(`shell failed: ${messageOf(err)}`));
         }
-        throw err;
+        throw redactErr(err);
       }
       // Empty-stdout fallback (matches $-op trailer empty-result semantic).
       if (shellFallback !== undefined && stdout.trim() === "") {
@@ -1399,16 +1516,28 @@ async function execOpInner(
       // fallback present, ditto.
       const dollarFallback = op.fallback !== undefined ? coerceLiteralValue(op.fallback) : undefined;
       try {
+        // v0.25.0 — resolve `{{secret.NAME}}` markers in string-valued args
+        // just before the real connector dispatch (use-only). The built-in
+        // execute_skill / json_parse intercepts ran earlier and never reach
+        // here, so a secret value can't leak into a child skill's scope or a
+        // parsed/bound var — it exists only for this one dispatch call.
+        let dispatchArgs = args;
+        if (Object.values(args).some((v) => typeof v === "string" && hasSecretMarker(v))) {
+          dispatchArgs = { ...args };
+          for (const [k, v] of Object.entries(args)) {
+            if (typeof v === "string") dispatchArgs[k] = await resolveSecretsAtSink(v);
+          }
+        }
         if (ctx.registry.hasMcpConnector(connectorName)) {
           const connector = ctx.registry.getMcpConnector(connectorName);
           rawResult = await dispatchWithTimeout(
-            () => connector.call(toolName, args, ctx.agentId !== undefined ? { agentId: ctx.agentId } : undefined),
+            () => connector.call(toolName, dispatchArgs, ctx.agentId !== undefined ? { agentId: ctx.agentId } : undefined),
             timeoutMs,
             "$",
           );
           dispatched = true;
         } else if (op.mcpConnector === undefined && ctx.toolDispatch) {
-          rawResult = await dispatchWithTimeout(() => ctx.toolDispatch!(toolName, args), timeoutMs, "$");
+          rawResult = await dispatchWithTimeout(() => ctx.toolDispatch!(toolName, dispatchArgs), timeoutMs, "$");
           dispatched = true;
         } else {
           // v0.5.0 item 5 — was a silent stub before (emitted "Would call
@@ -1437,11 +1566,13 @@ async function execOpInner(
             target: targetName,
             opKind: "$",
             value: dollarFallback,
-            reason: `$ ${connectorLabel}${toolName} failed: ${messageOf(err)}`,
+            // v0.25.0 — a connector may echo a resolved secret arg in its
+            // error; scrub it before this reason lands in the trace.
+            reason: redactSecrets(`$ ${connectorLabel}${toolName} failed: ${messageOf(err)}`),
           });
           return { lastBoundVar: op.outputVar ?? flatKey, lastValue: dollarFallback };
         }
-        throw err;
+        throw redactErr(err);
       }
       // c580de5: surface inner-tool `isError: true` as an op error. Otherwise
       // the error text gets bound silently to the output var and the skill
@@ -1454,7 +1585,8 @@ async function execOpInner(
       ) {
         const innerText = extractToolErrorText(rawResult);
         throw new OpError(
-          `tool ${connectorLabel}${toolName} returned isError: ${innerText}`,
+          // v0.25.0 — the connector's error text may echo a resolved secret arg.
+          redactSecrets(`tool ${connectorLabel}${toolName} returned isError: ${innerText}`),
           "$",
           "The tool itself failed; inspect the inner error text. Add `(fallback: ...)` to the op for graceful failure.",
           targetName,
@@ -1959,10 +2091,21 @@ export function substituteRuntime(text: string, vars: Map<string, unknown>): str
   // through (the silent-blank case Perry hit with `gh pr list` writing
   // nothing to stdout). Now: same semantic across both fallback surfaces.
   return text.replace(
+    // v0.25.0 (Perry red-team `d8a5ad0a` Bug A, fix #1): a `{{secret...}}`
+    // marker is OPAQUE to var-substitution. Group 1 captures any double-brace
+    // secret marker (incl. a dynamically-shaped interior like `{{secret.${NM}}}`)
+    // and the callback returns it verbatim, so `${VAR}` substitution can NEVER
+    // reach inside a marker to build a secret name at runtime. The secret name
+    // therefore stays exactly as authored — a compile-time literal — which the
+    // sink resolver + lint then validate against `# Requires`. `[^}]*` (not
+    // `[^{}]*`) is deliberate so the interior `${...}` is consumed here, not by
+    // the var-ref alternative below.
     // v0.7.0: alternation accepts both `$(REF|chain)` (legacy) and `${REF|chain}`
-    // (canonical). Capture groups 1+2 = paren form, 3+4 = brace form.
-    /\$(?:\(([^|)\s]+)\s*((?:\|\s*[A-Za-z_]\w*(?:\s*:\s*"[^"]*")?\s*)*)\)|\{([^|}\s]+)\s*((?:\|\s*[A-Za-z_]\w*(?:\s*:\s*"[^"]*")?\s*)*)\})/g,
-    (_match: string, ref1: string | undefined, fc1: string | undefined, ref2: string | undefined, fc2: string | undefined) => {
+    // (canonical). Capture groups 2+3 = paren form, 4+5 = brace form.
+    /(\{\{\s*secret\.[^}]*\}\})|\$(?:\(([^|)\s]+)\s*((?:\|\s*[A-Za-z_]\w*(?:\s*:\s*"[^"]*")?\s*)*)\)|\{([^|}\s]+)\s*((?:\|\s*[A-Za-z_]\w*(?:\s*:\s*"[^"]*")?\s*)*)\})/g,
+    (_match: string, secretMarker: string | undefined, ref1: string | undefined, fc1: string | undefined, ref2: string | undefined, fc2: string | undefined) => {
+      // Opaque passthrough — never resolve inside a secret marker.
+      if (secretMarker !== undefined) return secretMarker;
       const ref = (ref1 ?? ref2)!;
       const filterChain = fc1 ?? fc2 ?? "";
       let value: unknown = resolveRef(ref, vars);

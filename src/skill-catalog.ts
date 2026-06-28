@@ -90,6 +90,7 @@ export async function buildSkillCatalog(
         triggers: [],
         returns: [],
         requires: [],
+        secret_requires: [],
         effectful_footprint: EMPTY_FOOTPRINT,
         ...(meta.author !== undefined ? { author: meta.author } : { author: null }),
       });
@@ -139,6 +140,7 @@ export function buildEntry(
     // capability gate uses). All free — the source is already parsed.
     returns: parsed.returns,
     requires: parsed.requires,
+    secret_requires: parsed.secretRequires,
     effectful_footprint: extractEffectfulFootprint(parsed),
     // v0.18.6 — surface author when the substrate populated it; null
     // when not (substrate-neutral graceful degradation).

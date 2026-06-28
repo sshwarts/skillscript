@@ -3,6 +3,7 @@ import { VALID_SKILL_STATUSES, isSkillStatus } from "./connectors/types.js";
 import { buildSkillCatalog } from "./skill-catalog.js";
 import type { Scheduler, ResolvableTriggerSource, TriggerRegistration } from "./scheduler.js";
 import type { TraceStore } from "./trace.js";
+import type { SecretProvider } from "./secrets.js";
 import type { Registry } from "./connectors/registry.js";
 import { healthMetrics, type HealthMetrics } from "./metrics.js";
 import { lint } from "./lint.js";
@@ -129,6 +130,13 @@ export interface McpServerDeps {
   /** v1.0 Gate #7 — filesystem path allowlist threaded into the execute_skill
    * dispatch ctx so the runtime enforces file_read/file_write path bounds. */
   fsAllowlist?: string[];
+  /**
+   * v0.25.0 — `{{secret.NAME}}` resolver, threaded into every execute_skill
+   * dispatch ctx so the runtime resolves secrets at the sink, use-only.
+   * Defaults to env-backed via `bootstrap()`. Undefined → a skill carrying a
+   * secret marker fails closed at the sink.
+   */
+  secretProvider?: SecretProvider;
   /**
    * v0.16.8 — approval-posture override. When true, the outside-MCP
    * `skill_write` handler forces every write to land in `Draft` status
@@ -414,7 +422,7 @@ export class McpServer {
         // parser's frontmatter), RETURNS (exported vars), REQUIRES (capability
         // clauses), and TOUCHES (effectful footprint). Derived statically from
         // the body. Null when the source isn't loadable.
-        let contract: { vars: string[]; returns: string[]; requires: unknown[]; effectful_footprint: ReturnType<typeof extractEffectfulFootprint> } | null = null;
+        let contract: { vars: string[]; returns: string[]; requires: unknown[]; secret_requires: string[]; effectful_footprint: ReturnType<typeof extractEffectfulFootprint> } | null = null;
         // v0.23.0 — per-tool input schemas for the connector tools this skill
         // calls (selective). Null when none / no registry / unreachable.
         let connector_tools: Array<Record<string, unknown>> | null = null;
@@ -426,6 +434,7 @@ export class McpServer {
             vars: parsed.vars.map((v) => v.name),
             returns: parsed.returns,
             requires: parsed.requires,
+            secret_requires: parsed.secretRequires,
             effectful_footprint: extractEffectfulFootprint(parsed),
           };
           // v0.23.0 — surface the input schema for ONLY the connector tools
@@ -892,6 +901,7 @@ export class McpServer {
       ...(this.deps.enableUnsafeShell !== undefined ? { enableUnsafeShell: this.deps.enableUnsafeShell } : {}),
       ...(this.deps.shellAllowlist !== undefined ? { shellAllowlist: this.deps.shellAllowlist } : {}),
       ...(this.deps.fsAllowlist !== undefined ? { fsAllowlist: this.deps.fsAllowlist } : {}),
+      ...(this.deps.secretProvider !== undefined ? { secretProvider: this.deps.secretProvider } : {}),
       ...(agentId !== undefined ? { agentId } : {}),
       ...(callerCtx?.callerIdentity !== undefined ? { callerAgentId: callerCtx.callerIdentity } : {}),
     } satisfies import("./runtime.js").ExecuteContext;

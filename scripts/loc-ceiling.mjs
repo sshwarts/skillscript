@@ -250,7 +250,13 @@ const CORE_PATHS = [
 // v0.23.x: nudged 11800 → 12000 for the connector-discovery ring (schema
 // retain + connector-aware input lint + observed-output-shape) and the
 // RemoteMcpConnector respawn-on-death self-heal. Clear, feature-driven code.
-const NARROW_MAX_LOC = 12000;
+// v0.25.0: nudged 12000 → 12200 for `{{secret.NAME}}` references — the
+// sink-side resolution wiring in runtime.ts (two small helper closures + the
+// three sink call sites) + the two tier-1 lint rules (secret-use-only,
+// secret-undeclared) + the parser `# Requires: secret.NAME` branch. The
+// resolver/provider abstraction itself lives in src/secrets.ts (NOT narrow
+// core). Clear, security-relevant code; per the signal-not-budget rule.
+const NARROW_MAX_LOC = 12200;
 const NARROW_MAX_FILES = 23;
 const BROAD_INFO_LOC = 9500;
 const BROAD_INFO_FILES = 28;

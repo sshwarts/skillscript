@@ -32,6 +32,7 @@ import { healthMetrics } from "./metrics.js";
 import { DashboardServer } from "./dashboard/server.js";
 import { bootstrap, defaultRegistry, wireDeclarativeTriggers, ensureApprovalKeys, defaultApprovalKeyFile, defaultApprovalPublicKeyFile } from "./bootstrap.js";
 import { bootstrapFromEnv } from "./bootstrap-from-env.js";
+import { EnvSecretProvider } from "./secrets.js";
 import { loadSkillscriptConfig } from "./runtime-config.js";
 import { loadEnvFile } from "./dotenv-loader.js";
 import { createHash } from "node:crypto";
@@ -535,6 +536,9 @@ async function cmdRun(args: string[]): Promise<number> {
       ...(envConfig.shellAllowlist !== undefined ? { shellAllowlist: envConfig.shellAllowlist } : {}),
       ...(envConfig.fsAllowlist !== undefined ? { fsAllowlist: envConfig.fsAllowlist } : {}),
       ...(envConfig.enableUnsafeShell !== undefined ? { enableUnsafeShell: envConfig.enableUnsafeShell } : {}),
+      // v0.25.0 — `skillfile run` resolves `{{secret.NAME}}` from the env
+      // (SKILLSCRIPT_SECRET_<NAME>) at the sink, use-only.
+      secretProvider: new EnvSecretProvider(),
     });
     // v0.19.4 — complementary-channels output. Template-bearing skills
     // own canonical output via `outputs.text` (rendered string); legacy

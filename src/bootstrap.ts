@@ -46,6 +46,7 @@ import { join } from "node:path";
 import type { SkillStore, DataStore, LocalModel } from "./connectors/types.js";
 import type { AgentConnector } from "./connectors/agent.js";
 import { NoOpAgentConnector } from "./connectors/agent-noop.js";
+import { EnvSecretProvider, type SecretProvider } from "./secrets.js";
 
 export interface BootstrapOpts {
   skillsDir: string;
@@ -105,6 +106,15 @@ export interface BootstrapOpts {
    * (`SKILLSCRIPT_FS_ALLOWLIST`) > config.json `fsAllowlist`. Keep secret dirs out.
    */
   fsAllowlist?: string[];
+  /**
+   * v0.25.0 — resolver for `{{secret.NAME}}` markers. Defaults to a fresh
+   * `EnvSecretProvider` (reads `SKILLSCRIPT_SECRET_<NAME>` from the runtime
+   * env). Threaded into the Scheduler + McpServer so every dispatch resolves
+   * secrets at the sink, use-only. This is the vault seam: an adopter injects
+   * a `VaultSecretProvider` here (or via `bootstrapFromEnv`'s `overrides`)
+   * with no other change — the resolve ctx already carries the principal.
+   */
+  secretProvider?: SecretProvider;
   /**
    * v0.17.4 — approval-posture override. When true, the outside-MCP
    * `skill_write` handler forces every write to land in `Draft` status
@@ -519,10 +529,16 @@ export function bootstrap(opts: BootstrapOpts): BootstrapResult {
       }
     : undefined;
 
+  // v0.25.0 — secret resolver. Default env-backed; an adopter overrides with
+  // a vault provider via opts (or bootstrapFromEnv overrides). Shared by the
+  // scheduler + MCP server so every dispatch path resolves the same way.
+  const secretProvider = opts.secretProvider ?? new EnvSecretProvider();
+
   const scheduler = new Scheduler({
     registry,
     skillStore,
     traceStore,
+    secretProvider,
     ...(resolvedPollIntervalSeconds !== undefined ? { pollIntervalSeconds: resolvedPollIntervalSeconds } : {}),
     ...(resolvedAbsoluteTimeoutMs !== undefined ? { absoluteTimeoutMs: resolvedAbsoluteTimeoutMs } : {}),
     ...(resolvedMaxRecursionDepth !== undefined ? { maxRecursionDepth: resolvedMaxRecursionDepth } : {}),
@@ -543,6 +559,7 @@ export function bootstrap(opts: BootstrapOpts): BootstrapResult {
     traceStore,
     registry,
     enableUnsafeShell,
+    secretProvider,
     runtimeMode: mode,
     ...(resolvedShellAllowlist !== undefined ? { shellAllowlist: resolvedShellAllowlist } : {}),
     ...(resolvedFsAllowlist !== undefined ? { fsAllowlist: resolvedFsAllowlist } : {}),

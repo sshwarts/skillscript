@@ -333,13 +333,14 @@ Substrate short-form (`"sqlite"` etc.) wires bundled defaults. Object form (`{ty
 
 ## Configuration & security knobs
 
-Operator settings come from `$SKILLSCRIPT_HOME/.env` (auto-loaded by the CLI), the shell environment, or `skillscript.config.json`. Three are **default-deny** boundaries you opt into, not out of — a skill can only do what the operator has permitted:
+Operator settings come from `$SKILLSCRIPT_HOME/.env` (auto-loaded by the CLI), the shell environment, or `skillscript.config.json`. The first three are **default-deny** boundaries you opt into, not out of; the fourth provisions named secrets a skill can use but never read — a skill can only do what the operator has permitted:
 
 | Knob | Default | Effect |
 |---|---|---|
 | `SKILLSCRIPT_SHELL_ALLOWLIST` | deny-all | which binaries `shell(...)` may invoke |
 | `SKILLSCRIPT_FS_ALLOWLIST` | deny-all | which path roots `file_read` / `file_write` may touch |
 | `SKILLSCRIPT_SECURED_MODE` | off | require an operator signature for any effectful op (unapproved skills inert) |
+| `SKILLSCRIPT_SECRET_<NAME>` | unset | a value a skill references as `{{secret.NAME}}` and uses at a sink (`shell` / `$ connector.tool`) — never readable, emittable, or traced |
 
 `skillfile shell-audit` enumerates the binaries your skill corpus needs, ready to paste into the allowlist. The full env-var surface (ports, timeouts, identity headers, `/event` ingress, approval key paths, dashboard auth) lives in the **[Configuration reference](/docs/configuration)**.
 

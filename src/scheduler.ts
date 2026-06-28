@@ -6,6 +6,7 @@ import type { TriggerSource } from "./parser.js";
 import type { TraceConfig, TraceStore } from "./trace.js";
 import { evaluateApprovalGate } from "./approval.js";
 import { EventNotFoundError, EventParamMismatchError } from "./errors.js";
+import type { SecretProvider } from "./secrets.js";
 import { randomUUID } from "node:crypto";
 
 /**
@@ -91,6 +92,12 @@ export interface SchedulerConfig {
   trace?: TraceConfig;
   /** Trace store backend. Forwarded to execute() ctx. */
   traceStore?: TraceStore;
+  /**
+   * v0.25.0 — `{{secret.NAME}}` resolver. Forwarded to the per-dispatch ctx
+   * so cron/event-fired skills resolve secrets at the sink, use-only. Undefined
+   * → a fired skill carrying a secret marker fails closed.
+   */
+  secretProvider?: SecretProvider;
   /** Optional clock source for tests. Default Date.now. */
   now?: () => number;
   /** Optional debug logger. Default console.warn. */
@@ -123,6 +130,7 @@ export class Scheduler {
   private readonly maxRecursionDepth: number | undefined;
   private readonly trace: TraceConfig | undefined;
   private readonly traceStore: TraceStore | undefined;
+  private readonly secretProvider: SecretProvider | undefined;
   private readonly now: () => number;
   private readonly log: (msg: string) => void;
   private readonly onTriggersChanged: ((snapshot: ReadonlyArray<TriggerRegistration>) => void) | undefined;
@@ -142,6 +150,7 @@ export class Scheduler {
     this.maxRecursionDepth = config.maxRecursionDepth;
     this.trace = config.trace;
     this.traceStore = config.traceStore;
+    this.secretProvider = config.secretProvider;
     this.now = config.now ?? (() => Date.now());
     this.log = config.log ?? ((msg) => process.stderr.write(`[scheduler] ${msg}\n`));
     this.onTriggersChanged = config.onTriggersChanged;
@@ -387,6 +396,7 @@ export class Scheduler {
       ...(this.maxRecursionDepth !== undefined ? { maxRecursionDepth: this.maxRecursionDepth } : {}),
       ...(this.trace !== undefined ? { trace: this.trace } : {}),
       ...(this.traceStore !== undefined ? { traceStore: this.traceStore } : {}),
+      ...(this.secretProvider !== undefined ? { secretProvider: this.secretProvider } : {}),
       // v0.9.6 — "manual" enum value dropped per audit Q12. Default fallback
       // is "inline" — "programmatic call without explicit trigger context"
       // per Perry's mapping. Specific callers (CLI, dashboard, agent-driven)

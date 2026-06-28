@@ -905,6 +905,9 @@ Three tiers per ERD §3:
 - \`reserved-keyword\` — variable/target/skill name collides with a reserved word
 - \`disabled-skill-reference\` — \`&\` or \`$ execute_skill\` references a Disabled skill
 - \`credential-in-args\` — op arg looks like a secret literal
+- \`secret-use-only\` — a \`{{secret.NAME}}\` marker appears outside a sink (shell / \`$ connector.tool\`); its value would reach a readable/emittable surface
+- \`secret-undeclared\` — a \`{{secret.NAME}}\` marker is used without a matching \`# Requires: secret.NAME\` declaration
+- \`secret-dynamic-name\` — a \`{{secret.…}}\` marker has a non-literal name (e.g. \`{{secret.\${VAR}}}\`); the secret name must be a compile-time literal
 - \`status-disabled\` — skill marked \`# Status: Disabled\`
 - \`circular-dependency\` — dep cycle between targets
 - \`missing-dependency\` — \`needs:\` references a target not declared

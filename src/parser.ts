@@ -214,6 +214,15 @@ export interface ParsedSkill {
    * capability `# Requires:` clauses are authored.
    */
   requiredCapabilities: string[];
+  /**
+   * v0.25.0 — secret references declared `# Requires: secret.NAME`. Names
+   * only (the `secret.` prefix is stripped). Declare-before-spend: a
+   * `{{secret.NAME}}` marker may be used in a sink op only when its NAME
+   * appears here; the linter's `secret-undeclared` rule enforces it, and
+   * the declaration is what an approver sees before vouching for the skill.
+   * Surfaced in skill_preflight / skill_list. Empty when none declared.
+   */
+  secretRequires: string[];
   targets: Map<string, SkillTarget>;
   entryTarget: string | null;
   onError: string | null;
@@ -288,6 +297,10 @@ export interface ParsedSkill {
 const REQUIRES_LINE = /^(user-var|system-var):([A-Za-z0-9_-]+)\s*(?:→|->)\s*([A-Za-z_][\w-]*)\s*(?:\(\s*fallback\s*:\s*(.+?)\s*\)\s*)?$/;
 /** Capability token: `connector_type.feature_flag`. Matches one space-separated token of a capability `# Requires:` line. */
 const CAPABILITY_TOKEN = /^[a-z_][a-z0-9_]*\.[a-z_][a-z0-9_]*$/;
+/** Secret-requirement token: `secret.NAME` (v0.25.0). NAME mirrors the
+ * `{{secret.NAME}}` marker grammar. The `secret.` namespace is reserved, so
+ * this is checked BEFORE the capability form. */
+const SECRET_REQUIRE_TOKEN = /^secret\.([A-Za-z_]\w*)$/;
 // v0.7.2 — `(.*)` widened to `([\s\S]*)` so multi-line triple-quote
 // (`"""..."""`) values fold into a single $set value capture. Without the
 // dotall-equivalent, the `.` excludes newlines and the regex stops at the
@@ -1082,6 +1095,7 @@ export function parse(source: string): ParsedSkill {
     vars: [],
     returns: [],
     requires: [],
+    secretRequires: [],
     requiredCapabilities: [],
     targets: new Map(),
     entryTarget: null,
@@ -1439,12 +1453,24 @@ export function parse(source: string): ParsedSkill {
             raw: value,
           });
         } else {
-          // Try capability form: space-separated `connector_type.feature_flag`
-          // tokens. Silently drop the line if it matches neither shape
-          // (existing parser convention for unknown # Requires: dialects).
+          // Try token form: space-separated `secret.NAME` (v0.25.0) and/or
+          // `connector_type.feature_flag` tokens, mixable on one line. Each
+          // token routes to secretRequires or requiredCapabilities. Silently
+          // drop the line if any token matches neither shape (existing parser
+          // convention for unknown # Requires: dialects). `secret.` is checked
+          // first — a secret NAME may be uppercase, which CAPABILITY_TOKEN
+          // (lowercase-only) wouldn't match anyway, but the explicit order
+          // keeps the reserved namespace unambiguous.
           const tokens = value.trim().split(/\s+/);
-          if (tokens.length > 0 && tokens.every((t) => CAPABILITY_TOKEN.test(t))) {
-            for (const t of tokens) result.requiredCapabilities.push(t);
+          if (
+            tokens.length > 0 &&
+            tokens.every((t) => SECRET_REQUIRE_TOKEN.test(t) || CAPABILITY_TOKEN.test(t))
+          ) {
+            for (const t of tokens) {
+              const secretMatch = SECRET_REQUIRE_TOKEN.exec(t);
+              if (secretMatch) result.secretRequires.push(secretMatch[1]!);
+              else result.requiredCapabilities.push(t);
+            }
           }
         }
       }

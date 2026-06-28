@@ -511,7 +511,7 @@ $ amp.amp_olsen_task task_type="scan" timeout=120 -> DISPATCH
 $ data_write content="${REPORT}" tags=["oncall"] approved="morning roundup" -> ACK
 ```
 
-**`(fallback: "value")` trailer** — Fires on dispatch throw OR empty bound value (empty string after trim, empty array, null/undefined). Honored on `$` dispatch and on `shell()` (fires on shell op throw or empty stdout). Coerce-on-bind: the fallback value binds to the output var transparently, downstream targets need no conditional. Permissive value parsing — bare identifiers, quoted strings, bracketed array literals all accepted. A fired fallback is recorded in `result.fallbacks[]`.
+**`(fallback: "value")` trailer** — Fires on dispatch throw (including a `timeout=N` expiry) OR empty bound value (empty string after trim, empty array, null/undefined). Honored on `$` dispatch and on `shell()` (fires on shell op throw or empty stdout). Coerce-on-bind: the fallback value binds to the output var transparently, downstream targets need no conditional. Permissive value parsing — bare identifiers, quoted strings, bracketed array literals all accepted. A fired fallback is recorded in `result.fallbacks[]`.
 
 Note: an envelope object like `{items: []}` is a non-empty object and does NOT trigger the fallback even though its contained array is empty. To handle envelope-empty downstream, test the contained collection (`if ${R.items|length} == "0":`) or apply a filter (`${R.items|fallback:[]}`).
 
@@ -541,11 +541,11 @@ Routes through the wired LocalModel.
 
 | Kwarg | Required | Notes |
 |---|---|---|
-| `prompt="..."` | yes | Non-empty string. Substitution-resolved at runtime. |
-| `maxTokens=N` | no | Positive integer (number or numeric string). Forwarded as `runOpts.maxTokens`. |
+| `prompt="..."` | yes | Non-empty string (empty/missing throws). Substitution-resolved at runtime. Must be a kwarg — there is no bare-string positional form (`$ llm "..."` is invalid; see the all-kwargs rule at the top of this section). |
+| `maxTokens=N` | no | Positive integer (number or numeric string). Forwarded as `runOpts.maxTokens`. **camelCase — it's `maxTokens`, NOT `max_tokens`; the snake_case form is an unknown kwarg the bridge silently drops, caught by the `unknown-llm-arg` lint.** |
 | `model="X"` | no | Per-call model selection. Resolves against registered LocalModel aliases via `registry.getLocalModel(X)`; falls through to the default LocalModel with `model=X` passed as an upstream hint (e.g., Ollama tag) when X doesn't resolve. See `unknown-llm-model` lint below. |
 
-Plus the universal op-level kwargs (`timeout`, `approved`, `(fallback:)`, `-> R`).
+Plus the universal op-level kwargs (`timeout`, `approved`, `(fallback:)`, `-> R`). `timeout` is runtime-enforced (popped before the connector sees it); a timeout expiry is a throw, so a `(fallback:)` trailer catches it.
 
 Canonical shape:
 
@@ -794,6 +794,83 @@ Missing-ref in the RHS produces a tier-1 runtime error.
 - `-> VAR` bindings are skill-global (visible to all targets after the op runs)
 - `foreach IDENT in EXPR:` iterator vars are loop-local — `$set` bindings inside the loop don't persist after the loop ends
 - Target outputs (`${target.output}`) are accessible after the target completes
+
+## Secrets — secret.NAME references, {{secret.NAME}} sink markers, SKILLSCRIPT_SECRET_ provisioning, use-only enforcement
+
+## Secrets
+
+Skills routinely need a credential — an API token, a deploy key — to reach an external service. Skillscript handles secrets **by reference, never by value**. A skill declares which secrets it may use and marks exactly where each is injected, but it can never read, bind, or print the value. The runtime resolves a secret only at the instant it is handed to a *sink* (a `shell` op or a `$ connector.tool` dispatch).
+
+This is what lets a human approve a skill knowing the full set of credentials it can reach — and lets an agent-authored skill run without ever exposing the key to the agent. The author holds a *use*-capability (invoke a skill that reaches the key) without the *access*-capability (read the key).
+
+### Three steps
+
+**1. Declare it in frontmatter.** List every secret the skill may reach. An approver reading the skill sees the whole credential surface up front.
+
+```
+# Skill: send-email
+# Requires: secret.AGENTMAIL_KEY
+# Status: Draft
+```
+
+**2. Place it with a `{{secret.NAME}}` marker — only inside a sink.** A secret may appear only where it is *used*: inside a `shell(...)` op or a `$ connector.tool` dispatch.
+
+```
+run:
+    shell(command="curl -H 'Authorization: Bearer {{secret.AGENTMAIL_KEY}}' https://api.agentmail.to/...") -> R
+```
+
+…or into a connector argument:
+
+```
+$ http.post url="https://api..." authorization={{secret.AGENTMAIL_KEY}} -> R
+```
+
+**3. Provision it as an env var**, named with the `SKILLSCRIPT_SECRET_` prefix:
+
+```
+SKILLSCRIPT_SECRET_AGENTMAIL_KEY=am_us_...
+```
+
+### Semantics — the rules that matter
+
+- **`{{secret.NAME}}` is not `${VAR}`.** `${VAR}` is readable substitution in the skill's variable scope — it can be bound, emitted, branched on, and it appears in the execution trace. A secret can do none of that. `${VAR}` cannot reach a secret; a `{{secret.NAME}}` marker is never readable as a var.
+- **The name is a compile-time literal.** `${VAR}` substitution never reaches inside a `{{secret.…}}` marker (markers are opaque to substitution), and the runtime resolves a marker only against the declared `# Requires` set by exact-literal match. You cannot build a secret name dynamically.
+- **Use-only, resolved at the sink.** The value is injected at the moment the shell op spawns or the connector dispatches — never bound to a variable, never emitted, never written to a trace. The trace records the *marker* (`{{secret.AGENTMAIL_KEY}}`), not the value. The binary/allowlist gate runs *before* resolution, so a refused op never even resolves the secret, and error/trace output is redacted to the marker form.
+- **Misuse is a compile-time error (tier-1), not a runtime surprise:**
+  - `{{secret.NAME}}` in `emit`, `$set`, a condition, an `# Output:` template, a `file_*` / `notify` op, or a `(fallback: ...)` → **`secret-use-only`**.
+  - A `{{secret.NAME}}` marker with no matching `# Requires: secret.NAME` declaration → **`secret-undeclared`**.
+  - A marker whose name isn't a clean literal (e.g. `{{secret.${NM}}}`) → **`secret-dynamic-name`**.
+
+### Worked example
+
+A skill that checks an inbox over a REST API. The key is declared once and used once, at the curl sink — it never touches a variable, the output, or the trace:
+
+```
+# Skill: inbox-check
+# Requires: secret.AGENTMAIL_KEY
+# Returns: COUNT
+
+check:
+    shell(argv=["curl","-s","-H","Authorization: Bearer {{secret.AGENTMAIL_KEY}}","https://api.agentmail.to/v0/inboxes/me/messages?labels=unread"]) -> RAW (fallback: "{\"count\":0}")
+    $ json_parse ${RAW} -> P
+    $set COUNT = ${P.count}
+    emit(text="Unread: ${COUNT}")
+
+default: check
+```
+
+### Threat-model boundary — what this does NOT protect
+
+The guarantees above stop *accidental* leakage and *undeclared* access: a secret is never bound, emitted, traced, leaked through a refused op, or reachable via a dynamically-built or undeclared name. They do **not** stop a *malicious skill author*. A skill authorized to use a secret in a **shell** sink can also make that sink exfiltrate it — e.g. `shell(command="printf %s {{secret.FLAG}}") -> OUT` then `emit(${OUT})` launders the secret through the skill's own stdout, and a `curl` could send it anywhere. This is inherent: once a command may *use* a secret, it may *misuse* it.
+
+The controls for that boundary are:
+- **Human approval review** — an approver who sees `printf {{secret}}` followed by `emit` rejects the skill. The `# Requires:` line + the visible sink are exactly what makes this reviewable.
+- **Prefer connector sinks over raw shell.** A connector holds the credential out-of-band and applies it inside the dispatch, so the secret never round-trips through skill-visible output (`$ http.post ... authorization={{secret.NAME}}` returns the API's *data*, not the key). Use a `shell` secret only when no connector is available, and review such skills accordingly.
+
+### Why this shape
+
+The marker/var split *is* the security model: the runtime is the reference monitor, the human approval is the grant, and the `# Requires:` line is the auditable statement of reach. Capability without access — the agent can act through the credential without ever holding it.
 
 ## Pipe filters — url, shell, json, trim, fallback, isodate
 
@@ -2479,5 +2556,5 @@ When any of these primitives ship, the relevant grammar moves into its canonical
 
 ---
 
-*Rendered from `skillscript/skillscript-language-reference` — 2026-06-16 15:46 EDT*  
+*Rendered from `skillscript/skillscript-language-reference` — 2026-06-28 15:20 EDT*  
 *Source of truth: AMP (`amp_render_document("skillscript/skillscript-language-reference")`)*

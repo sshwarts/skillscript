@@ -402,6 +402,14 @@ export interface SkillEntry {
    */
   returns: string[];
   requires: Array<{ namespace: "user-var" | "system-var"; key: string; target: string; fallback: string | null; raw: string }>;
+  /**
+   * v0.25.0 — secret references declared `# Requires: secret.NAME` (names
+   * only). The credentials this skill will inject at a sink. Security-relevant
+   * for an approver: it says which secrets the skill can reach, declared
+   * up-front, separate from the value (which the runtime resolves use-only at
+   * the sink and never exposes). Empty when none declared.
+   */
+  secret_requires: string[];
   effectful_footprint: {
     connectors: string[];
     builtins: string[];

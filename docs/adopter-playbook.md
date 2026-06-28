@@ -629,6 +629,45 @@ SKILLSCRIPT_FS_ALLOWLIST=/srv/skillscript/workspace,/var/skillscript/events
 
 TOCTOU note: the check resolves the real path at call time; a symlink swapped between check and open is a residual closed by fd-based opens later. Checking the resolved real path is the standard mitigation shipped today.
 
+## Secrets
+
+**A skill can reference an operator-provisioned secret by name, use it at a sink, and never read it back.** This is how a credential (a bearer token, an API key) reaches a `shell(...)` or `$ connector.tool` call without living in the skill source, the transcript, or a trace.
+
+Three parts:
+
+```
+# Skill: send-mail
+# Requires: secret.AGENTMAIL_KEY        # 1. declare — an approver sees which credentials the skill reaches
+# Status: Draft
+
+default: run
+run:
+    shell(command="curl -sS -H 'Authorization: Bearer {{secret.AGENTMAIL_KEY}}' https://api.agentmail.to/...") -> R
+```
+
+1. **Declare** with `# Requires: secret.NAME`.
+2. **Place** with a `{{secret.NAME}}` marker — only inside a sink (a `shell(...)` op or a `$ connector.tool` arg). It is deliberately distinct from `${VAR}`: `${VAR}` is readable substitution over the skill's variable scope and **cannot** reach a secret; `{{secret.NAME}}` resolves *only* at the sink and is never bound to a variable.
+3. **Provision** the value as an env var (operator side, e.g. `.env`):
+
+```bash
+SKILLSCRIPT_SECRET_AGENTMAIL_KEY=am_live_...
+```
+
+| Operator switch | Controls |
+|---|---|
+| `SKILLSCRIPT_SECRET_<NAME>` | The value `{{secret.NAME}}` resolves to. The `SKILLSCRIPT_SECRET_` prefix scopes which env is secret-reachable — `{{secret.PATH}}` looks for `SKILLSCRIPT_SECRET_PATH`, never `$PATH`. |
+
+**Use-only, enforced.** A marker is legal only in a sink; the runtime injects the value for that one call and never lets it reach a readable surface. Three lint rules block misuse at compile (`secret-use-only` — a marker in `emit`/`$set`/a condition/an `# Output:` template/a `file_*`/`notify` op/an op `(fallback:)`; `secret-undeclared` — a marker with no `# Requires`; `secret-dynamic-name` — a non-literal name like `{{secret.${VAR}}}`). The **runtime** is the authoritative gate (it survives a lint bypass): it resolves only names declared in `# Requires`, only at the sink, and the trace + any error message render the `{{marker}}`, never the value. Fail-closed — an unprovisioned or undeclared secret aborts the op.
+
+**Provisioning is operator-only.** A skill author *names* a secret; only the operator *sets* it (in the runtime env / `.env`). Keep secret values out of skill source and out of the fs allowlist, exactly like the approval key.
+
+**Threat-model boundary — read this before granting a secret.** A secret you authorize a skill to *use* in a shell, that skill can also *exfiltrate* — e.g. `shell("echo {{secret.X}}") -> OUT` then `emit("${OUT}")`, or a `curl` that POSTs it to any host. This is inherent to passing a credential into a shell command and is **not** prevented by the runtime. Two controls:
+
+- **Approval review.** In secured mode a human approves the skill before it runs — review shell-sink skills for exactly this (a command that echoes or forwards the credential).
+- **Prefer a connector sink.** A `$ connector.tool` where the connector holds the credential out of band is stronger than a shell `curl`: the value never round-trips through skill-visible stdout. Use a connector sink for any credential whose exposure you can't accept.
+
+(On the shell path the resolved value is also briefly visible in the host process list via `ps`; a future vault-backed `SecretProvider` closes that with sink-aware injection. The `SecretProvider` seam is already in place — an adopter can supply a vault-backed provider via `bootstrap({ secretProvider })` or `bootstrapFromEnv`'s `overrides` with no skill changes.)
+
 ## Trigger model
 
 **The trigger surface is two primitives.**
