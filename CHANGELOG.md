@@ -2,6 +2,12 @@
 
 Each release carries an **Upgrade impact:** line (first in its section) so a bump's requirements are visible at a glance. Tags (closed set): **BREAKING** (a manual change is needed to keep working) · **RE-APPROVE** (secured-mode signature invalidation — skills must be re-approved before they run) · **CONFIG** (`connectors.json` / config edit needed) · **none (additive)** (no action; backward-compatible). Standard from 0.20.0 forward; the pre-0.20 transitions that need action are flagged inline below (0.14.0, 0.18.8, 0.19.0). Full walkthrough: [UPGRADING.md](UPGRADING.md).
 
+## 0.25.1 — 2026-06-28 — fix: secret-use-only lint catches markers in malformed/dropped op lines
+
+**Upgrade impact:** none (additive). A lint rule now catches a case it previously missed; no behavior change to valid skills.
+
+- **`secret-use-only` source-level backstop (adopter finding).** The rule walked the parsed op AST, so a `{{secret.NAME}}` marker in a line the parser *dropped* — e.g. a malformed `emit {{secret.X}}` written without parentheses (the valid form is `emit(text="...")`) — slipped through as zero findings, even though the rule's own remediation lists `emit`. (Never a leak: the runtime gate already refuses to resolve a marker outside a sink, so the value never surfaced — this was a missing compile-time *warning*, not an exposure.) The rule now also compares every `{{secret.…}}` in the raw source against the markers the AST scan accounted for; any surplus (a marker in a dropped/unrecognized position) is flagged tier-1. Valid `emit(text=...)`/`$set`/sink placements are unchanged — no double-firing.
+
 ## 0.25.0 — 2026-06-28 — secret references: name a credential, use it, never expose it
 
 **Upgrade impact:** none (additive). New opt-in syntax + two new tier-1 lint rules that fire only on skills using the new syntax. Existing skills don't use `{{secret.…}}`, so nothing changes for them. Operators who want to provision a secret add a `SKILLSCRIPT_SECRET_<NAME>` env var.

@@ -24,8 +24,8 @@ const REPO_ROOT = join(__dirname, "..");
 const PACKAGE_JSON = JSON.parse(readFileSync(join(REPO_ROOT, "package.json"), "utf8")) as Record<string, unknown>;
 
 describe("T7 — package.json polish", () => {
-  it("1. version is 0.25.0 (secret references: `# Requires: secret.NAME` + `{{secret.NAME}}` use-only markers resolved at the shell/`$` sink via a vault-ready SecretProvider; EnvSecretProvider reads SKILLSCRIPT_SECRET_<NAME>; tier-1 secret-use-only + secret-undeclared lint rules)", () => {
-    expect(PACKAGE_JSON["version"]).toBe("0.25.0");
+  it("1. version is 0.25.1 (secret references + 0.25.1 lint backstop: secret-use-only now catches a `{{secret.X}}` marker in a malformed/dropped op line via a source-level scan, closing adopter finding 24ce83f8)", () => {
+    expect(PACKAGE_JSON["version"]).toBe("0.25.1");
   });
 
   it("2. main + types + bin + engines.node ≥ 22.5 declared", () => {

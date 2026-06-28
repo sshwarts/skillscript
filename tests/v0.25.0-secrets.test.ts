@@ -167,6 +167,21 @@ describe("v0.25.0 — secret-use-only lint rule", () => {
     expect(f?.severity).toBe("error");
   });
 
+  // Adopter finding 24ce83f8 — a marker in a malformed `emit {{secret.X}}`
+  // (no parens) parses to no op, so the AST scan missed it; the source-level
+  // backstop catches it.
+  it("fires tier-1 for a marker in a malformed/dropped op line (bare emit, source backstop)", async () => {
+    const src = [...decl, "default: t", "t:", "    emit {{secret.TOKEN}}"].join("\n");
+    const r = await lint(src);
+    expect(ruleIds(r.findings)).toContain("secret-use-only");
+  });
+
+  it("does not double-fire secret-use-only for a proper emit(text=...) marker", async () => {
+    const src = [...decl, "default: t", "t:", '    emit(text="{{secret.TOKEN}}")'].join("\n");
+    const r = await lint(src);
+    expect(r.findings.filter((f) => f.rule === "secret-use-only").length).toBe(1);
+  });
+
   it("fires tier-1 when a marker appears in $set", async () => {
     const src = [...decl, "default: t", "t:", "    $set X = {{secret.TOKEN}}", "    emit done"].join("\n");
     const r = await lint(src);

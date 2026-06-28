@@ -1,5 +1,5 @@
 import { parse, tokenizeKeywordArgs, type ParsedSkill, type SkillOp } from "./parser.js";
-import { extractSecretRefs, findMalformedSecretMarkers } from "./secrets.js";
+import { extractSecretRefs, findMalformedSecretMarkers, countSecretMarkers } from "./secrets.js";
 import { classifyMutation, authorizationGranted, type MutationAuthState } from "./mutation-gate.js";
 import { KNOWN_FILTERS } from "./filters.js";
 import type { StaticCapabilities, SkillStore, McpToolDescriptor } from "./connectors/types.js";
@@ -1671,6 +1671,28 @@ const SECRET_USE_ONLY: LintRule = {
           message: `Secret marker {{secret.${name}}} appears in the body-text output template. A secret value must never reach an output surface; reference it only inside a shell(...) or '$ connector.tool' sink op.`,
         });
       }
+    }
+    // Source-level backstop (adopter finding 24ce83f8). The scans above walk the
+    // parsed op AST + template, so they miss a marker the parser DROPPED — e.g. a
+    // malformed `emit {{secret.X}}` (no parens) parses to no op, yet the marker
+    // sits in source. Compare every marker in the raw source against the markers
+    // the AST scan accounted for (sink positions + non-sink positions + template);
+    // any surplus lives in a dropped/unrecognized position and is still a
+    // use-only violation. Counts (not names) so repeats can't mask a leak.
+    let accounted = 0;
+    for (const [, target] of ctx.parsed.targets) {
+      walkOps(target.ops, (op) => {
+        accounted += countSecretMarkers(secretSinkText(op)) + countSecretMarkers(secretNonSinkText(op));
+      });
+    }
+    if (ctx.parsed.outputTemplate !== null) accounted += countSecretMarkers(ctx.parsed.outputTemplate);
+    const surplus = countSecretMarkers(ctx.source) - accounted;
+    if (surplus > 0) {
+      findings.push({
+        rule: "secret-use-only",
+        severity: "error",
+        message: `A {{secret.…}} marker appears outside any recognized op (e.g. a malformed \`emit {{secret.X}}\` without parentheses, or a dropped line). A secret may only be used inside a shell(...) op or a '$ connector.tool' dispatch.`,
+      });
     }
     return findings;
   },

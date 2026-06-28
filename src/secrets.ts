@@ -114,6 +114,15 @@ export function hasSecretMarker(text: string): boolean {
   return SECRET_MARKER.test(text);
 }
 
+/** Count of `{{secret.NAME}}` marker occurrences in `text` (NOT deduped).
+ * Used by the lint backstop to compare source markers against the markers the
+ * op-AST scan accounted for — a surplus means a marker sits in a position the
+ * parser dropped (e.g. a malformed `emit {{secret.X}}` with no parens). */
+export function countSecretMarkers(text: string): number {
+  const m = text.match(SECRET_MARKER);
+  return m ? m.length : 0;
+}
+
 /** Distinct secret names referenced by `{{secret.NAME}}` markers in `text`. */
 export function extractSecretRefs(text: string): string[] {
   // SECRET_MARKER is a shared global regex; `matchAll` copies its `lastIndex`,
