@@ -182,6 +182,25 @@ describe("v0.25.0 — secret-use-only lint rule", () => {
     expect(r.findings.filter((f) => f.rule === "secret-use-only").length).toBe(1);
   });
 
+  // Regression 6655eac4 — the source-level backstop must NOT count a marker that
+  // appears in a `# Description:` (or any frontmatter/`#` line) as prose: that's
+  // documentation, not an executable position. A legit argv-sink skill that
+  // documents its own secret in the description must lint clean.
+  it("does not false-positive on a {{secret}} marker in a # Description plus a legit argv sink", async () => {
+    const src = [
+      "# Skill: documented",
+      "# Requires: secret.TOKEN",
+      "# Description: uses the {{secret.TOKEN}} marker at the curl sink, never readable",
+      "# Status: Draft",
+      "",
+      "default: t",
+      "t:",
+      '    shell(argv=["curl","-H","Authorization: Bearer {{secret.TOKEN}}","https://api/x"]) -> R',
+    ].join("\n");
+    const r = await lint(src, { shellAllowlist: ["curl"] });
+    expect(ruleIds(r.findings)).not.toContain("secret-use-only");
+  });
+
   it("fires tier-1 when a marker appears in $set", async () => {
     const src = [...decl, "default: t", "t:", "    $set X = {{secret.TOKEN}}", "    emit done"].join("\n");
     const r = await lint(src);

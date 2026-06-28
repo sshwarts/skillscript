@@ -1675,10 +1675,18 @@ const SECRET_USE_ONLY: LintRule = {
     // Source-level backstop (adopter finding 24ce83f8). The scans above walk the
     // parsed op AST + template, so they miss a marker the parser DROPPED — e.g. a
     // malformed `emit {{secret.X}}` (no parens) parses to no op, yet the marker
-    // sits in source. Compare every marker in the raw source against the markers
-    // the AST scan accounted for (sink positions + non-sink positions + template);
-    // any surplus lives in a dropped/unrecognized position and is still a
-    // use-only violation. Counts (not names) so repeats can't mask a leak.
+    // sits in source. Compare body markers against the markers the AST scan
+    // accounted for (sink positions + non-sink positions + template); any surplus
+    // lives in a dropped/unrecognized op position and is still a use-only
+    // violation. Counts (not names) so repeats can't mask a leak.
+    //
+    // Frontmatter/`#`-header lines are EXCLUDED from the source count (regression
+    // 6655eac4): a `# Description:` that mentions `{{secret.NAME}}` as prose is
+    // legitimate documentation, never an executable position — counting it
+    // false-positived on every skill that documents its own secret. Op lines are
+    // indented (`shell(...)`, `emit(...)`, `$set`, …) and never start with `#`, so
+    // excluding `#`-leading lines drops only frontmatter + markdown-heading
+    // template lines (template markers are accounted separately).
     let accounted = 0;
     for (const [, target] of ctx.parsed.targets) {
       walkOps(target.ops, (op) => {
@@ -1686,8 +1694,11 @@ const SECRET_USE_ONLY: LintRule = {
       });
     }
     if (ctx.parsed.outputTemplate !== null) accounted += countSecretMarkers(ctx.parsed.outputTemplate);
-    const surplus = countSecretMarkers(ctx.source) - accounted;
-    if (surplus > 0) {
+    const bodyMarkerCount = ctx.source
+      .split("\n")
+      .filter((line) => !line.trimStart().startsWith("#"))
+      .reduce((n, line) => n + countSecretMarkers(line), 0);
+    if (bodyMarkerCount - accounted > 0) {
       findings.push({
         rule: "secret-use-only",
         severity: "error",

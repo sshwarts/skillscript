@@ -2,6 +2,14 @@
 
 Each release carries an **Upgrade impact:** line (first in its section) so a bump's requirements are visible at a glance. Tags (closed set): **BREAKING** (a manual change is needed to keep working) · **RE-APPROVE** (secured-mode signature invalidation — skills must be re-approved before they run) · **CONFIG** (`connectors.json` / config edit needed) · **none (additive)** (no action; backward-compatible). Standard from 0.20.0 forward; the pre-0.20 transitions that need action are flagged inline below (0.14.0, 0.18.8, 0.19.0). Full walkthrough: [UPGRADING.md](UPGRADING.md).
 
+## 0.25.2 — 2026-06-28 — fix: secret-use-only no longer false-positives on a documented marker
+
+**Upgrade impact:** none (additive). Removes a false positive introduced in 0.25.1; no change to valid skills beyond unblocking them.
+
+- **Regression fix (adopter finding).** The 0.25.1 source-level backstop counted *every* `{{secret.NAME}}` in the raw source — including one written as prose in a `# Description:` line ("…auth via the sealed `{{secret.KEY}}` marker…"). Since a description isn't an executable position, the AST scan didn't account for it, so the backstop saw a surplus and fired `secret-use-only` (tier-1) — **blocking every skill that documents its own secret, including the recommended `shell(argv=[...])` sink form.** The backstop now excludes frontmatter/`#`-header lines from its count (op lines are always indented and never start with `#`), so a documented marker is ignored while a marker in a genuinely-dropped op line (the 0.25.1 bare-`emit` case) is still caught. Verified against the real `perry-inbox-check` / `perry-email-send` shapes.
+
+> **Known issue (fix in progress):** a `{{secret.NAME}}` marker that arrives at a sink via runtime *data* (a `${VAR}` value that happens to contain the literal marker text) is currently resolved — a data-borne injection path. The fix is author-template-only resolution (only markers literally in the skill source resolve; data/var-borne marker text is inert). Until it lands, don't interpolate untrusted input into a secret-bearing sink. Tracked for the next patch.
+
 ## 0.25.1 — 2026-06-28 — fix: secret-use-only lint catches markers in malformed/dropped op lines
 
 **Upgrade impact:** none (additive). A lint rule now catches a case it previously missed; no behavior change to valid skills.
