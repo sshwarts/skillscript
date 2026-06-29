@@ -44,12 +44,16 @@ const output = lines.map((line) => {
   // Only transform markdown-table-row-shape lines (leading `|`).
   if (!line.trimStart().startsWith("|")) return line;
 
-  // Within table rows, escape `{` inside backtick-fenced inline-code spans.
-  // MDX parses any `{...}` as a JSX expression (not just `${...}`); inline-code
-  // in markdown tables doesn't shield it. The escape `\{` renders as literal
-  // `{` after MDX resolves the escape — visually identical, parser-safe.
+  // Within table rows, escape `{` and `|` inside backtick-fenced inline-code
+  // spans.
+  //   - `{` : MDX parses any `{...}` as a JSX expression (not just `${...}`);
+  //     inline-code in a table cell doesn't shield it. `\{` renders as literal `{`.
+  //   - `|` : a pipe inside a table cell is read as a column separator even
+  //     within a code span (e.g. `encoding="utf8"|"base64"`), which splits and
+  //     misaligns the row. `\|` renders as a literal `|`.
+  // Both escapes are invisible to the reader after the renderer resolves them.
   return line.replace(/`([^`]*)`/g, (_match, content) => {
-    return "`" + content.replace(/\{/g, "\\{") + "`";
+    return "`" + content.replace(/\{/g, "\\{").replace(/\|/g, "\\|") + "`";
   });
 });
 

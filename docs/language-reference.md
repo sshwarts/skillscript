@@ -303,7 +303,7 @@ Closed list of language-intrinsic ops the runtime knows directly. Each is a func
 | `inline` | `inline(skill="<data-skill-name>")` | none | Compile-time inline of an Approved `# Type: data` skill. Resolves at compile, records `content_hash` in provenance. |
 | `execute_skill` | `execute_skill(skill_name="...", inputs=\{...}) -> R` | optional | Composition primitive. Runtime-resolved. See Composition section. |
 | `shell` | `shell(command="...") -> R` / `shell(argv=[...]) -> R` / `shell(command="...", unsafe=true) -> R` | optional | Structural spawn (default), explicit-argv spawn (`argv=[...]`, no tokenizer), or full-shell exec (`unsafe=true`, gated by `runtime.enable_unsafe_shell`). Binary gated by the operator allowlist (see below). stdout binds. |
-| `file_read` | `file_read(path="...") -> R` | required | Read a file at `path`; binds string contents. |
+| `file_read` | `file_read(path="...") -> R` | required | Read a file at `path`; binds string contents. Optional `encoding="utf8"\|"base64"` kwarg (default `utf8`). |
 | `file_write` | `file_write(path="...", content="...")` | none | Write `content` to `path`. `mkdir -p` semantics for parent directories. Mutation-classified. |
 
 **Unknown op name** → tier-1 lint `unknown-runtime-op` with remediation pointing at MCP dispatch: "if this is an external tool, use `$ <connector>.<tool> args -> R`."
@@ -412,6 +412,12 @@ file_write(path="/tmp/report.md", content="${REPORT}", approved="nightly sweep d
 `file_read` is read-only (always allowed). `file_write` is mutation-classified — requires `# Autonomous: true` declaration on the skill OR per-call `approved="..."` kwarg. `mkdir -p` semantics for the parent directory.
 
 `unconfirmed-mutation` lint enforces the mutation-classification rule.
+
+**`file_read` optional `encoding` kwarg.** `file_read(path="...", encoding="base64") -> R` reads the file's raw bytes and binds them base64-encoded (single line, no wrapping) — the form for placing binary content (a PDF, an image) into an inline-JSON API field such as an email attachment. `encoding` is optional like the `(fallback:)` trailer; the canonical signature is unchanged. It defaults to `"utf8"` (the existing text-read behavior), and only `"utf8"` and `"base64"` are accepted — any other value fires the tier-2 `unknown-file-encoding` lint. Read-time encoding is required for binary: a `utf8` read corrupts non-text bytes *before* any pipe filter could re-encode them, so base64-ing a utf8 read would encode garbage. The `fs` allowlist gates the read regardless of encoding, and a base64'd value is data — a literal `{{secret.X}}` in file content stays inert under author-template-only resolution. Size note: base64 inflates the payload ~33%, and the encoded value rides inline into the downstream API — an oversized attachment fails at that API's request-size limit, not in the runtime.
+
+```
+file_read(path="${DOC}", encoding="base64") -> B64    # then drop ${B64} into an attachments[] field
+```
 
 ### `inline` — data-skill compile-time inline
 
@@ -665,7 +671,7 @@ deliver:
 | Runtime-intrinsic | `inline` | `inline(skill="<name>")` | none (compile-time) |
 | Runtime-intrinsic | `execute_skill` | `execute_skill(skill_name="...", inputs=\{...}) -> R` | optional |
 | Runtime-intrinsic | `shell` | `shell(command="...", [unsafe=true], [approved="..."]) [-> R] [(fallback: "...")]` or `shell(argv=[...], [approved="..."]) [-> R] [(fallback: "...")]` (mutually exclusive forms; binary allowlist applies to both) | optional |
-| Runtime-intrinsic | `file_read` | `file_read(path="...") -> R` | required |
+| Runtime-intrinsic | `file_read` | `file_read(path="...", [encoding="utf8"\|"base64"]) -> R` | required |
 | Runtime-intrinsic | `file_write` | `file_write(path="...", content="...", [approved="..."])` | none |
 | External MCP — substrate-specific | `$ <connector>.<tool>` | `$ <connector>.<tool> kwarg=value, ... [timeout=N] [approved="..."] [-> R] [(fallback: "...")]` | optional |
 | External MCP — typed-contract | `$ <tool>` | `$ <tool> kwarg=value, ... [timeout=N] [approved="..."] [-> R] [(fallback: "...")]` (typed-contract ops only: `data_*`, `skill_*`, `json_parse`, `llm`) | optional |
@@ -880,14 +886,14 @@ Pipe filters apply transforms to resolved variables before substitution. Syntax:
 
 | Filter | Effect | Example | Output |
 |--------|--------|---------|--------|
-| `url` | `encodeURIComponent(value)` | `$\{location|url}` for `"Asheville, NC"` | `Asheville%2C%20NC` |
-| `shell` | POSIX single-quote escape with outer quotes | `$\{arg|shell}` for `it's safe` | `'it'\''s safe'` |
-| `json` | `JSON.stringify(value)` | `$\{payload|json}` for `\{k:"v"}` | `"\{\"k\":\"v\"}"` |
-| `trim` | Whitespace trim | `$\{VERDICT|trim}` for `"urgent\n"` | `urgent` |
-| `length` | Count of items (array) or characters (string) | `$\{ITEMS|length}` for `["a","b","c"]` | `3` |
-| `contains:"X"` | Boolean: type-aware substring / element membership | `$\{MSG|contains:"urgent"}` for `"Yes, urgent"` | `true` |
-| `fallback:"X"` | Coalesce on missing/undefined/empty ref | `$\{VAR.missing|fallback:"-"}` | `-` |
-| `isodate` | Epoch seconds → ISO-8601 timestamp | `$\{EPOCH|isodate}` for `1779660000` | `2026-05-24T22:00:00.000Z` |
+| `url` | `encodeURIComponent(value)` | `$\{location\|url}` for `"Asheville, NC"` | `Asheville%2C%20NC` |
+| `shell` | POSIX single-quote escape with outer quotes | `$\{arg\|shell}` for `it's safe` | `'it'\''s safe'` |
+| `json` | `JSON.stringify(value)` | `$\{payload\|json}` for `\{k:"v"}` | `"\{\"k\":\"v\"}"` |
+| `trim` | Whitespace trim | `$\{VERDICT\|trim}` for `"urgent\n"` | `urgent` |
+| `length` | Count of items (array) or characters (string) | `$\{ITEMS\|length}` for `["a","b","c"]` | `3` |
+| `contains:"X"` | Boolean: type-aware substring / element membership | `$\{MSG\|contains:"urgent"}` for `"Yes, urgent"` | `true` |
+| `fallback:"X"` | Coalesce on missing/undefined/empty ref | `$\{VAR.missing\|fallback:"-"}` | `-` |
+| `isodate` | Epoch seconds → ISO-8601 timestamp | `$\{EPOCH\|isodate}` for `1779660000` | `2026-05-24T22:00:00.000Z` |
 
 ### `length` semantics
 
@@ -1029,7 +1035,7 @@ Several filters are planned but not yet shipped:
 | `summary` | One-line abbreviation | Compress for human-facing emissions |
 | `pluck:<field>` | Project array of objects to array of field values | Paired with `in`/`not in` for dedup-by-id workflows |
 | `join:"<sep>"` | List → string with separator | Filter-shape alternative to string `$append`; reconsider if filter-chain demand surfaces |
-| `isodate_ms` | Epoch ms → ISO-8601 | Companion to `|isodate`; defer until demand |
+| `isodate_ms` | Epoch ms → ISO-8601 | Companion to `\|isodate`; defer until demand |
 
 `pluck` is the highest-priority remaining filter — it closes the structural-dedup gap for skills that iterate retrieval results and want to exclude already-seen items by ID without manual comparison loops.
 
@@ -2556,5 +2562,5 @@ When any of these primitives ship, the relevant grammar moves into its canonical
 
 ---
 
-*Rendered from `skillscript/skillscript-language-reference` — 2026-06-28 15:20 EDT*  
+*Rendered from `skillscript/skillscript-language-reference` — 2026-06-29 12:24 EDT*  
 *Source of truth: AMP (`amp_render_document("skillscript/skillscript-language-reference")`)*
