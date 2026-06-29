@@ -24,8 +24,8 @@ const REPO_ROOT = join(__dirname, "..");
 const PACKAGE_JSON = JSON.parse(readFileSync(join(REPO_ROOT, "package.json"), "utf8")) as Record<string, unknown>;
 
 describe("T7 — package.json polish", () => {
-  it("1. version is 0.25.3 (secret references + author-template-only resolution: a {{secret.X}} marker resolves ONLY when literally in the skill source — markers arriving via ${VAR} runtime data are inert, closing the data-borne injection path; mask→substitute→splice with a NUL sentinel + NUL-stripping of substituted data neutralizes sentinel forgery; refines Edge-1 — var/data-borne markers are inert)", () => {
-    expect(PACKAGE_JSON["version"]).toBe("0.25.3");
+  it("1. version is 0.26.0 (file_read(path, encoding=\"base64\") — read a file's raw bytes base64-encoded so a binary file inlines into an API payload without utf8 corruption; default utf8 unchanged; unknown encodings refused at runtime + tier-2 unknown-file-encoding lint; adopter request 7130c3bd)", () => {
+    expect(PACKAGE_JSON["version"]).toBe("0.26.0");
   });
 
   it("2. main + types + bin + engines.node ≥ 22.5 declared", () => {

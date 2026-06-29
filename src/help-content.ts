@@ -67,7 +67,7 @@ The four delivery channels are all first-class:
 | Class | Shape | Examples |
 |---|---|---|
 | **Mutation statements** | \`$verb VAR = value\` / \`$verb VAR <value>\` | \`$set NAME = "Scott"\`, \`$append LIST <item>\` |
-| **Runtime-intrinsic function-calls** | \`verb(kwarg=value, ...) [-> BINDING]\` | \`emit(text="...")\`, \`inline(skill="...")\`, \`execute_skill(name="...") -> R\`, \`shell(command="...") -> R\` / \`shell(argv=[...]) -> R\`, \`file_read(path="...") -> R\`, \`file_write(path="...", content="...")\`, \`notify(agent="...")\` |
+| **Runtime-intrinsic function-calls** | \`verb(kwarg=value, ...) [-> BINDING]\` | \`emit(text="...")\`, \`inline(skill="...")\`, \`execute_skill(name="...") -> R\`, \`shell(command="...") -> R\` / \`shell(argv=[...]) -> R\`, \`file_read(path="..." [, encoding="base64"]) -> R\`, \`file_write(path="...", content="...")\`, \`notify(agent="...")\` |
 | **External MCP dispatch** | \`$ <connector> kwarg=value, ... [-> BINDING]\` | \`$ youtrack_search query="..." -> R\`, \`$ llm prompt="..." -> R\`, \`$ data_read mode=fts query="..." -> R\` |
 
 The \`$\` prefix marks **state-affecting ops** (mutation OR external dispatch). Function-call shape marks **language-intrinsic ops the runtime knows directly**.
@@ -303,12 +303,20 @@ shell(command="echo hi && date +%Y", unsafe=true) -> OUT                       #
 
 **Fallback trailer:** all three forms (\`command=\`, \`argv=\`, \`unsafe=true\`) accept \`(fallback: "value")\` after the \`-> R\` binding. The fallback fires when (a) the shell op throws (binary not on allowlist, spawn failure, timeout), or (b) the binary runs cleanly but produces empty stdout after trim. Matches the \`$\`-dispatch op-trailer semantics. Example: \`shell(argv=["gh","pr","list"]) -> PRS (fallback: "No current PRs.")\` — when the repo has no open PRs and \`gh\` writes nothing to stdout, PRS binds to the fallback cleanly instead of leaving downstream \`\${PRS}\` references as UnresolvedVariableError. The \`|fallback:\` template filter has the same empty-aware semantic — both fire on empty-string-after-trim / empty-array / null/undefined.
 
-### \`file_read(path="...") -> R\` — read file contents
+### \`file_read(path="...", encoding="...") -> R\` — read file contents
 
-Reads via Node \`fs.readFile\`. Substitutes \`\${VAR}\` in the path. Optional \`(fallback: "...")\` trailer binds when read fails. **Container note:** when the runtime is sandboxed (Docker, container deployment), the runtime's filesystem is namespace-isolated from the author's host — \`/tmp/x\` in the skill maps to the runtime's \`/tmp/x\`, not the host's. Use absolute paths under a known shared volume for cross-namespace work.
+Reads via Node \`fs.readFile\`. Substitutes \`\${VAR}\` in the path. Optional \`(fallback: "...")\` trailer binds when read fails.
+
+Optional \`encoding\` kwarg (default \`"utf8"\`):
+- \`encoding="utf8"\` (default) — reads text; binds the file's contents as a string.
+- \`encoding="base64"\` — reads the **raw bytes** and binds them base64-encoded (single line, no wrapping). Use this to inline a **binary** file (image, PDF) into an API payload — e.g. \`attachments:[{content: "\${B64}", ...}]\`. A plain utf8 read would corrupt non-text bytes before any \`|filter\` could run, so base64 must happen at read time, not via a pipe filter.
+- Any other encoding value is refused at runtime and flagged \`unknown-file-encoding\` (tier-2) at compile.
+
+The filesystem path allowlist gates every read regardless of encoding. **Container note:** when the runtime is sandboxed (Docker, container deployment), the runtime's filesystem is namespace-isolated from the author's host — \`/tmp/x\` in the skill maps to the runtime's \`/tmp/x\`, not the host's. Use absolute paths under a known shared volume for cross-namespace work.
 
 \`\`\`
 file_read(path="/var/reports/today.md") -> REPORT (fallback: "no report")
+file_read(path="\${DOC}", encoding="base64") -> B64
 \`\`\`
 
 ### \`file_write(path="...", content="...", approved="...")\` — write file contents
@@ -921,6 +929,7 @@ Three tiers per ERD §3:
 
 - \`deprecated-question\` — bare \`?\` op (deprecated; compile-error path)
 - \`space-separated-vars\` — a \`# Vars:\` entry name contains whitespace; \`# Vars:\` is comma-separated, so a space-separated list collapses into one malformed name
+- \`unknown-file-encoding\` — \`file_read(..., encoding=...)\` names an encoding other than \`utf8\` / \`base64\`
 - \`deprecated-substitution-shape\` — \`$(VAR)\` substitution form compiles but warns; rewrite to \`\${VAR}\`.
 - \`unsafe-shell-ambiguous-subst\` — \`$(NAME)\` inside \`shell(command=..., unsafe=true)\` body that isn't a declared variable; collides with bash command-sub syntax
 - \`unsafe-shell-op\` — \`shell(command=..., unsafe=true)\` present; requires human review every time

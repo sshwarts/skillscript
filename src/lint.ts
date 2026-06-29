@@ -1772,6 +1772,31 @@ const SECRET_DYNAMIC_NAME: LintRule = {
   },
 };
 
+const UNKNOWN_FILE_ENCODING: LintRule = {
+  id: "unknown-file-encoding",
+  severity: "warning",
+  description: "A `file_read(..., encoding=...)` op names an encoding other than `utf8` or `base64`. Caught at compile so a typo (e.g. `bas64`) is a lint line, not a failed run.",
+  remediation: 'Use `encoding="utf8"` (default, text) or `encoding="base64"` (raw bytes → base64, for binary files inlined into an API payload).',
+  check: (ctx) => {
+    const findings: LintFinding[] = [];
+    for (const [targetName, target] of ctx.parsed.targets) {
+      walkOps(target.ops, (op) => {
+        if (op.kind !== "file_read") return;
+        const enc = op.fileParams?.encoding;
+        // Only flag a STATIC literal — a `${VAR}` encoding is resolved at runtime.
+        if (enc === undefined || enc === "utf8" || enc === "base64" || /\$[({]/.test(enc)) return;
+        findings.push({
+          rule: "unknown-file-encoding",
+          severity: "warning",
+          message: `file_read encoding '${enc}' is not recognized — use "utf8" or "base64".`,
+          block: targetName,
+        });
+      });
+    }
+    return findings;
+  },
+};
+
 const SPACE_SEPARATED_VARS: LintRule = {
   id: "space-separated-vars",
   severity: "warning",
@@ -3691,6 +3716,7 @@ const RULES: LintRule[] = [
   // Tier-2 (warning)
   DEPRECATED_QUESTION,
   SPACE_SEPARATED_VARS,
+  UNKNOWN_FILE_ENCODING,
   DEPRECATED_SUBSTITUTION_SHAPE,
   UNSAFE_SHELL_AMBIGUOUS_SUBST,
   UNSAFE_SHELL_UNESCAPED_SUBST,

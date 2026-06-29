@@ -75,9 +75,13 @@ export interface SkillOp {
   /**
    * `file_read` / `file_write` op params. `path` is the filesystem path
    * (may contain `${VAR}` substitutions resolved at runtime). `content` is
-   * the body to write (file_write only).
+   * the body to write (file_write only). `encoding` (file_read only, v0.26.0)
+   * selects how the file's bytes are decoded into the bound value:
+   * `"utf8"` (default) reads text; `"base64"` reads the RAW bytes and
+   * base64-encodes them — the correct way to inline a binary file (image, PDF)
+   * into an API payload, since utf8 decoding would corrupt non-text bytes.
    */
-  fileParams?: { path: string; content?: string };
+  fileParams?: { path: string; content?: string; encoding?: string };
   /**
    * `notify` op params. `agent` is the target agent identifier (required,
    * may contain `${VAR}` substitutions resolved at runtime). `message` is
@@ -1947,10 +1951,11 @@ export function parse(source: string): ParsedSkill {
         }
         if (fnName === "file_read") {
           const path = kwArgs["path"] ?? "";
+          const encoding = kwArgs["encoding"];
           opBucket.push({
             kind: "file_read",
             body: stripped0,
-            fileParams: { path },
+            fileParams: { path, ...(encoding !== undefined ? { encoding } : {}) },
             ...(outputVar !== undefined ? { outputVar } : {}),
             ...(fallback !== undefined ? { fallback } : {}),
           });

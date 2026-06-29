@@ -2,6 +2,15 @@
 
 Each release carries an **Upgrade impact:** line (first in its section) so a bump's requirements are visible at a glance. Tags (closed set): **BREAKING** (a manual change is needed to keep working) · **RE-APPROVE** (secured-mode signature invalidation — skills must be re-approved before they run) · **CONFIG** (`connectors.json` / config edit needed) · **none (additive)** (no action; backward-compatible). Standard from 0.20.0 forward; the pre-0.20 transitions that need action are flagged inline below (0.14.0, 0.18.8, 0.19.0). Full walkthrough: [UPGRADING.md](UPGRADING.md).
 
+## 0.26.0 — 2026-06-29 — file_read base64 encoding (inline binary attachments)
+
+**Upgrade impact:** none (additive). New optional `encoding` kwarg on `file_read`; existing reads default to `utf8` exactly as before.
+
+- **`file_read(path="…", encoding="base64")`** reads a file's **raw bytes** and base64-encodes them, so a binary file (image, PDF) can be inlined into an API payload — e.g. an `attachments:[{content: "<base64>", …}]` JSON body. This has to be a read-mode, not a pipe filter: the default `utf8` read decodes bytes to text (corrupting non-text bytes with U+FFFD) *before* any filter could run, so base64-ing a binary file after a text read would encode garbage. Reading the raw bytes at read time is the only correct path (adopter request 7130c3bd). Node's base64 emits a **single line** (no 76-column wrapping), which is what inline JSON wants — and needs no `base64` shell binary, so the shell allowlist stays untouched.
+  - `encoding` accepts `"utf8"` (default) or `"base64"`; anything else is refused at runtime and flagged tier-2 at compile by the new **`unknown-file-encoding`** lint rule (so a `"bas64"` typo is a lint line, not a failed run).
+  - **The filesystem path allowlist still gates every read**, base64 or not — a skill can only base64 a file under an allowlisted root, so this opens no new exfiltration path. (And base64'd file content is *data*, so a file containing literal `{{secret.X}}` text is inert under the v0.25.3 author-template-only secret model — no marker-injection through an attachment.)
+  - **Size note:** base64 inflates ~33%, and the encoded blob typically rides inline JSON into a downstream API. The practical wall isn't the runtime — it's the **target API's request-size limit** (e.g. a mail provider's max message size); an oversized attachment fails at that boundary, not in `file_read`.
+
 ## 0.25.3 — 2026-06-28 — security: author-template-only secret resolution (closes data-borne injection)
 
 **Upgrade impact:** none (additive) for the documented usage — a `{{secret.NAME}}` marker written literally in a skill's `shell`/`$` op still resolves exactly as before. **Behavior change for an undocumented edge:** a marker that is *not* in the skill source — one assembled at runtime from `${VAR}` data or `$set`/`$append` — no longer resolves (it stays inert literal text). That path was never intended and was a leak; see below.

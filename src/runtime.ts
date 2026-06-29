@@ -1177,9 +1177,23 @@ async function execOpInner(
       if (!isPathUnderAllowedRoot(path, ctx.fsAllowlist)) {
         throw new FilePathNotAllowedError("file_read", path, ctx.fsAllowlist, targetName);
       }
+      // v0.26.0 — read encoding. "utf8" (default) reads text; "base64" reads the
+      // RAW bytes and base64-encodes them (single line, no wrapping) so a binary
+      // file can be inlined into an API payload without utf8 corruption. The fs
+      // allowlist gate above still bounds WHICH paths are readable, regardless of
+      // encoding. Unknown encodings are refused (lint also flags them tier-2).
+      const fileEncoding = op.fileParams?.encoding ?? "utf8";
+      if (fileEncoding !== "utf8" && fileEncoding !== "base64") {
+        throw new OpError(
+          `\`file_read\` unknown encoding '${fileEncoding}' in target '${targetName}'.`,
+          "file_read",
+          'Use `encoding="utf8"` (default) or `encoding="base64"`.',
+          targetName,
+        );
+      }
       let content: string;
       try {
-        content = await fsReadFile(path, "utf8");
+        content = await fsReadFile(path, fileEncoding as "utf8" | "base64");
       } catch (err) {
         if (op.fallback !== undefined) {
           const fallbackValue = op.fallback;
