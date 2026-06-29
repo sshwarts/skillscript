@@ -2,6 +2,12 @@
 
 Each release carries an **Upgrade impact:** line (first in its section) so a bump's requirements are visible at a glance. Tags (closed set): **BREAKING** (a manual change is needed to keep working) · **RE-APPROVE** (secured-mode signature invalidation — skills must be re-approved before they run) · **CONFIG** (`connectors.json` / config edit needed) · **none (additive)** (no action; backward-compatible). Standard from 0.20.0 forward; the pre-0.20 transitions that need action are flagged inline below (0.14.0, 0.18.8, 0.19.0). Full walkthrough: [UPGRADING.md](UPGRADING.md).
 
+## 0.26.1 — 2026-06-29 — runtime_capabilities surfaces the filesystem allowlist
+
+**Upgrade impact:** none (additive). New discovery field; no behavior change.
+
+- **`runtime_capabilities` now reports `fsExecution`** — the filesystem allowlist, mirroring the existing `shellExecution`. An author could already discover which shell binaries were permitted but had **no way to learn which filesystem roots `file_read`/`file_write` may touch** short of trial-and-error or asking the operator (adopter finding 35f669cb, hit independently while wiring the file_read attachment skill). `fsExecution.allowlist` lists the allowed absolute roots (or `"(unset — default-deny)"`), with a description covering the three config paths. Because the roots are reported in the **runtime's** filesystem namespace, this also answers the cross-namespace "what's the runtime-side path?" question — an authoring agent in a different namespace (container vs the runtime host) can read the runtime's path vocabulary directly instead of guessing its local alias.
+
 ## 0.26.0 — 2026-06-29 — file_read base64 encoding (inline binary attachments)
 
 **Upgrade impact:** none (additive). New optional `encoding` kwarg on `file_read`; existing reads default to `utf8` exactly as before.

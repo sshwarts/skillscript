@@ -706,7 +706,7 @@ export class McpServer {
 
     this.registerTool({
       name: "runtime_capabilities",
-      description: "Discover the runtime's wired connectors and shell-execution mode. Read-only. Use to author skills against the actually-available primitives. Per-category filter via `include`. The connector lists are a compact menu (tool NAMES); pull one tool's full argument schema on demand with `tool: \"<connector>.<tool>\"`.",
+      description: "Discover the runtime's wired connectors, shell-execution mode, and filesystem allowlist. Read-only. Use to author skills against the actually-available primitives — including which shell binaries (`shellExecution`) and which filesystem roots (`fsExecution`) are permitted. Per-category filter via `include`. The connector lists are a compact menu (tool NAMES); pull one tool's full argument schema on demand with `tool: \"<connector>.<tool>\"`.",
       inputSchema: {
         type: "object",
         properties: {
@@ -714,7 +714,7 @@ export class McpServer {
             type: "array",
             items: {
               type: "string",
-              enum: ["localModels", "mcpConnectors", "mcpConnectorClasses", "dataStores", "skillStores", "agentConnectors", "shellExecution", "securedApproval", "runtimeVersion", "runtimeMode", "triggersFilePath"],
+              enum: ["localModels", "mcpConnectors", "mcpConnectorClasses", "dataStores", "skillStores", "agentConnectors", "shellExecution", "fsExecution", "securedApproval", "runtimeVersion", "runtimeMode", "triggersFilePath"],
             },
             description: "Filter which categories to return. Omit for all.",
           },
@@ -1278,6 +1278,33 @@ export class McpServer {
           "argv form for args-with-spaces — same allowlist gate applies to `argv[0]`. " +
           "Legacy `@ <cmd>` / `@ unsafe <body>` symbol forms parse to the same AST " +
           "(lint surfaces them as deprecated-symbol-op).",
+      };
+    }
+    if (want("fsExecution")) {
+      // v0.26.1 — filesystem-allowlist discovery (adopter finding 35f669cb).
+      // Mirrors `shellExecution`: an author had no programmatic way to learn
+      // which roots `file_read`/`file_write` may touch (the shell allowlist was
+      // discoverable, the fs allowlist wasn't). Reports the runtime-side allowed
+      // roots, which also answers the cross-namespace "what's the runtime path?"
+      // question — the roots ARE the runtime's path vocabulary.
+      const fsAllow = this.deps.fsAllowlist;
+      out["fsExecution"] = {
+        allowlist: fsAllow === undefined
+          ? "(unset — default-deny; no file_read/file_write ops will run)"
+          : fsAllow,
+        description:
+          "`file_read` / `file_write` ops are gated by an operator-owned path " +
+          "allowlist (v1.0 Gate #7, default-deny): `allowlist` above is the set of " +
+          "absolute roots reads/writes may operate under (canonicalized — `..` and " +
+          "symlinks can't escape), or \"(unset — default-deny)\" when none is wired, in " +
+          "which case ALL file ops are refused with FilePathNotAllowedError. Configure " +
+          "via `SKILLSCRIPT_FS_ALLOWLIST` env (comma-separated absolute paths), the " +
+          "`fsAllowlist` field in skillscript.config.json, or `bootstrap({fsAllowlist: " +
+          "[...]})` programmatically. These paths are in the RUNTIME's filesystem " +
+          "namespace — when the authoring agent runs in a different namespace (a " +
+          "container vs the runtime host), use the runtime-side path shown here, not " +
+          "the author's local alias for the same directory. Keep approval-key / secret " +
+          "directories OUT of the allowlist.",
       };
     }
     // v0.23.0 — selective tool-schema fetch. `tool: "connector.tool"` (or a bare

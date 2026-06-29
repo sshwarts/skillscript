@@ -24,8 +24,8 @@ const REPO_ROOT = join(__dirname, "..");
 const PACKAGE_JSON = JSON.parse(readFileSync(join(REPO_ROOT, "package.json"), "utf8")) as Record<string, unknown>;
 
 describe("T7 — package.json polish", () => {
-  it("1. version is 0.26.0 (file_read(path, encoding=\"base64\") — read a file's raw bytes base64-encoded so a binary file inlines into an API payload without utf8 corruption; default utf8 unchanged; unknown encodings refused at runtime + tier-2 unknown-file-encoding lint; adopter request 7130c3bd)", () => {
-    expect(PACKAGE_JSON["version"]).toBe("0.26.0");
+  it("1. version is 0.26.1 (runtime_capabilities.fsExecution — surfaces the filesystem allowlist roots, mirroring shellExecution, so an author can discover which paths file_read/file_write may touch + the runtime-side path vocabulary; adopter finding 35f669cb)", () => {
+    expect(PACKAGE_JSON["version"]).toBe("0.26.1");
   });
 
   it("2. main + types + bin + engines.node ≥ 22.5 declared", () => {
