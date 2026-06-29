@@ -65,7 +65,15 @@ describe("v0.9.0 — approval gate", () => {
         const body = stampApprovalEd25519("# Skill: x\n# Status: Approved\nm:\n    emit(text=\"hi\")\ndefault: m\n", privateKeyPem);
         const ext = extractStatusFromBody(body)!;
         expect(verifyApprovalToken(body, ext.approvalToken!).ok).toBe(true);
-        const tampered = body.replace("hi", "BYE");
+        // Tamper an unambiguous slice of the SIGNED content. NOT a bare `"hi"`:
+        // the random base64url approval token (in the stripped-for-signing status
+        // line) contains "hi" ~2% of the time, and `replace` hits the first match
+        // — so a bare-"hi" tamper would sometimes corrupt the (unsigned) token
+        // instead of the body, leaving the canonical signed content unchanged and
+        // the "tampered" body still verifying (intermittent CI flake). `emit(text="hi")`
+        // contains `(`, `=`, `"` — none in the base64url alphabet — so it only
+        // matches the actual op.
+        const tampered = body.replace('emit(text="hi")', 'emit(text="BYE")');
         const v = verifyApprovalToken(tampered, ext.approvalToken!);
         expect(v.ok).toBe(false);
         if (!v.ok) expect(v.reason).toMatch(/signature is invalid/);
