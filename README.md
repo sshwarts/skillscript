@@ -17,7 +17,7 @@
 [![license](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 [![status](https://img.shields.io/badge/status-pre--1.0-orange)](#status)
 
-> **TL;DR** — `npm install -g skillscript-runtime`, then `skillfile init` and `skillfile dashboard`. See [Quickstart](#quickstart).
+> **TL;DR** — `npm install -g skillscript-runtime && skillfile init && skillfile dashboard`. See [Quickstart](#quickstart).
 
 ## Contents
 
@@ -217,6 +217,14 @@ If that bet is wrong, skillscript stays a nice niche tool. If it's right, skills
 Skillscript is **operated by a human and authored with an agent**. You install and run the runtime, wire it into your agent as an MCP server, then build skills together — the agent writes them (they land as `Draft`), and you approve what's allowed to run. The three steps below follow that division of labor.
 
 ### 1. Human — install and set up
+
+Fastest path — the defaults work; this gets you a running server on `http://localhost:7878`:
+
+```bash
+npm install -g skillscript-runtime && skillfile init && skillfile dashboard
+```
+
+`init` scaffolds `~/.skillscript/` (config, signing keys, demo skills); `dashboard` is a foreground server (Ctrl-C to stop). The annotated breakdown:
 
 ```bash
 npm install -g skillscript-runtime

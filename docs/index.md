@@ -176,6 +176,14 @@ Skillscript is **operated by a human and authored with an agent**. You install a
 
 ### 1. Human — install and set up
 
+Fastest path — the defaults work; this gets you a running server on `http://localhost:7878`:
+
+```bash
+npm install -g skillscript-runtime && skillfile init && skillfile dashboard
+```
+
+`init` scaffolds `~/.skillscript/` (config, signing keys, demo skills); `dashboard` is a foreground server (Ctrl-C to stop). The annotated breakdown:
+
 ```bash
 npm install -g skillscript-runtime
 skillfile init             # scaffolds ~/.skillscript/ — config, signing keys, demo skills
