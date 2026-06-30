@@ -17,7 +17,7 @@
 [![license](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 [![status](https://img.shields.io/badge/status-pre--1.0-orange)](#status)
 
-> **TL;DR** — `npm install -g skillscript-runtime`, then `skillfile dashboard`. See [Quickstart](#quickstart).
+> **TL;DR** — `npm install -g skillscript-runtime`, then `skillfile init` and `skillfile dashboard`. See [Quickstart](#quickstart).
 
 ## Contents
 
