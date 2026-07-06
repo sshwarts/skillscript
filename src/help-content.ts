@@ -231,7 +231,7 @@ Append to a binding. Type-dispatches on the existing target:
 - **List-typed target** → push (\`$set FOUND = []\` then \`$append FOUND \${ID}\`)
 - **String-typed target** → concatenate (\`$set REPORT = ""\` then \`$append REPORT "more text"\`)
 
-Lint guards: \`uninitialized-append\` (no \`$set\` / \`# Vars:\` init); \`foreach-local-accumulator-target\` (init inside the same foreach as the append — silently loses data each iteration); \`append-to-non-list\` (numeric/boolean/null init).
+Lint guards: \`uninitialized-append\` (no \`$set\` / \`# Vars:\` init); \`foreach-local-accumulator-target\` (init inside the same foreach as the append — silently loses data each iteration); \`append-to-non-list\` (numeric/boolean/null init); \`append-structured-to-string\` (tier-3 advisory — appending a bare \`$\` op output, possibly structured, to a string accumulator mangles it; project a \`.field\` or \`|json\`-serialize).
 
 \`\`\`
 walk:
@@ -949,6 +949,7 @@ Three tiers per ERD §3:
 - \`deferred-skill-reference\` — composition ref (\`inline\` / \`$ execute_skill\` / \`# Templates:\`) targets a skill not currently in the SkillStore; resolution deferred to execute time. Confirms the forward-reference path is engaged; clears once the target is stored.
 - \`unparsed-json-field-access\` — op text contains \`$(VAR|json_parse).field\`; the \`|json_parse\` filter is no longer supported. Use \`$ json_parse $(VAR) -> P\` then \`$(P.field)\`.
 - \`object-iteration-advisory\` — \`foreach IT in \${VAR}\` iterates a bound variable whose origin is a \`$\` MCP tool output, without a \`.field\` accessor. MCP tools commonly wrap arrays in an envelope object (\`.items\`, \`.results\`, \`.issuesPage\`, \`.data\`, \`.records\`). Check the tool's response shape; rewrite as \`foreach IT in \${VAR.items}\` (or the correct field).
+- \`append-structured-to-string\` — \`$append VAR \${REF}\` where VAR is a string accumulator and \${REF} is a bare \`$\` op output (possibly a structured list/object) with no \`.field\` accessor and no \`|json\` filter. Appending a structured value to a string stringifies + fragments it (an array-of-objects comma-splits into a mangled blob). Sibling of \`object-iteration-advisory\` — same statically-unknowable return shape, hence advisory not warning. Project a scalar field (\`\${REF.detail}\`) or serialize explicitly (\`\${REF|json}\`); both suppress the advisory.
 - \`disallowed-tool\` (tier-1) — \`$ name.tool\` references a tool not in the connector's \`allowed_tools\` allowlist. Either rewrite the skill to use a permitted tool or update \`connectors.json\` to grant access. Runtime defense-in-depth refuses disallowed dispatch even if lint is bypassed.
 
 \`compile_skill({source})\` runs the full lint preflight and reports

@@ -2,6 +2,12 @@
 
 Each release carries an **Upgrade impact:** line (first in its section) so a bump's requirements are visible at a glance. Tags (closed set): **BREAKING** (a manual change is needed to keep working) · **RE-APPROVE** (secured-mode signature invalidation — skills must be re-approved before they run) · **CONFIG** (`connectors.json` / config edit needed) · **none (additive)** (no action; backward-compatible). Standard from 0.20.0 forward; the pre-0.20 transitions that need action are flagged inline below (0.14.0, 0.18.8, 0.19.0). Full walkthrough: [UPGRADING.md](UPGRADING.md).
 
+## 0.26.4 — 2026-07-06 — lint: `append-structured-to-string` advisory
+
+**Upgrade impact:** none (additive). New tier-3 advisory (info); never blocks compilation.
+
+- **New lint `append-structured-to-string`** (tier-3 advisory) — flags `$append VAR ${REF}` where `VAR` is a **string accumulator** and `${REF}` is a bare `$` op output (a possibly-structured list/object) carrying **no `.field` accessor and no `|json` filter**. Appending a structured value to a string stringifies and fragments it — an array-of-objects comma-splits into a mangled, double-escaped blob. Found dogfooding `enter-project` (`$append DOMAIN_INSTRUCTIONS ${DI}` with `DI` = `amp_list_memories`'s array-of-records; Perry proposal `c052581b`). The fix is pure authoring, which the message points at: project a scalar field (`${REF.detail}`) or serialize explicitly (`${REF|json}`) — **both suppress the advisory**. It's the `$append`-side sibling of `object-iteration-advisory` and reuses the same origin analysis; **advisory, not warning**, because a `$` op's return shape is statically unknowable (a warning would over-fire on legitimate string→string appends). String-target typing reuses `append-to-non-list`'s static-init reasoning.
+
 ## 0.26.3 — 2026-07-06 — fix: empty-input zero-iteration now covers the `${V}` brace form
 
 **Upgrade impact:** none (additive). Completes the 0.26.2 #2 fix on the code path it missed; nothing that worked in 0.26.2 changes.

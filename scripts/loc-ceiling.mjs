@@ -256,7 +256,10 @@ const CORE_PATHS = [
 // secret-undeclared) + the parser `# Requires: secret.NAME` branch. The
 // resolver/provider abstraction itself lives in src/secrets.ts (NOT narrow
 // core). Clear, security-relevant code; per the signal-not-budget rule.
-const NARROW_MAX_LOC = 12200;
+// v0.26.4: nudged 12200 → 12300 for the `append-structured-to-string` tier-3
+// lint advisory (Perry `c052581b`) — a self-contained rule that reuses the
+// existing origin/static-init plumbing. Clear code; signal-not-budget.
+const NARROW_MAX_LOC = 12300;
 const NARROW_MAX_FILES = 23;
 const BROAD_INFO_LOC = 9500;
 const BROAD_INFO_FILES = 28;

@@ -3347,6 +3347,83 @@ const APPEND_TO_NON_LIST: LintRule = {
   },
 };
 
+// v0.26.4 — `append-structured-to-string` advisory (Perry `c052581b`).
+// Sibling of `object-iteration-advisory`: same origin analysis (a `$` op
+// output whose return shape is statically UNKNOWABLE), different consumer.
+// Trigger: `$append <string-accumulator> ${REF}` where REF's root is a `$`
+// op output with NO `.field` accessor and NO `|json` filter. If REF is a
+// structured value (list/object), string-appending it stringifies and
+// fragments it — the array-of-objects comma-splits into a mangled blob
+// (observed in enter-project: `$append DOMAIN_INSTRUCTIONS ${DI}` with
+// DI = amp_list_memories). The fix is pure authoring: project a field
+// (`${M.detail}`) or serialize (`${REF|json}`).
+//
+// Severity: tier-3 advisory (info), matching its sibling. We CANNOT tell a
+// string-returning `$` op from a structured-returning one statically, so a
+// warning would over-fire on legitimate string→string appends. The `.field`
+// / `|json` escape hatches suppress it on intentional use, and the string-
+// target inference reuses `append-to-non-list`'s reliable static-init typing.
+const APPEND_STRUCTURED_TO_STRING: LintRule = {
+  id: "append-structured-to-string",
+  severity: "info",
+  description: "`$append VAR ${REF}` where VAR is a string accumulator and ${REF} is a bare `$` op output (possibly a structured list/object) with no `.field` accessor and no `|json` filter. Appending a structured value to a string stringifies and fragments it.",
+  remediation: "If ${REF} is a structured value, project a scalar field (`${REF.detail}`) or serialize it explicitly (`${REF|json}`). If ${REF} is already a scalar string, this advisory doesn't apply.",
+  check: (ctx) => {
+    const findings: LintFinding[] = [];
+    const origins = buildBindingOrigins(ctx.parsed);
+    // Single bare ref: `${REF}` or `$(REF)`, capturing the full interior
+    // (which may carry a `.accessor` and/or a `|filter` chain).
+    const bareRefFull = /^\s*\$(?:\(([^)]*)\)|\{([^}]*)\})\s*$/;
+    for (const [targetName, target] of ctx.parsed.targets) {
+      // String-target inference — same static-init typing `append-to-non-list`
+      // uses: a `# Vars:` default or `$set VAR = "literal"` (no `$(REF)`) that
+      // is neither a list literal nor a numeric/bool/null/object literal is a
+      // string accumulator. Collect target-local $set string inits first.
+      const staticInits = new Map<string, string>();
+      for (const v of ctx.parsed.vars) {
+        if (v.default !== undefined) staticInits.set(v.name, v.default);
+      }
+      walkOps(target.ops, (op) => {
+        if (op.kind === "$set" && op.setName !== undefined && op.setValue !== undefined && !/\$[(\{]/.test(op.setValue)) {
+          staticInits.set(op.setName, op.setValue);
+        }
+      });
+      walkOps(target.ops, (op) => {
+        if (op.kind !== "$append" || op.setName === undefined || op.setValue === undefined) return;
+        // (a) target must be a string accumulator.
+        const init = staticInits.get(op.setName);
+        if (init === undefined) return;                  // unknown target type — don't guess
+        if (isStaticListLiteral(init)) return;            // list target — bare append is correct
+        if (isNumericBooleanOrNullLiteral(init)) return;  // non-composable — append-to-non-list owns this
+        // (b) RHS must be a single bare ref.
+        const m = bareRefFull.exec(op.setValue);
+        if (m === null) return;
+        const interior = (m[1] ?? m[2])!;
+        // (c) escape hatches: a `.field` accessor (projecting a scalar) or a
+        // `|json` filter (explicit serialization) both suppress.
+        const beforeFilter = interior.split("|")[0]!;
+        const filterChain = interior.slice(beforeFilter.length);
+        if (beforeFilter.includes(".")) return;
+        if (/\bjson\b/.test(filterChain)) return;
+        const rootVar = beforeFilter.trim();
+        // Structured signal = a `$` op output. Return shape is statically
+        // unknowable (advisory, not warning). shell/$set/vars/foreach-iter
+        // origins are not the target of this rule.
+        const origin = origins.get(rootVar);
+        if (origin === undefined || origin.kind !== "op-output" || origin.op !== "$") return;
+        findings.push({
+          rule: "append-structured-to-string",
+          severity: "info",
+          message: `In target '${targetName}': \`$append ${op.setName} \${${interior}}\` appends a bare \`$\` op output to string accumulator \`${op.setName}\`. If \${${interior}} is a structured value (list/object — e.g. an array of records), string-appending it stringifies and fragments it (the array comma-splits into a mangled blob). Project a field — \`\${${rootVar}.detail}\` — or serialize explicitly — \`\${${rootVar}|json}\`. If it's already a scalar string, ignore this.`,
+          block: targetName,
+          extras: { var_name: op.setName, ref: interior, ...(origin.toolName !== undefined ? { tool_name: origin.toolName } : {}) },
+        });
+      });
+    }
+    return findings;
+  },
+};
+
 // v0.5.0 item 1 — silent arg-truncation footgun: `$ tool key=$(VAR)`
 // without surrounding quotes. If VAR resolves to a value with whitespace
 // at runtime, the rendered string `key=value with spaces` gets re-
@@ -3751,6 +3828,7 @@ const RULES: LintRule[] = [
   PLUGIN_COLLISION,
   UNPARSED_JSON_FIELD_ACCESS,
   OBJECT_ITERATION_ADVISORY,
+  APPEND_STRUCTURED_TO_STRING,
   ADDRESS_ROUTED_WAKE_INFO,
   BODY_TEMPLATE_DETECTED,
   EMIT_WITH_TEMPLATE,
