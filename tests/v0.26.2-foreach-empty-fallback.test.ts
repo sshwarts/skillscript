@@ -21,10 +21,10 @@ import { join } from "node:path";
  *       through every filter unchanged, so no existing behavior shifts.
  */
 
-async function runSkill(src: string): Promise<{ emissions: string[]; errors: unknown[] }> {
+async function runSkill(src: string, inputs?: Record<string, string>): Promise<{ emissions: string[]; errors: unknown[] }> {
   const home = mkdtempSync(join(tmpdir(), "v0262-"));
   const wired = bootstrap({ skillsDir: join(home, "skills"), traceDir: join(home, "traces") });
-  const compiled = await compile(src);
+  const compiled = await compile(src, inputs ? { inputs } : undefined);
   const result = await execute(compiled.parsed, compiled.resolvedVariables, compiled.targetOrder, { registry: wired.registry });
   return { emissions: result.emissions, errors: result.errors };
 }
@@ -40,6 +40,43 @@ describe("v0.26.2 #2 — foreach over empty string input iterates zero times", (
 
   it("whitespace-only var → zero iterations", async () => {
     const src = `# Skill: t\n# Status: Approved\n# Vars: IDS="   "\nrun:\n    foreach ID in $(IDS):\n        emit(text="pass=[$(ID)]")\n    emit(text="done")\ndefault: run\n`;
+    const result = await runSkill(src);
+    expect(result.errors).toEqual([]);
+    expect(result.emissions).toEqual(["done"]);
+  });
+
+  // --- Perry's deploy repro (2db95446): the BRACE form `${V}` + runtime INPUTS.
+  // The original tests all used `$(IDS)` (paren) + `# Vars:` defaults, which hit
+  // the guarded `$(REF)` branch. `${V}` does NOT match that regex — it falls
+  // through to the substituteRuntime path, which lacked the guard. This is the
+  // path an actual caller-supplied-list skill uses, so it's the one that must be
+  // covered end-to-end via execute-with-inputs.
+  it("brace form ${V} + empty runtime INPUT → zero iterations (deploy repro)", async () => {
+    const src = `# Skill: t\n# Status: Approved\n# Vars: V\nrun:\n    foreach A in \${V}:\n        emit(text="pass=[$(A)]")\n    emit(text="done")\ndefault: run\n`;
+    const result = await runSkill(src, { V: "" });
+    expect(result.errors).toEqual([]);
+    expect(result.emissions).toEqual(["done"]);
+  });
+
+  it("brace form ${V} + whitespace runtime INPUT → zero iterations (deploy repro)", async () => {
+    const src = `# Skill: t\n# Status: Approved\n# Vars: V\nrun:\n    foreach A in \${V}:\n        emit(text="pass=[$(A)]")\n    emit(text="done")\ndefault: run\n`;
+    const result = await runSkill(src, { V: "   " });
+    expect(result.errors).toEqual([]);
+    expect(result.emissions).toEqual(["done"]);
+  });
+
+  it("brace form ${V} + non-empty runtime INPUT → one iteration (control)", async () => {
+    // Perry's control: proves inputs ARE applied and the value is exactly what
+    // we set — so the zero-iteration result above is the guard firing, not a
+    // harness artifact.
+    const src = `# Skill: t\n# Status: Approved\n# Vars: V\nrun:\n    foreach A in \${V}:\n        emit(text="pass=[$(A)]")\ndefault: run\n`;
+    const result = await runSkill(src, { V: "solo" });
+    expect(result.errors).toEqual([]);
+    expect(result.emissions).toEqual(["pass=[solo]"]);
+  });
+
+  it("brace form ${IDS} + empty # Vars default → zero iterations", async () => {
+    const src = `# Skill: t\n# Status: Approved\n# Vars: IDS=""\nrun:\n    foreach ID in \${IDS}:\n        emit(text="pass=[$(ID)]")\n    emit(text="done")\ndefault: run\n`;
     const result = await runSkill(src);
     expect(result.errors).toEqual([]);
     expect(result.emissions).toEqual(["done"]);

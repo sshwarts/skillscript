@@ -2030,6 +2030,13 @@ function resolveListExpr(expr: string, vars: Map<string, unknown>): unknown[] {
     });
   }
   const sub = substituteRuntime(trimmed, vars);
+  // v0.26.2 (Perry `9ed7554b` #2, deploy repro `2db95446`): the SAME empty→zero
+  // guard as the `$(REF)` branch above, but for the `${REF}` brace form (and any
+  // other expr that resolves via substitution). The brace form does NOT match the
+  // `$(...)` regex, so a whitespace-only/empty resolved value used to fall straight
+  // through to `[sub]` = `[""]` — one empty iteration. `foreach a in ${V}` with
+  // V="" now iterates zero times, matching `$(V)`, `[]`, and an absent ref.
+  if (sub.trim() === "") return [];
   try {
     const v = JSON.parse(sub);
     if (Array.isArray(v)) return v;

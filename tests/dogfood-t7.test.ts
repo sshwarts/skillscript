@@ -24,8 +24,8 @@ const REPO_ROOT = join(__dirname, "..");
 const PACKAGE_JSON = JSON.parse(readFileSync(join(REPO_ROOT, "package.json"), "utf8")) as Record<string, unknown>;
 
 describe("T7 — package.json polish", () => {
-  it("1. version is 0.26.2 (foreach/filter ergonomics: empty-string input iterates zero times + a downstream |fallback rescues an undefined base regardless of chain position; Perry dogfood 9ed7554b #2/#3)", () => {
-    expect(PACKAGE_JSON["version"]).toBe("0.26.2");
+  it("1. version is 0.26.3 (completes v0.26.2 #2: the empty→zero-iteration guard now also covers the `${V}` brace form / substitution path, not just `$(REF)`; Perry deploy repro 9ed7554b/2db95446)", () => {
+    expect(PACKAGE_JSON["version"]).toBe("0.26.3");
   });
 
   it("2. main + types + bin + engines.node ≥ 22.5 declared", () => {

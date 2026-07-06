@@ -2,6 +2,12 @@
 
 Each release carries an **Upgrade impact:** line (first in its section) so a bump's requirements are visible at a glance. Tags (closed set): **BREAKING** (a manual change is needed to keep working) · **RE-APPROVE** (secured-mode signature invalidation — skills must be re-approved before they run) · **CONFIG** (`connectors.json` / config edit needed) · **none (additive)** (no action; backward-compatible). Standard from 0.20.0 forward; the pre-0.20 transitions that need action are flagged inline below (0.14.0, 0.18.8, 0.19.0). Full walkthrough: [UPGRADING.md](UPGRADING.md).
 
+## 0.26.3 — 2026-07-06 — fix: empty-input zero-iteration now covers the `${V}` brace form
+
+**Upgrade impact:** none (additive). Completes the 0.26.2 #2 fix on the code path it missed; nothing that worked in 0.26.2 changes.
+
+- **`foreach` over an empty/whitespace string now iterates zero times for the `${V}` brace form too**, not just `$(REF)`. The 0.26.2 guard was added inside `resolveListExpr`'s `$(REF)` branch, but the `${V}` brace form (and any expression resolved via substitution) falls through to a different path that still wrapped an empty resolved value as `[""]` → one empty iteration. Since a caller-supplied-list skill typically writes `foreach A in ${V}` and passes `V` as a runtime input, the deployed bug was exactly the case 0.26.2 set out to fix (found by Perry re-verifying on the published runtime, `2db95446`). The empty→zero guard now sits on both paths; `foreach A in ${V}` with `V=""` / `V="   "` iterates zero times, matching `$(V)`, `[]`, and an absent ref. Root cause was a **test-coverage gap** — the 0.26.2 tests all drove the paren form; new end-to-end tests now drive the brace form via `execute`-with-inputs (the real caller path).
+
 ## 0.26.2 — 2026-07-06 — foreach/filter ergonomics: empty-input zero-iteration + order-independent `|fallback`
 
 **Upgrade impact:** none (additive). Two cases that previously errored now succeed; nothing that already worked changes behavior.
