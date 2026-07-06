@@ -24,8 +24,8 @@ const REPO_ROOT = join(__dirname, "..");
 const PACKAGE_JSON = JSON.parse(readFileSync(join(REPO_ROOT, "package.json"), "utf8")) as Record<string, unknown>;
 
 describe("T7 — package.json polish", () => {
-  it("1. version is 0.26.4 (new tier-3 lint `append-structured-to-string`: appending a bare `$` op output to a string accumulator may mangle a structured value; sibling of object-iteration-advisory; Perry lint proposal c052581b)", () => {
-    expect(PACKAGE_JSON["version"]).toBe("0.26.4");
+  it("1. version is 0.26.5 (new `help({topic: \"error-handling\"})` topic — the containment playbook on the agent-reachable tool-help surface, not just the language-ref doc; + server-instructions robustness line)", () => {
+    expect(PACKAGE_JSON["version"]).toBe("0.26.5");
   });
 
   it("2. main + types + bin + engines.node ≥ 22.5 declared", () => {

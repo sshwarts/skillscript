@@ -54,7 +54,7 @@ describe("v0.2.8 — help MCP tool", () => {
     expect(result["topic"]).toBeNull();
     expect(typeof result["content"]).toBe("string");
     expect((result["content"] as string)).toMatch(/quickstart/i);
-    expect(result["available_topics"]).toEqual(["ops", "frontmatter", "examples", "composition", "connectors", "lint-codes"]);
+    expect(result["available_topics"]).toEqual(["ops", "frontmatter", "examples", "composition", "error-handling", "connectors", "lint-codes"]);
     // v0.7.1 quickstart structure — trigger→process→deliver model, three op classes,
     // canonical surface, plus the basics (branching, iteration, lint).
     expect((result["content"] as string)).toMatch(/trigger.*process.*deliver|three.*op.*class/i);
@@ -76,6 +76,21 @@ describe("v0.2.8 — help MCP tool", () => {
     expect(content).toMatch(/Runtime-intrinsic function-calls/);
     expect(content).toMatch(/shell\(command=/);
     expect(content).toMatch(/execute_skill/);
+  });
+
+  it("topic=error-handling returns the containment playbook (v0.26.5)", async () => {
+    const { mcpServer } = bootstrap({ skillsDir: join(home, "skills"), traceDir: join(home, "traces") });
+    const result = await callTool(mcpServer, "help", { topic: "error-handling" });
+    expect(result["topic"]).toBe("error-handling");
+    const content = result["content"] as string;
+    // The four containment primitives + the per-call opt-out answer.
+    expect(content).toMatch(/fallible op/i);
+    expect(content).toMatch(/\(fallback:/);
+    expect(content).toMatch(/# OnError:/);
+    expect(content).toMatch(/else:/);
+    // The fan-out rule (the morning-brief class) + degrade-loud.
+    expect(content).toMatch(/fan-out/i);
+    expect(content).toMatch(/Degrade LOUD/);
   });
 
   it("topic=frontmatter returns header reference", async () => {

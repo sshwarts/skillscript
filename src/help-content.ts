@@ -34,8 +34,9 @@ export const SKILLSCRIPT_USAGE_INSTRUCTIONS = `A Skillscript runtime is wired ov
 - \`compile_skill({name})\` → preview the plan, no side effects.
 
 **Repeating a routine? Capture it as a skill.** What you can script = the wired connectors, models, and allowed shell binaries from \`runtime_capabilities()\` — that list is your menu. When you catch yourself re-running work over any of them, author it. If something you'd need isn't wired yet, ask the operator to add it, then capture it.
-- \`help({topic})\` → the language (ops, frontmatter, connectors, lint-codes).
+- \`help({topic})\` → the language (ops, frontmatter, composition, error-handling, connectors, lint-codes).
 - Draft → \`lint_skill({source})\` → \`compile_skill({source})\` → \`skill_write({name, source})\`.
+- **Robustness:** a fallible op (\`shell\`, \`$\` dispatch, \`execute_skill\`, \`file_read\`, \`$ json_parse\`) aborts the target on failure unless given \`(fallback: "…")\`; in a fan-out, fallback each leg or one failure sinks the rest. See \`help({topic: "error-handling"})\`.
 - It lands **Draft** — you can't self-approve; a human does. Treat anything you authored as not-yet-runnable until approved.`;
 
 const QUICKSTART = `# Skillscript — quickstart
@@ -106,6 +107,8 @@ The legacy \`$(VAR)\` form still compiles with a tier-2 \`deprecated-substitutio
 ## 5. Result binding + fallback
 
 Most dispatch ops accept \`-> VAR\` to bind their output. Reference later via \`\${VAR}\`. Optional \`(fallback: "default")\` after \`-> VAR\` binds the fallback on dispatch error instead of propagating.
+
+**A fallible op with no \`(fallback:)\` aborts the whole target on failure** (and in a fan-out, takes the sibling legs down with it). To keep one call from being able to sink the skill, give it \`(fallback: "…")\`. See \`help({topic: "error-handling"})\` for the full containment discipline.
 
 ## 6. Branching
 
@@ -196,7 +199,7 @@ What this example demonstrates:
 **Pattern note:** prefer \`emit(text="...")\` per line over building a multi-line accumulator string with \`$append\`. The runtime threads emissions into the agent-bound delivery naturally, and the per-line shape is what cold authors reach for. Multi-line string accumulators are a real pattern for file-writing scenarios; emit is the natural choice for agent-targeted delivery via \`# Output: agent:\`.
 
 Use \`help({topic: "ops"})\`, \`help({topic: "frontmatter"})\`, \`help({topic: "examples"})\`,
-\`help({topic: "connectors"})\`, or \`help({topic: "lint-codes"})\` for deeper sections.
+\`help({topic: "composition"})\`, \`help({topic: "error-handling"})\`, \`help({topic: "connectors"})\`, or \`help({topic: "lint-codes"})\` for deeper sections.
 
 **Note on substitution form.** Use \`\${VAR}\` for variable substitution. The bare-paren \`$(VAR)\` form still compiles with a tier-2 \`deprecated-substitution-shape\` warning.
 `;
@@ -839,6 +842,43 @@ Lint \`unknown-returns-ref\` (tier-1) catches names declared in \`# Returns:\` t
 See \`help({topic: "examples"})\` example 4 for a worked orchestrator skill.
 `;
 
+const ERROR_HANDLING = `# Error handling & containment — keeping one failure from aborting the skill
+
+**Skillscript has no try/catch — by design. Robustness is authored, not caught.** An unguarded **fallible op** (anything reaching outside the runtime) propagates its failure up and **aborts the whole target** — and in a composition/fan-out, aborts every sibling op that hadn't run yet. If you don't want a single call to be able to sink the skill, you contain it explicitly.
+
+**Fallible ops** (can throw at runtime): \`shell(...)\`, external \`$ <connector>.<tool>\` dispatch, \`execute_skill(...)\`, \`file_read(...)\`, \`$ json_parse\` (throws on off-shape input). \`$set\` / \`emit\` / control flow do not throw.
+
+## The four containment primitives — narrowest to broadest
+
+| Primitive | Scope | What it does |
+|---|---|---|
+| \`(fallback: "…")\` op trailer | the single call | **The per-call opt-out.** \`shell(...) -> R (fallback: "…")\`; same on \`$ tool\`, \`file_read\`, \`execute_skill\`. On throw OR empty result, binds the fallback and continues instead of aborting the target. |
+| \`\${REF\\|fallback:"x"}\` pipe filter | a single reference | Degrades an unresolved/empty value at use-time: \`\${R\\|fallback:"—"}\`. |
+| \`else:\` block | the whole target | Target-level error handler — catches a throw and runs alternate ops. \`\${ERROR_CONTEXT}\` (\`.kind\` / \`.message\` / \`.target\`) is available inside it. |
+| \`# OnError: <skill>\` | the whole skill | Fallback skill invoked when an op fails and no \`else:\` catches. |
+
+To keep **one specific call** from aborting the skill, the direct answer is: give it \`(fallback: "…")\`.
+
+## The discipline (5 rules)
+
+**Rule 1 — Fallback every fallible op whose failure shouldn't be fatal.** A bare fallible op with no \`(fallback:)\` turns a transient upstream hiccup into a hard target abort. Give it \`-> VAR (fallback: "<sensible default>")\`. (Leaving it bare is a valid choice too — that's how you say "this op IS critical; abort if it dies.")
+
+**Rule 2 — In a fan-out, fallback EACH leg independently.** A gather/compose skill running N independent legs (weather + mailbox + calendar + …) must fallback each leg, or the first leg to fail takes the rest down — later ops never run and every output returns empty. One non-critical leg must never sink the critical ones:
+\`\`\`
+gather:
+    execute_skill(skill_name="weather-summary") -> WX   (fallback: "(weather unavailable)")
+    execute_skill(skill_name="mailbox-triage")  -> MAIL (fallback: "(mailbox empty)")
+    execute_skill(skill_name="calendar-today")  -> CAL  (fallback: "(no calendar data)")
+\`\`\`
+Without the per-leg fallbacks, one failed leg aborts the gather and the other two return empty.
+
+**Rule 3 — a \`|fallback\` anywhere in a filter chain rescues an unresolved reference.** \`\${x\\|fallback:"d"}\`, \`\${x\\|fallback:"d"\\|trim}\`, and \`\${x\\|trim\\|fallback:"d"}\` all degrade an unresolved \`x\` to the fallback (position no longer matters, v0.26.2+). A chain with NO \`|fallback\` still throws on an unresolved ref — that's your signal to add one. Note: \`|fallback\` only rescues genuinely-unresolved refs; a present-but-empty value still flows through the other filters.
+
+**Rule 4 — A body-text output template must not reference a var a fallible step might leave unset.** The template renders after the target runs; if a fallible \`$set\` was skipped by an upstream throw, its var is unset and the template itself hard-fails (\`Unresolved variable reference: $(AREA)\`). Either set every template var to a default before the fallible step, or source each with a \`|fallback\` so it is always bound.
+
+**Rule 5 — Degrade LOUD, not silent.** A fallback value should be a visible marker ("unavailable", "—", "n/a") — never empty, never a plausible-but-wrong value. A degraded run must be diagnosable: surface that a leg degraded, don't silently ship a blank or a fake reading. Clean-throw-then-clean-degrade beats both a hard abort and a silent lie.
+`;
+
 const CONNECTORS_PROLOGUE = `# Connectors
 
 Skillscript skills don't import packages — they invoke connectors. The runtime resolves dispatches through a typed registry of five contracts:
@@ -967,7 +1007,7 @@ export function helpResponse(
       topic: null,
       version: runtimeVersion,
       content: QUICKSTART,
-      available_topics: ["ops", "frontmatter", "examples", "composition", "connectors", "lint-codes"],
+      available_topics: ["ops", "frontmatter", "examples", "composition", "error-handling", "connectors", "lint-codes"],
     };
   }
   let content: string;
@@ -976,10 +1016,11 @@ export function helpResponse(
     case "frontmatter": content = FRONTMATTER; break;
     case "examples":    content = EXAMPLES; break;
     case "composition": content = COMPOSITION; break;
+    case "error-handling": content = ERROR_HANDLING; break;
     case "connectors":  content = renderConnectorsTopic(registry); break;
     case "lint-codes":  content = LINT_CODES; break;
     default:
-      content = `# Unknown topic '${topic}'\n\nValid topics: ops, frontmatter, examples, composition, connectors, lint-codes`;
+      content = `# Unknown topic '${topic}'\n\nValid topics: ops, frontmatter, examples, composition, error-handling, connectors, lint-codes`;
   }
   return { topic, version: runtimeVersion, content };
 }

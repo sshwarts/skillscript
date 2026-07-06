@@ -2,6 +2,13 @@
 
 Each release carries an **Upgrade impact:** line (first in its section) so a bump's requirements are visible at a glance. Tags (closed set): **BREAKING** (a manual change is needed to keep working) · **RE-APPROVE** (secured-mode signature invalidation — skills must be re-approved before they run) · **CONFIG** (`connectors.json` / config edit needed) · **none (additive)** (no action; backward-compatible). Standard from 0.20.0 forward; the pre-0.20 transitions that need action are flagged inline below (0.14.0, 0.18.8, 0.19.0). Full walkthrough: [UPGRADING.md](UPGRADING.md).
 
+## 0.26.5 — 2026-07-06 — help: `error-handling` topic (containment playbook on the tool-help surface)
+
+**Upgrade impact:** none (additive). New `help()` topic + expanded server instructions; no behavior change.
+
+- **New `help({topic: "error-handling"})` topic** — the "how do I keep one call from aborting the whole skill" playbook, now reachable through the **tool-help surface an agent author actually uses** (not just the language-ref doc, which agents authoring via MCP never read). Covers the four containment primitives — the `(fallback: "…")` op trailer (the per-call opt-out), the `${REF|fallback:"x"}` pipe filter, the `else:` block, and `# OnError:` — plus the five-rule discipline (fallback every fallible op; fallback each fan-out leg or one failure sinks the rest; `|fallback` position-independence; output-template var safety; degrade **loud**, not silent). Content mirrors the language-ref "Robustness & error containment" section so the two stay in sync.
+- **Discoverability wiring:** `error-handling` added to `available_topics`, the `help` tool description's topic list, and the unknown-topic message; the no-arg quickstart now names the `(fallback:)` primitive and points to the topic; the **MCP server instructions** (shown to every agent at session start) gained a one-line robustness note. So an agent meets the containment guidance passively (server instructions), on demand (`help`), and at the quickstart — the surfaces it uses, rather than the docs it doesn't.
+
 ## 0.26.4 — 2026-07-06 — lint: `append-structured-to-string` advisory
 
 **Upgrade impact:** none (additive). New tier-3 advisory (info); never blocks compilation.
