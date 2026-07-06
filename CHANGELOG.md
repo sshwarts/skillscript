@@ -2,6 +2,15 @@
 
 Each release carries an **Upgrade impact:** line (first in its section) so a bump's requirements are visible at a glance. Tags (closed set): **BREAKING** (a manual change is needed to keep working) · **RE-APPROVE** (secured-mode signature invalidation — skills must be re-approved before they run) · **CONFIG** (`connectors.json` / config edit needed) · **none (additive)** (no action; backward-compatible). Standard from 0.20.0 forward; the pre-0.20 transitions that need action are flagged inline below (0.14.0, 0.18.8, 0.19.0). Full walkthrough: [UPGRADING.md](UPGRADING.md).
 
+## 0.26.2 — 2026-07-06 — foreach/filter ergonomics: empty-input zero-iteration + order-independent `|fallback`
+
+**Upgrade impact:** none (additive). Two cases that previously errored now succeed; nothing that already worked changes behavior.
+
+Both fixes come from Perry dogfooding a list-driven `enter-project` skill (thread 9ed7554b):
+
+- **`foreach` over an empty/whitespace-only string input now iterates zero times** (was: one iteration with an empty element). Passing `RULE_IDS=""` into a skill and iterating it used to run a single pass with `RID=""`, which then blew up downstream (e.g. `amp_get_memory("")`). An empty string is "no items", so it now matches `[]` and an absent ref — both already yielded zero iterations. A JSON-array string and a non-empty scalar are unaffected (still parsed / still wrapped to one iteration).
+- **A `|fallback` now rescues an unresolved reference regardless of its position in the filter chain.** Previously only a *lone* `|fallback`, or a `|fallback` placed *first*, rescued an undefined base; any transforming filter ahead of it (`${x|trim|fallback:"d"}`, `${x|length|fallback:"0"}`) threw `Unresolved variable reference` before the fallback could fire. Now an undefined base propagates lazily past intervening filters to the fallback — matching Jinja's `undefined|filter|default` contract, so a chain containing `|fallback` never explodes on a missing ref. **Scoped to `undefined` only:** a value that resolves — including a whitespace string like `"  "` — still flows through every filter unchanged (`${WS|length|fallback:"0"}` with `WS="  "` is still `"2"`, not `"0"`), so no existing behavior shifts. A chain with **no** `|fallback` still throws on an unresolved ref exactly as before.
+
 ## 0.26.1 — 2026-06-29 — runtime_capabilities surfaces the filesystem allowlist
 
 **Upgrade impact:** none (additive). New discovery field; no behavior change.

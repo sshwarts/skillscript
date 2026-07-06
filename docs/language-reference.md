@@ -1250,6 +1250,17 @@ Authors writing complex conditional logic should consider:
 
 Skills are orchestration, not computation. When the conditional logic feels Turing-complete, the work belongs in a connector.
 
+## Iterating a caller-supplied list
+`execute_skill` inputs are strings, and `foreach` does NOT comma-split a string input — `foreach D in ${DOMAINS}` with `DOMAINS="a,b"` runs ONCE with `D="a,b"`. To iterate a caller-supplied list, pass it as a JSON-array string and parse it first:
+```
+# Vars: DOMAINS
+run:
+    $ json_parse ${DOMAINS} -> DS      # DOMAINS = '["a","b"]'
+    foreach D in ${DS}:
+        ...
+```
+An empty list (`DOMAINS='[]'`, or an empty/whitespace string) iterates zero times (v0.26.2+). The comma-split affordance is for `# Vars:` DEFAULTS only, not runtime inputs — there is no `|split` filter (tracked as a DX enhancement).
+
 ## Triggers — # Triggers: header, declarative + imperative registration, source types
 
 Triggers declare what fires a skill autonomously. A skill without triggers must be invoked explicitly (the compile/execute API); a skill with triggers fires automatically when its trigger condition occurs.
@@ -1966,6 +1977,24 @@ Authors composing complex skills use these in combination — op-level for trans
 
 Per-op error contract is what makes cascading fallbacks work. When `$` returns `isError: true`, the executor throws via `makeOpError` rather than binding the error text to the output var. The throw routes through `else:` / `# OnError:` machinery and surfaces in `result.errors[]` for the scheduler to log. Without this discipline, op-level failures wouldn't propagate to the fallback layers and silent-fail would be the default. Op-level `(fallback:)` is distinct: it intercepts the throw/empty-result at the op and binds the fallback value rather than propagating — a fired fallback is recorded in `result.fallbacks[]`, not `result.errors[]`.
 
+## Robustness & error containment — best practices (no try/catch by design)
+
+**Skillscript has no try/catch — by design.** The simplicity is deliberate: no exception-handling construct, no stack unwinding to catch. Robustness is *authored*, not caught. An unguarded fallible op propagates its failure up and aborts the whole target — and in a composition, aborts every sibling op that hadn't run yet. Containment uses two primitives (defined in the *Error handling* section): op-level `(fallback: <value>)` and the `|fallback:\"<value>\"` pipe filter. This section is the discipline for applying them.
+
+**Rule 1 — Fallback every fallible op whose failure shouldn't be fatal.** `shell(...)`, external `$ connector.tool` dispatch, `execute_skill(...)`, `file_read(...)` — anything reaching outside the runtime can fail. A bare fallible op with no `(fallback:)` turns a transient upstream hiccup into a hard target abort. Give it `-> VAR (fallback: \"<sensible default>\")`.
+
+**Rule 2 — In a fan-out, fallback EACH leg independently.** A gather/compose skill running N independent legs (weather + mailbox + calendar + …) must fallback each leg, or the first leg to fail takes the rest down — the later ops never run and every output returns empty. One non-critical leg must never be able to sink the critical ones. (Observed 2026-07-05: an unguarded weather `execute_skill` leg threw on a transient upstream response and aborted an entire 7-leg morning-brief gather — six healthy legs lost to one. The fix is a per-leg fallback so weather degrades to a placeholder and mailbox/Olsen/board still run.)
+
+**Rule 3 — a `|fallback` anywhere in a filter chain rescues an unresolved reference (v0.26.2+).** `${x|fallback:\"d\"}`, `${x|fallback:\"d\"|trim}`, and `${x|trim|fallback:\"d\"}` all degrade an unresolved/undefined `x` to the fallback — on an undefined base the chain skips the intervening filters and lets `|fallback` catch. Position no longer matters: as long as a `|fallback` is present, the chain won't throw on an unresolved base. Two edges to keep straight:
+- A chain with NO `|fallback` still throws on an unresolved ref (`${x|trim}` on undefined `x` throws) — that's your signal to add one.
+- `|fallback` only rescues the genuinely UNRESOLVED case. A present-but-empty value (e.g. `\"  \"`) still flows through the filters, so `${x|length|fallback:\"0\"}` on `x=\"  \"` returns `\"2\"`, not `\"0\"`.
+
+**Rule 4 — A body-text output template must not reference a var a fallible step might leave unset.** The template renders after the target runs; if a fallible `$set` was skipped by a throw upstream, its var is unset and the template itself hard-fails (this is how an upstream data hiccup surfaces as `Unresolved variable reference: $(AREA)` at the template). Either set every template var to a default before the fallible step, or source each with a `|fallback` at `$set` time so it is always bound.
+
+**Rule 5 — Degrade LOUD, not silent.** A fallback value should be a visible marker (\"unavailable\", \"—\", \"n/a\"), never empty and never a plausible-but-wrong value. A degraded run must be *diagnosable* — surface that a leg degraded, don't silently ship a blank or a fake reading. Clean-throw-then-clean-degrade beats both a hard abort and a silent lie: the failure stays contained AND legible.
+
+**Where the mechanisms live:** see *Error handling* (`else:` blocks, `# OnError:` skill-level fallback, op-level `(fallback:)`) for the primitives; this section is when/where to reach for them.
+
 ## Composition — skills calling skills
 
 Skillscript supports skill-to-skill composition via the runtime's public composition primitive. A parent skill invokes a child skill, optionally passes inputs, optionally binds the child's result. The runtime threads variable state, propagates errors, and enforces a recursion-depth guard.
@@ -2170,6 +2199,9 @@ For *data skills* (skills marked `# Type: data`), the compile-time inline primit
 - Use mechanical mode to TestFlight any multi-skill chain before shipping it as a Headless skill on a cron trigger.
 - Forward references work — author sibling skills in any order, validate independently. The tier-2 warning surfaces the deferred-resolution path; runtime catches genuine misses.
 - Recursion is legal but bounded. If your design requires deeper recursion than the configured limit, reshape the workflow — almost always a sign of an iteration that should be expressed as `foreach` rather than recursion.
+
+## Session isolation — a skill can't mutate the calling agent's session
+A skill executes in its OWN session; agent session state (context, persona) is session-local. Calling `amp_set_session_context` (or similar) inside a skill sets it for the SKILL's session, not the caller's — the caller sees no change. The contract: **skills assemble and RETURN data; the agent owns its SESSION STATE.** To "enter a project," a skill returns the instruction bodies and the AGENT applies its own session context.
 
 ## Static vs Dynamic — skill execution model
 
@@ -2562,5 +2594,5 @@ When any of these primitives ship, the relevant grammar moves into its canonical
 
 ---
 
-*Rendered from `skillscript/skillscript-language-reference` — 2026-06-29 12:24 EDT*  
+*Rendered from `skillscript/skillscript-language-reference` — 2026-07-06 10:00 EDT*  
 *Source of truth: AMP (`amp_render_document("skillscript/skillscript-language-reference")`)*

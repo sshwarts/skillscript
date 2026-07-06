@@ -1998,6 +1998,12 @@ function resolveListExpr(expr: string, vars: Map<string, unknown>): unknown[] {
     // structured arrays via resolveRef, so this case is the string-
     // typed-var fallback.
     if (typeof val === "string") {
+      // v0.26.2 (Perry `9ed7554b` #2): a whitespace-only / empty string input
+      // is "no items", so iterate ZERO times — not one iteration with an empty
+      // element. Previously `RULE_IDS=""` → one pass with RID="" → downstream
+      // ops (e.g. amp_get_memory("")) errored. Empty-list semantics now match
+      // `[]` and an absent ref (both already return []).
+      if (val.trim() === "") return [];
       try {
         const parsed = JSON.parse(val) as unknown;
         if (Array.isArray(parsed)) return parsed;
@@ -2144,7 +2150,8 @@ export function substituteRuntime(text: string, vars: Map<string, unknown>): str
       let value: unknown = resolveRef(ref, vars);
       const specs = parseFilterChain(filterChain);
 
-      for (const spec of specs) {
+      for (let i = 0; i < specs.length; i++) {
+        const spec = specs[i]!;
         const arg = interpolateFilterArg(spec.arg, vars);
         if (spec.name === "fallback") {
           // v0.19.12 — empty-aware. Matches the $-op trailer's
@@ -2158,6 +2165,17 @@ export function substituteRuntime(text: string, vars: Map<string, unknown>): str
           continue;
         }
         if (value === undefined) {
+          // v0.26.2 (Perry `9ed7554b` #3): an undefined base propagates
+          // lazily through the chain when a LATER `|fallback` will catch it —
+          // matches Jinja's `undefined|filter|default` contract, so a chain
+          // containing `|fallback` never explodes on an unresolved ref
+          // regardless of where the fallback sits. Skip this filter (leave
+          // value undefined) so the downstream fallback fires; only throw
+          // when no fallback follows. Deliberately gated on `undefined` ONLY,
+          // never on empty-string — a whitespace value like "  " still flows
+          // through `|length` etc. unchanged (no behavior change for any ref
+          // that actually resolves).
+          if (specs.slice(i + 1).some((s) => s.name === "fallback")) continue;
           throw new UnresolvedVariableError(ref, "?");
         }
         value = applyFilter(stringifyValue(value), spec.name, arg);
