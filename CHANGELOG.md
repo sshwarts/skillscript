@@ -2,6 +2,16 @@
 
 Each release carries an **Upgrade impact:** line (first in its section) so a bump's requirements are visible at a glance. Tags (closed set): **BREAKING** (a manual change is needed to keep working) · **RE-APPROVE** (secured-mode signature invalidation — skills must be re-approved before they run) · **CONFIG** (`connectors.json` / config edit needed) · **none (additive)** (no action; backward-compatible). Standard from 0.20.0 forward; the pre-0.20 transitions that need action are flagged inline below (0.14.0, 0.18.8, 0.19.0). Full walkthrough: [UPGRADING.md](UPGRADING.md).
 
+## 0.26.6 — 2026-07-06 — help: error-handling topic correctness fix (`(fallback:)` does NOT catch a raised throw)
+
+**Upgrade impact:** none (additive; help-content + server-instructions only). No runtime behavior change.
+
+The 0.26.5 `error-handling` topic taught a **broken containment pattern**: its flagship Rule 2 example put a per-leg `(fallback:)` on `execute_skill` legs and claimed it prevents a gather abort. It does not — and shipping it canonicalized the exact pattern that sank the 2026-07-05 morning brief (Perry `c052581b`, verified on the deployed 0.26.5 runtime).
+
+- **Corrected the mental model to two failure shapes → two tools.** A **MISSING VALUE** (dispatch error, `shell` spawn-fail/timeout, empty result, unresolved ref) is contained by `(fallback: "…")` / a `fallback` filter. A **RAISED THROW** (`$ json_parse` on off-shape input; `execute_skill` whose child throws — e.g. the child's output template references an unset var) is **NOT** caught by `(fallback:)` — the throw propagates past the trailer and aborts the target. A raised throw is contained by an `else:` handler, or **prevented** by a structural guard (pre-bind degraded defaults + a `contains`/shape check before the risky op).
+- **Every prescription was gate-dogfooded on the runtime before shipping** (the whole bug was a doc that confidently prescribed an unverified mechanism): confirmed `(fallback:)` catches neither an execute_skill child-throw nor a json_parse malformed-throw; confirmed `else:` catches **both**; confirmed the structural guard degrades cleanly. **`# OnError:` was found inert** (its `fallbackSkillExecutor` is never wired in the runtime) and is therefore flagged as not-a-reliable-throw-container rather than prescribed.
+- Rule 2 now carries the corrected worked example (a throw-proof `get-weather` child), and the quickstart + server-instructions robustness lines were corrected to the same two-shapes framing.
+
 ## 0.26.5 — 2026-07-06 — help: `error-handling` topic (containment playbook on the tool-help surface)
 
 **Upgrade impact:** none (additive). New `help()` topic + expanded server instructions; no behavior change.

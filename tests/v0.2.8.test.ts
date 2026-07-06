@@ -78,17 +78,24 @@ describe("v0.2.8 — help MCP tool", () => {
     expect(content).toMatch(/execute_skill/);
   });
 
-  it("topic=error-handling returns the containment playbook (v0.26.5)", async () => {
+  it("topic=error-handling teaches the CORRECT missing-value-vs-throw containment (v0.26.6)", async () => {
     const { mcpServer } = bootstrap({ skillsDir: join(home, "skills"), traceDir: join(home, "traces") });
     const result = await callTool(mcpServer, "help", { topic: "error-handling" });
     expect(result["topic"]).toBe("error-handling");
     const content = result["content"] as string;
-    // The four containment primitives + the per-call opt-out answer.
-    expect(content).toMatch(/fallible op/i);
-    expect(content).toMatch(/\(fallback:/);
-    expect(content).toMatch(/# OnError:/);
+    // Two-failure-shapes framing is the load-bearing correction.
+    expect(content).toMatch(/Two failure shapes/);
+    expect(content).toMatch(/MISSING VALUE/);
+    expect(content).toMatch(/RAISED THROW/);
+    // CORRECTNESS GUARD (Perry c052581b / gate dogfood): the topic must NOT
+    // claim (fallback:) catches a throw — it must say the opposite, and point
+    // at else: / structural guard for throws.
+    expect(content).toMatch(/does \*\*NOT\*\* catch|\(fallback:\) (?:trailer )?does NOT catch/i);
     expect(content).toMatch(/else:/);
-    // The fan-out rule (the morning-brief class) + degrade-loud.
+    expect(content).toMatch(/throw-proof|structural guard/);
+    // # OnError: must be flagged as unreliable, not prescribed as a container.
+    expect(content).toMatch(/NOT a reliable throw-container/);
+    // The fan-out rule (morning-brief class) + degrade-loud survive.
     expect(content).toMatch(/fan-out/i);
     expect(content).toMatch(/Degrade LOUD/);
   });

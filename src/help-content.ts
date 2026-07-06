@@ -36,7 +36,7 @@ export const SKILLSCRIPT_USAGE_INSTRUCTIONS = `A Skillscript runtime is wired ov
 **Repeating a routine? Capture it as a skill.** What you can script = the wired connectors, models, and allowed shell binaries from \`runtime_capabilities()\` — that list is your menu. When you catch yourself re-running work over any of them, author it. If something you'd need isn't wired yet, ask the operator to add it, then capture it.
 - \`help({topic})\` → the language (ops, frontmatter, composition, error-handling, connectors, lint-codes).
 - Draft → \`lint_skill({source})\` → \`compile_skill({source})\` → \`skill_write({name, source})\`.
-- **Robustness:** a fallible op (\`shell\`, \`$\` dispatch, \`execute_skill\`, \`file_read\`, \`$ json_parse\`) aborts the target on failure unless given \`(fallback: "…")\`; in a fan-out, fallback each leg or one failure sinks the rest. See \`help({topic: "error-handling"})\`.
+- **Robustness:** a failing fallible op aborts the target (in a fan-out, one throwing leg sinks the rest). Two shapes, two tools: a MISSING VALUE (dispatch error / empty) → \`(fallback: "…")\`; a RAISED THROW (\`$ json_parse\` off-shape, \`execute_skill\` child-throw) → an \`else:\` handler or a structural guard — \`(fallback:)\` does NOT catch a throw. See \`help({topic: "error-handling"})\`.
 - It lands **Draft** — you can't self-approve; a human does. Treat anything you authored as not-yet-runnable until approved.`;
 
 const QUICKSTART = `# Skillscript — quickstart
@@ -108,7 +108,7 @@ The legacy \`$(VAR)\` form still compiles with a tier-2 \`deprecated-substitutio
 
 Most dispatch ops accept \`-> VAR\` to bind their output. Reference later via \`\${VAR}\`. Optional \`(fallback: "default")\` after \`-> VAR\` binds the fallback on dispatch error instead of propagating.
 
-**A fallible op with no \`(fallback:)\` aborts the whole target on failure** (and in a fan-out, takes the sibling legs down with it). To keep one call from being able to sink the skill, give it \`(fallback: "…")\`. See \`help({topic: "error-handling"})\` for the full containment discipline.
+**A fallible op that fails aborts the whole target** (and in a fan-out, takes the sibling legs down with it). Two failure shapes need two tools: a MISSING VALUE (dispatch error / empty result) is contained by \`(fallback: "…")\`; a RAISED THROW (\`$ json_parse\` off-shape, \`execute_skill\` child-throw) is NOT — it needs an \`else:\` handler or a structural guard (pre-bind defaults + a check before the risky op). See \`help({topic: "error-handling"})\`.
 
 ## 6. Branching
 
@@ -844,37 +844,49 @@ See \`help({topic: "examples"})\` example 4 for a worked orchestrator skill.
 
 const ERROR_HANDLING = `# Error handling & containment — keeping one failure from aborting the skill
 
-**Skillscript has no try/catch — by design. Robustness is authored, not caught.** An unguarded **fallible op** (anything reaching outside the runtime) propagates its failure up and **aborts the whole target** — and in a composition/fan-out, aborts every sibling op that hadn't run yet. If you don't want a single call to be able to sink the skill, you contain it explicitly.
+**Skillscript has no try/catch — by design. Robustness is authored, not caught.** An unguarded fallible op that FAILS aborts the whole target — and in a composition/fan-out, aborts every sibling op that hadn't run yet. Containing a failure means matching the tool to the failure SHAPE.
 
-**Fallible ops** (can throw at runtime): \`shell(...)\`, external \`$ <connector>.<tool>\` dispatch, \`execute_skill(...)\`, \`file_read(...)\`, \`$ json_parse\` (throws on off-shape input). \`$set\` / \`emit\` / control flow do not throw.
+## Two failure shapes → two tools
 
-## The four containment primitives — narrowest to broadest
+- **MISSING VALUE** — the op dispatched but produced nothing usable: a \`$\`/\`shell\` dispatch error, a \`shell\` spawn-fail/timeout, empty (trimmed) output, or an unresolved/empty ref. Contain with a \`(fallback: "…")\` trailer on the op, or a \`fallback\` filter on the reference.
+- **RAISED THROW** — the op dispatched OK but raised mid-execution: \`$ json_parse\` on off-shape input, or \`execute_skill\` whose child throws (e.g. the child's own output template references an unset var). A \`(fallback:)\` trailer does **NOT** catch this — the throw propagates past the trailer and aborts the target. Contain with an \`else:\` handler, or PREVENT it with a structural guard (pre-bind defaults + a shape/\`contains\` check before the risky op).
 
-| Primitive | Scope | What it does |
+The single most common mistake: putting \`(fallback:)\` on an \`execute_skill\` leg and expecting it to survive a throwing child. It does not — verified end-to-end: \`execute_skill(child-that-throws) -> R (fallback:"…")\` still aborts the parent; an \`else:\` wrapper around it survives; a throw-proof child never fails.
+
+## The containment tools
+
+| Tool | Catches | Scope |
 |---|---|---|
-| \`(fallback: "…")\` op trailer | the single call | **The per-call opt-out.** \`shell(...) -> R (fallback: "…")\`; same on \`$ tool\`, \`file_read\`, \`execute_skill\`. On throw OR empty result, binds the fallback and continues instead of aborting the target. |
-| \`\${REF\\|fallback:"x"}\` pipe filter | a single reference | Degrades an unresolved/empty value at use-time: \`\${R\\|fallback:"—"}\`. |
-| \`else:\` block | the whole target | Target-level error handler — catches a throw and runs alternate ops. \`\${ERROR_CONTEXT}\` (\`.kind\` / \`.message\` / \`.target\`) is available inside it. |
-| \`# OnError: <skill>\` | the whole skill | Fallback skill invoked when an op fails and no \`else:\` catches. |
+| \`(fallback: "…")\` op trailer | a MISSING VALUE (dispatch error / spawn-fail / timeout / empty result) | the single op |
+| \`fallback\` filter on a ref | a missing / unresolved / empty value at use-time | the single reference |
+| \`else:\` block | a RAISED THROW anywhere in the target body — incl. an \`execute_skill\` child-throw and \`$ json_parse\` off-shape (both verified) | the whole target |
+| structural guard (pre-bind + check) | PREVENTS the throw — most robust; a guarded op can't fail | the risky op |
 
-To keep **one specific call** from aborting the skill, the direct answer is: give it \`(fallback: "…")\`.
+(A \`# OnError: <skill>\` header is parsed but is NOT a reliable throw-container in the current runtime — prefer \`else:\`.)
 
 ## The discipline (5 rules)
 
-**Rule 1 — Fallback every fallible op whose failure shouldn't be fatal.** A bare fallible op with no \`(fallback:)\` turns a transient upstream hiccup into a hard target abort. Give it \`-> VAR (fallback: "<sensible default>")\`. (Leaving it bare is a valid choice too — that's how you say "this op IS critical; abort if it dies.")
+**Rule 1 — Guard each fallible op with the tool that matches its failure shape.** Produce-a-value ops (\`shell\`, \`$\` dispatch, \`file_read\`) that might return nothing → \`(fallback:)\`. Raise-capable ops (\`execute_skill\`, \`$ json_parse\`) → throw-proof the input or wrap the target in \`else:\`; a \`(fallback:)\` on them is a no-op against a throw.
 
-**Rule 2 — In a fan-out, fallback EACH leg independently.** A gather/compose skill running N independent legs (weather + mailbox + calendar + …) must fallback each leg, or the first leg to fail takes the rest down — later ops never run and every output returns empty. One non-critical leg must never sink the critical ones:
+**Rule 2 — In a fan-out, one throwing leg aborts every sibling.** A gather running N legs (weather + mailbox + calendar + …): a per-leg \`(fallback:)\` only covers a leg that returns EMPTY. A leg that THROWS — e.g. an \`execute_skill\` whose child raises — is NOT contained by that leg's \`(fallback:)\`; the throw propagates and the whole gather aborts, losing every later leg. Two patterns that work: **(a) preferred** — make each child throw-proof (pre-bind degraded defaults + guard the risky op) so a leg CANNOT throw and always returns a degraded value; **(b)** wrap the whole gather target in an \`else:\` handler that degrades and continues. (Observed 2026-07-05: one unguarded weather leg threw on a transient response and aborted a 7-leg morning brief — six healthy legs lost. The per-leg \`(fallback:)\` that "should" have caught it did not; the throw-proof-child rewrite is what held.)
+
+Throw-proof child pattern (the verified fix):
 \`\`\`
-gather:
-    execute_skill(skill_name="weather-summary") -> WX   (fallback: "(weather unavailable)")
-    execute_skill(skill_name="mailbox-triage")  -> MAIL (fallback: "(mailbox empty)")
-    execute_skill(skill_name="calendar-today")  -> CAL  (fallback: "(no calendar data)")
+# Skill: get-weather
+# Vars: RAW
+Weather: \${AREA}
+fetch:
+    $set AREA = "(weather unavailable)"          # degraded default — always bound
+    if \${RAW|contains:"current_condition"}:      # guard BEFORE the risky op
+        $ json_parse \${RAW} -> W
+        $set AREA = "\${W.nearest_area}"
+default: fetch
 \`\`\`
-Without the per-leg fallbacks, one failed leg aborts the gather and the other two return empty.
+Bad input skips the \`if\`, \`AREA\` keeps its degraded default, the template renders, the child never throws — so a parent gather can't be sunk by it.
 
-**Rule 3 — a \`|fallback\` anywhere in a filter chain rescues an unresolved reference.** \`\${x\\|fallback:"d"}\`, \`\${x\\|fallback:"d"\\|trim}\`, and \`\${x\\|trim\\|fallback:"d"}\` all degrade an unresolved \`x\` to the fallback (position no longer matters, v0.26.2+). A chain with NO \`|fallback\` still throws on an unresolved ref — that's your signal to add one. Note: \`|fallback\` only rescues genuinely-unresolved refs; a present-but-empty value still flows through the other filters.
+**Rule 3 — a \`fallback\` filter anywhere in a chain rescues an unresolved reference** (order-independent, v0.26.2+), and also rescues a missing dotted/numeric path on a present object: \`\${x|fallback:"d"}\`, \`\${x|trim|fallback:"d"}\`. A chain with no fallback throws on an unresolved ref — that's your signal to add one. It rescues only genuinely-unresolved refs; a present-but-empty value still flows through the other filters.
 
-**Rule 4 — A body-text output template must not reference a var a fallible step might leave unset.** The template renders after the target runs; if a fallible \`$set\` was skipped by an upstream throw, its var is unset and the template itself hard-fails (\`Unresolved variable reference: $(AREA)\`). Either set every template var to a default before the fallible step, or source each with a \`|fallback\` so it is always bound.
+**Rule 4 — A body-text output template must not reference a var a fallible step might leave unset.** The template renders after the target runs; an unset var hard-fails the render (\`Unresolved variable reference\`). This is also exactly how a child skill throws OUT to its \`execute_skill\` parent. Pre-bind every template var to a default before the fallible step (which doubles as the throw-prevention structure in Rule 2), or source each with a \`fallback\` filter.
 
 **Rule 5 — Degrade LOUD, not silent.** A fallback value should be a visible marker ("unavailable", "—", "n/a") — never empty, never a plausible-but-wrong value. A degraded run must be diagnosable: surface that a leg degraded, don't silently ship a blank or a fake reading. Clean-throw-then-clean-degrade beats both a hard abort and a silent lie.
 `;
