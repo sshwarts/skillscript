@@ -2,6 +2,18 @@
 
 Each release carries an **Upgrade impact:** line (first in its section) so a bump's requirements are visible at a glance. Tags (closed set): **BREAKING** (a manual change is needed to keep working) · **RE-APPROVE** (secured-mode signature invalidation — skills must be re-approved before they run) · **CONFIG** (`connectors.json` / config edit needed) · **none (additive)** (no action; backward-compatible). Standard from 0.20.0 forward; the pre-0.20 transitions that need action are flagged inline below (0.14.0, 0.18.8, 0.19.0). Full walkthrough: [UPGRADING.md](UPGRADING.md).
 
+## 0.27.0 — 2026-07-06 — runtime: `(fallback:)` now contains a raised throw (uniform trailer semantics)
+
+**Upgrade impact:** none (additive; no re-approval). A `(fallback:)` that previously did nothing against a throw now fires — a skill that used to abort now degrades. No skill breaks; see the one behavior note below.
+
+The 0.26.4–0.26.6 arc surfaced that `(fallback:)` was **inconsistent**: it contained a failure for `shell` / `$` dispatch / `file_read`, but the `execute_skill` and `$ json_parse` **intercepts threw directly, bypassing the trailer** — so a per-leg `(fallback:)` on a throwing `execute_skill` leg did nothing and aborted the whole gather (the 2026-07-05 morning-brief class). 0.26.6 documented that split; **0.27.0 removes it at the source** (Perry decision B, `c052581b`).
+
+- **`(fallback: "…")` now contains ANY failure from every fallible op**, including an `execute_skill` child-throw (e.g. a child whose output template references an unset var) and a `$ json_parse` off-shape input. The intercepts now consult `op.fallback` on their raised throw, mirroring the existing `file_read` path. The author-facing mental model is finally uniform: *a failing op with `(fallback:)` degrades and continues, whatever the failure shape* — no more reasoning about which ops return-empty vs raise.
+- **The throw stays diagnosable.** A caught throw records its message in the result's `fallbacks[].reason` (degrade-loud), so it isn't silently erased — it moves from `errors[]` to `fallbacks[]`.
+- **Security is unaffected.** A child's own op-level failure — including a policy/security refusal (shell-allowlist, disallowed-tool, fs-deny) — is captured in the child's `result.errors[]` and never escapes as a parent throw, so a parent `(fallback:)` **cannot swallow it** (verified: a child hitting the shell allowlist surfaces in the bound child result, the parent fallback does not fire).
+- **One behavior note:** a skill that today aborts *before* a side effect (e.g. `$ json_parse … (fallback:"{}")` followed by a `$ data_write`) will now proceed into that op with the degraded value. This is identical to how `shell`/`$` fallbacks already behave — writing `(fallback:)` opts into continue-with-default. Rule 5 (degrade *loud*) still applies.
+- **Docs:** the `help({topic:"error-handling"})` topic + quickstart + server-instructions were re-simplified to the uniform model; `else:` is reframed as target-level **recovery logic** (not the throw-container of last resort), the structural guard as the most-robust **prevention**. (`# OnError:` remains parsed-but-unwired — flagged, tracked separately.)
+
 ## 0.26.6 — 2026-07-06 — help: error-handling topic correctness fix (`(fallback:)` does NOT catch a raised throw)
 
 **Upgrade impact:** none (additive; help-content + server-instructions only). No runtime behavior change.

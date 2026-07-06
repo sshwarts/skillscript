@@ -1452,6 +1452,28 @@ async function execOpInner(
           if (op.outputVar !== undefined) vars.set(op.outputVar, childResult);
           return { lastBoundVar: op.outputVar ?? flatKey, lastValue: childResult };
         } catch (err) {
+          // v0.27.0 — `(fallback:)` now contains a RAISED THROW from the
+          // execute_skill intercept (a child whose execute() escapes a throw —
+          // e.g. its output template references an unset var), not just a
+          // missing value. This retires the "(fallback:) only catches empty,
+          // not throws" split so the trailer's mental model is uniform across
+          // every fallible op. The child's throw message is preserved in
+          // `fallbacks[].reason` (degrade-loud: the failure stays diagnosable).
+          // Note: a child's own OP-level failure is captured in the child's
+          // result.errors[] and does NOT escape here, so this cannot swallow a
+          // child policy/security failure — only a top-level child throw.
+          const efb = op.fallback !== undefined ? coerceLiteralValue(op.fallback) : undefined;
+          if (efb !== undefined) {
+            vars.set(flatKey, efb);
+            if (op.outputVar !== undefined) vars.set(op.outputVar, efb);
+            fallbacks.push({
+              target: targetName,
+              opKind: "$",
+              value: efb,
+              reason: `$ execute_skill failed: ${messageOf(err)}`,
+            });
+            return { lastBoundVar: op.outputVar ?? flatKey, lastValue: efb };
+          }
           throw new OpError(
             `\`$ execute_skill\` failed: ${messageOf(err)}`,
             "$",
@@ -1482,6 +1504,21 @@ async function execOpInner(
         try {
           parsed = JSON.parse(input);
         } catch (err) {
+          // v0.27.0 — `(fallback:)` contains a json_parse off-shape throw too
+          // (uniform trailer semantics; see the execute_skill intercept above).
+          // The parse-error message is kept in `fallbacks[].reason`.
+          const jfb = op.fallback !== undefined ? coerceLiteralValue(op.fallback) : undefined;
+          if (jfb !== undefined) {
+            vars.set(flatKey, jfb);
+            if (op.outputVar !== undefined) vars.set(op.outputVar, jfb);
+            fallbacks.push({
+              target: targetName,
+              opKind: "$",
+              value: jfb,
+              reason: `$ json_parse failed: ${messageOf(err)}`,
+            });
+            return { lastBoundVar: op.outputVar ?? flatKey, lastValue: jfb };
+          }
           throw new OpError(
             `\`$ json_parse\` input is not valid JSON. Got: '${input.slice(0, 40)}${input.length > 40 ? "..." : ""}' — ${messageOf(err)}`,
             "$",
