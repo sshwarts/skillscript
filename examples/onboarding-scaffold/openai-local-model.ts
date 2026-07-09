@@ -43,8 +43,10 @@ export class OpenAILocalModel implements LocalModel {
       implementation: "OpenAILocalModel",
       contract_version: "1.0.0",
       features: {
+        supports_max_tokens: true,
+        supports_timeout: false,
         supports_streaming: false,
-        supports_token_count: false,
+        supports_embedding: false,
       },
     };
   }

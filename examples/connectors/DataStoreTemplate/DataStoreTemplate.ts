@@ -165,4 +165,18 @@ export class DataStoreTemplate implements DataStore {
     //   - Return { id, created_at }
     throw new Error("TODO: write() — persist record; return { id, created_at }.");
   }
+
+  /**
+   * Direct lookup by substrate-assigned id (v0.13.8 — lets `data_read`
+   * inspect a record without a query roundtrip). Return `null` when the id
+   * isn't found — do NOT throw; null-on-miss is the DataStore convention
+   * (contrast SkillStore, which throws `SkillNotFoundError`). Substrates
+   * without a native by-id lookup can implement via a filtered query, but
+   * the null semantics must hold.
+   */
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  async get(_id: string): Promise<PortableData | null> {
+    // TODO — fetch one record by id from your substrate; null when missing.
+    throw new Error("TODO: get() — return the record for this id, or null.");
+  }
 }

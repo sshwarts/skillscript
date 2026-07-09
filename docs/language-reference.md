@@ -676,6 +676,16 @@ deliver:
 | External MCP — substrate-specific | `$ <connector>.<tool>` | `$ <connector>.<tool> kwarg=value, ... [timeout=N] [approved="..."] [-> R] [(fallback: "...")]` | optional |
 | External MCP — typed-contract | `$ <tool>` | `$ <tool> kwarg=value, ... [timeout=N] [approved="..."] [-> R] [(fallback: "...")]` (typed-contract ops only: `data_*`, `skill_*`, `json_parse`, `llm`) | optional |
 
+---
+
+## Current-runtime corrections (v0.27.0)
+
+A few points above predate the 0.26/0.27 error-handling changes — read them with these corrections:
+
+- **`(fallback:)` is now UNIFORM (v0.27.0).** Beyond `$` dispatch and `shell()`, the op-level `(fallback:)` trailer now also contains a raised throw from `execute_skill` (a child skill that throws) and `$ json_parse` (malformed input). It contains ANY failure of the op — a raised throw OR an empty/missing result — on every fallible op. A fired fallback is recorded in `result.fallbacks[].reason`.
+- **`# OnError:` is parsed but NOT wired** in the current runtime — the named fallback skill never fires. Wherever the text above says an op-error "routes through `else:` / `# OnError:`", read it as `else:` only. Use `else:` (or an op-level `(fallback:)`, or a structural guard) for containment. See the Error handling and Robustness sections.
+- **`execute_skill` canonical kwarg is `name=`** (`skill_name=` is an accepted silent back-compat alias). Prefer `execute_skill(name="...", inputs={...}) -> R` in new skills; the `skill_name=` examples above still work but aren't canonical.
+
 ## Variable resolution — ${VAR} canonical, substitution + ambient refs + # Requires: cascade
 
 Skillscript supports four tiers of variables, each with distinct resolution timing and scope. Substitution uses **`${VAR}` as the canonical form**.
@@ -800,6 +810,10 @@ Missing-ref in the RHS produces a tier-1 runtime error.
 - `-> VAR` bindings are skill-global (visible to all targets after the op runs)
 - `foreach IDENT in EXPR:` iterator vars are loop-local — `$set` bindings inside the loop don't persist after the loop ends
 - Target outputs (`${target.output}`) are accessible after the target completes
+
+## Current-runtime correction (v0.27.0)
+
+**`${ERROR_CONTEXT}` is surfaced in `else:` error-handler blocks, not `# OnError:`.** The Tier-1 ambient table above describes `${ERROR_CONTEXT}` as available "In `# OnError:` fallback skills" — that is stale. `# OnError:` is parsed but inert (never fires). The working error-handler is the target-level `else:` block (runs when any op in the target body throws), and `${ERROR_CONTEXT}` (failure type + target) is populated inside that `else:` block. Read the table row as: "In an `else:` error-handler: type + target where failure occurred." See the Error handling and Conditionals sections for `else:`-handler semantics.
 
 ## Secrets — secret.NAME references, {{secret.NAME}} sink markers, SKILLSCRIPT_SECRET_ provisioning, use-only enforcement
 
@@ -1046,6 +1060,13 @@ Several filters are planned but not yet shipped:
 Filters are pure functions (input → output, no side effects). Stay small and orthogonal — each filter does one thing. Composition emerges from chaining, not from elaborate per-filter parameter spaces. The shipped set covers ~90% of real-world string-shaping needs; the pending set extends to slicing and array projection.
 
 `length`, `fallback:`, `isodate`, and `contains:` were all added in response to cold-author harness signal — authored skills demonstrated the gap was load-bearing before each filter shipped. `contains:` is also notable as the first filter to operate on structured types; filter-as-conditional-primitive is the design line that warranted the cross.
+
+---
+
+## Current-runtime corrections
+
+- **`|fallback` is order-independent in a filter chain (v0.26.2+).** A `|fallback` anywhere in the chain rescues an unresolved base — `${x|trim|fallback:"d"}` and `${x|fallback:"d"|trim}` both degrade an unresolved `x` to `"d"`. Nuance: it rescues a genuinely-unresolved/missing base; a present-but-empty value still flows through the other filters, so `${x|length|fallback:"0"}` on `x="  "` returns `"2"`, not `"0"`. See the Robustness & error containment section for the chain semantics.
+- The "Error handling" note above ("Filter chains that fail at runtime … route through `else:` / `# OnError:` machinery") should read **`else:`** — `# OnError:` is parsed but not wired in the current runtime.
 
 ## Conditionals & iteration — if/elif/else, foreach, supported operators
 
@@ -1512,6 +1533,10 @@ The receiving agent reads `event_type` for routing ("911 — surface now" vs "ro
 
 If `# Output: agent: <name>` fires and the wired AgentConnector throws, delivery routes through `else:` / `# OnError:`; the failure is recorded on `agent_delivery_receipts[]` for the scheduler to log.
 
+## Current-runtime correction (v0.27.0)
+
+**Output routing failures land in `else:`, not `# OnError:`.** The "Output routing failures" section says a throwing AgentConnector "routes through `else:` / `# OnError:`." `# OnError:` is parsed but inert (never fires) — read that as `else:` only. The target-level `else:` handler catches the delivery throw; the failure is still recorded on `agent_delivery_receipts[]` for the scheduler regardless.
+
 ## Connectors — substrate routing, the five connector types, agent_id resolution
 
 The substrate-routing ops (`$ connector.tool`, `$ data_read`, `$ llm`) and the agent-bound `# Output:` kinds (`agent:`, `template:`) don't call any specific backend directly. They route through thin connector interfaces. Skill source persistence follows the same pattern via a dedicated contract. This is the programmable surface through which authors compose information topology per skill and per moment. Skills are portable across substrates because the language doesn't bake substrate identity into the source.
@@ -1796,204 +1821,166 @@ interface McpDispatchCtx {
 
 Hard-coupling skills to specific substrates would make information-flow decisions infrastructural rather than skill-authored, defeating the point of skills as the agent's programming language. The connector layer is what lets the same skill body run against substrate A today and run against substrate B tomorrow without rewriting.
 
+## Notation correction
+
+The "Portable shapes" and "Field access semantics" sections write memory-field access as `$(MEMORY.field)` / `$(M.thread_status)` / `$(MEMORY.metadata.X)`. That is the wrong sigil. Skillscript's canonical substitution form is `${...}` (brace), not `$(...)` (paren) — the paren form is deliberately reserved to avoid collision with bash `$(command)` inside `shell(command=..., unsafe=true)` (see the Variable resolution section). Read every `$(MEMORY.field)` here as `${MEMORY.field}`. The tiered field-access resolution (core → curated subset → `metadata.X` → ambient passthrough) is otherwise accurate; only the sigil is wrong.
+
 ## Lifecycle and status — # Status: header, three canonical states (Draft / Approved / Disabled), compile + runtime enforcement
 
-Skillscripts carry an explicit lifecycle state via the `# Status:` header. The compiler and runtime enforce status — a Disabled skillscript cannot fire under any path, regardless of who invokes it.
+Skillscripts carry an explicit lifecycle state via the `# Status:` header. The compiler and runtime enforce it — a Disabled skill cannot fire under any path, and (in secured mode) an unapproved skill cannot perform effectful ops under any path.
 
 ## Header syntax
 
 ```
 # Skill: support-response-draft
-# Status: Approved v1:a1b2c3d4
+# Status: Approved v3:<signature>
 # Description: ...
 ```
 
-If `# Status:` is omitted, the default state is **Draft**. This forces authors to explicitly promote a skillscript through its lifecycle rather than relying on "newly written = ready for use."
+If `# Status:` is omitted, the default is **Draft** — authors must explicitly promote through the lifecycle rather than treating "newly written" as "ready."
 
-**Case normalization:** Status values are accepted case-insensitively on input and stored as canonical form. `# Status: draft`, `# Status: Draft`, `# Status: DRAFT` all parse to canonical `Draft`. This principle applies across all enumerated frontmatter value spaces (see Overview section on Lexical conventions).
+**Case normalization:** the state word is accepted case-insensitively and stored canonical (`draft` / `Draft` / `DRAFT` → `Draft`).
 
 ## The three canonical states
 
-- **Draft** — being authored or under revision; not ready for production use. Compile warns; runtime refuses unless explicitly invoked with `--force-draft` for the author's own testing. Triggers don't fire under default dispatch.
-- **Approved** — passed authoring + lint and is ready to fire. The canonical "in use" state. Compile is clean; runtime allows everywhere; declared triggers fire freely. **Requires a hash-token stamp** (see below).
-- **Disabled** — explicitly off. Compile rejects; runtime rejects; triggers don't fire. Source and version history preserved, but the skillscript cannot execute under any path.
+- **Draft** — being authored/revised; not production. Compile warns; the runtime refuses effectful execution unless explicitly force-run for the author's own testing; declared triggers are held non-firing.
+- **Approved** — reviewed and cleared to fire. In secured mode this requires a valid operator **signature** (below). Compile clean; runtime allows; declared triggers fire.
+- **Disabled** — explicitly off. Compile + runtime reject; triggers don't fire. Source and version history preserved, but the skill cannot execute under any path.
 
-These three states have crisp, universal operational meaning across every deployment. Every operator understands what each state means; no judgment calls about edge-case distinctions.
+## Approval by operator signature (secured mode)
 
-## Hash-token approval for Approved
+In **secured mode**, `# Status: Approved` requires a valid **Ed25519 signature** over the skill body: `# Status: Approved v3:<signature>`. The signature is applied **operator-side** (the human's key); the runtime **verifies it on every execution path** — trigger dispatch, MCP `execute_skill`, in-skill `$ execute_skill` composition, compile-time `inline(skill=...)`. **The runtime never holds the signing key.** An unsigned, invalidly-signed, or tampered body is **inert** — it cannot perform effectful ops no matter how it's dispatched.
 
-`# Status: Approved` requires a stamped version-hash token: `# Status: Approved v1:<token>` where `<token>` is `f(skill_body)`. Naked `# Status: Approved` (without the stamp) refuses to execute at runtime.
+Two paths produce a signed Approved skill:
+1. **Dashboard approval** — a human reviews and approves; the dashboard signs.
+2. **`skillfile approve` CLI** — signs the body operator-side.
 
-The runtime verifies the stamp on every execution path:
-- Trigger-fired dispatch
-- MCP `execute_skill` invocation
-- In-skill `$ execute_skill` composition
-- Compile-time `inline(skill=...)` references
+**An agent cannot self-approve.** In secured mode, `skill_write` with an agent-declared `# Status: Approved` is **forced to Draft on persist** — a write can't grant approval; only the operator's signature can. Editing a signed body invalidates the signature (it no longer matches the changed body), so a tampered Approved skill refuses to execute; re-approval (re-sign) is required after any edit. (This is the closure of the two self-approval vectors: the token is a real signature the agent can't forge, and the write path can't stamp itself Approved. Verified by adversarial red-team — no forgery path.)
 
-The stamp closes the gate against tampered or Draft-promoted-without-review skill bodies. Three paths produce a stamped Approved skill:
+In **unsecured mode** (secured is a deliberate on/off choice made at onboarding), signature enforcement is off and Approved fires without a signature. Secured mode is the posture for any deployment where untrusted or fully-autonomous authoring happens.
 
-1. **Dashboard approval flow** — human reviewer approves; dashboard stamps the token.
-2. **`skill_write` MCP tool auto-stamp** — when an agent writes a skill body declaring `# Status: Approved`, the SkillStore auto-stamps the token on persist (headless-adopter convenience).
-3. **Manual stamp** — for unusual cases; details in the adopter playbook.
+## Compile + runtime behavior (secured mode)
 
-Tampered bodies (someone edits the source post-stamp) re-derive a different token and refuse to execute. The hash-token check is the structural lock; the dashboard / `skill_write` flows are the discipline layer.
-
-## Compile + runtime behavior table
-
-| State | Compile | Runtime invocation | Test harness | Default trigger fire |
-|-------|---------|-------------------|--------------|---------------------|
-| Draft | warn | refuse (unless `--force-draft`) | allow (with flag) | refuse |
-| Approved (stamped) | OK | allow | allow | allow |
-| Approved (unstamped) | warn `approved-without-stamp` | refuse | refuse | refuse |
-| Disabled | refuse | refuse | refuse | refuse |
+| State | Compile | Runtime (effectful) | Default trigger fire |
+|-------|---------|---------------------|----------------------|
+| Draft | warn | refuse (author force-run only) | refuse |
+| Approved (valid signature) | OK | allow | allow |
+| Approved (unsigned / invalid) | warn | refuse | refuse |
+| Disabled | refuse | refuse | refuse |
 
 ## Trigger registry interaction
 
-The trigger registry respects status. A skillscript in Draft or Disabled state has its declared triggers held in a non-firing state — the trigger is registered (visible via `listTriggers`) but the scheduler skips dispatch. This lets authors register triggers while still in Draft mode without risking accidental production fires.
-
-When a skillscript transitions to Approved (with valid stamp), its triggers activate. When it transitions to Disabled, its triggers deactivate.
+The trigger registry respects status: a Draft/Disabled skill's declared triggers are registered (visible via `list_triggers`) but the scheduler skips dispatch. On transition to a valid Approved, triggers activate; on Disabled, they deactivate. This lets authors register triggers while still in Draft without risking accidental production fires.
 
 ## State transitions
 
-Status transitions are freeform — any author with write authority on the skillscript can flip the status by editing the header. Future versions may add transition rules (Draft → Approved with lint-pass requirement; Disabled requiring admin-level permission) once a real authorship-permissions story is in place.
+In **secured mode**, promotion to Approved is not a freeform header edit — it requires the operator signature (dashboard / `skillfile approve`). Demotion to Draft or Disabled by any author with write authority is fine. In unsecured mode, transitions are freeform header edits.
 
 ## Audit trail
 
-Status changes are visible via the storage substrate's versioning. For SqliteSkillStore-backed skills, each status transition appends a row to `skill_versions` (see SqliteSkillStore docs). For FilesystemSkillStore-backed skills, status changes show up in git history. The audit trail is part of the substrate, not part of the language.
+Status changes are visible via the storage substrate's versioning — a `skill_versions` row for SqliteSkillStore, git history for FilesystemSkillStore. The audit trail is part of the substrate, not the language.
 
 ## States considered but not implemented
 
-Three additional states were considered and deferred. Each is cheap to add later when justified by real operational need:
-
-- **Test** — distinct "passed compile but not production-ready" state. Today's Draft covers this case (same behavior — refuse to fire under default dispatch). If authors find Draft and Test are operationally distinct in practice, Test ships then.
-- **Deployed** — distinct "currently shipping" state separate from Approved. Today's Approved + active triggers IS deployed; no operational difference. If a deployment finds Approved-vs-Deployed meaningfully different (e.g., a release-gating workflow that distinguishes "ready" from "live"), Deployed ships then.
-- **Deprecated** — soft-warn state for "still works but new authoring should use a successor." Deprecation is currently carried in metadata (`deprecated: true` in frontmatter) + a lint warning at invocation sites. When deprecated skills accumulate enough that the metadata pattern is awkward, Deprecated promotes to a first-class state.
-
-Adding states is additive — existing skills with the three-state model continue to work when new states are added.
+Test, Deployed, and Deprecated were considered and deferred — today's Draft/Approved cover their cases, and adding states later is additive. (Deprecation is currently carried as metadata + a lint warning at invocation sites.)
 
 ## Why this matters
 
-The lifecycle states are the language's answer to operational safety at scale. A traditional "all skillscripts compile and run" model relies on author discipline to keep broken or untested work out of production. Status states enforce the discipline at the language level — a Disabled skill cannot fire even if every author downstream forgets it's broken. The hash-token approval mechanism extends this to: an Approved skill cannot fire if its body was tampered post-approval. The constraint IS the safety story, here as elsewhere.
-
-## Open questions
-
-- **Status + composition.** When a procedural skill references a data skill via `inline(skill=...)`, what happens if the data skill is Disabled? Probable answer: compile-time error if any referenced skill is Disabled.
-- **Bulk status operations.** "Disable all skills tagged with project:legacy" is a useful operational primitive. May add a `skillscript bulk-status <pattern> <state>` CLI affordance later.
+Lifecycle states are the language's operational-safety answer. A Disabled skill can't fire even if every author forgets it's broken; in secured mode, an Approved skill can't fire if its body was tampered post-signature, and an agent can't approve its own work. The constraint IS the safety story, here as elsewhere.
 
 ## Error handling — else: blocks, # OnError: fallback, op-level fallback values
 
-Skillscript provides three layers of error handling, working from local to global.
+Skillscript has no try/catch — error handling is authored. Three mechanisms, local to global. **Note each one's current wiring status.**
 
-## Layer 1: Target-level `else:` block
+## Layer 1: Target-level `else:` block — the reliable throw-container
 
-Runs if any op in the target's primary body errors. Local to the failing target. Downstream targets that depend on this one can still proceed using whatever the `else:` branch produced.
+Runs if any op in the target's primary body throws. Local to the failing target; downstream targets that depend on it can still proceed with whatever the `else:` branch produced. `${ERROR_CONTEXT}` (`.kind` / `.message` / `.target`) is available inside it. This is the way to contain a raised throw — including an `execute_skill` child-throw and a `$ json_parse` on malformed input (both verified v0.27.0).
 
 ```
 fetch:
     $ data_read mode=fts query=${TOPIC} limit=5 -> RESULT
 else:
-    emit(text="retrieval failed, falling back to empty result")
+    emit(text="retrieval failed: ${ERROR_CONTEXT.message}")
     $set RESULT = ""
 ```
 
-### Distinguished from conditional `else:`
+Distinguished from conditional `else:` (which appears after an `if:`/`elif:` chain inside a body) by the parser's scope-stack; both can coexist in a target. An `else:` block may not declare its own error handler.
 
-The keyword `else:` is shared between two purposes:
-- Conditional `else:` — appears after `if:` / `elif:` chain inside a target body
-- Target `else:` — appears as a sibling block after a target's primary body, as an error handler
+## Layer 2: Skill-level `# OnError:` header — PARSED BUT NOT YET WIRED
 
-The parser's scope-stack discriminates at parse time. Both kinds coexist in the same target.
+`# OnError: <fallback-skill>` is accepted and existence-checked at compile time, but it is **NOT wired in the current runtime — the named fallback skill never fires.** Do not rely on it for containment; use `else:` (or a structural guard) instead. (Tracked: wire it or remove the header in a future release.)
 
-### Constraint
+## Layer 3: Op-level `(fallback:)` value — uniform (v0.27.0+)
 
-`else:` blocks may not declare their own error handlers (no nested catch). If an `else:` block fails, the whole target fails through `# OnError:` if present.
-
-## Layer 2: Skill-level `# OnError:` header
-
-Names a fallback skill to invoke if anything in the skill fails — including target-level errors that aren't caught by `else:`, compile errors, or the executing context running out of resources.
-
-```
-# Skill: morning-brief
-# OnError: morning-brief-degraded
-```
-
-Compile-time existence check — fails clean if the referenced fallback doesn't exist. The fallback skill is itself a skill (same compilation, same execution model) and can do real work (file an issue, post an ack, write a degraded result, etc.).
-
-The fallback skill receives:
-- The same inputs as the failing skill
-- An additional `${ERROR_CONTEXT}` ambient ref containing the error type and the target where it failed
-
-### Constraint
-
-Nested `# OnError:` is *not* supported. If `# OnError: degraded-skill` fires and `degraded-skill` itself errors, the runtime hard-exits with no further fallback. Spec is explicit on this.
-
-## Layer 3: Op-level fallback values
-
-Inline fallback declared on the op line. Used when the call fails or returns empty. Supported on `$` (MCP dispatch) ops and on `shell()` with coerce-on-bind semantics. For `shell()` the fallback fires on op throw OR empty stdout (e.g. `gh pr list` against a repo with no open PRs binds the fallback string).
+Inline fallback on the op line. As of **v0.27.0 it is uniform: it contains ANY failure of that op** — a raised throw OR an empty/missing result. It works on `$` (MCP dispatch), `shell()`, `file_read`, and — since v0.27.0 — `execute_skill` (child throw) and `$ json_parse` (malformed input). On failure the fallback value binds to the output var via the same path as a success (coerce-on-bind), so downstream sees it transparently and needs no "did this fail?" check. A fired fallback is recorded in `result.fallbacks[].reason` (not `result.errors[]`) — degrade-loud.
 
 ```
 weather:
-    $ data_read mode=fts query="weather ${LOCATION}" limit=1 -> CURRENT (fallback: "weather unavailable")
-    $ llm prompt="Summarize: ${CURRENT}" -> SUMMARY (fallback: "summary unavailable")
-    $ slack.post channel=${CHANNEL} text=${SUMMARY} (fallback: "post failed silently") -> ACK
-    shell(argv=["gh","pr","list","--repo","acme/foo"]) -> PRS (fallback: "No open PRs")
+    shell(command="curl -s wttr.in/${LOC}?format=j1") -> RAW (fallback: "{}")
+    $ json_parse ${RAW} -> W (fallback: "{}")
+    $ llm prompt="Summarize: ${W}" -> SUMMARY (fallback: "summary unavailable")
 ```
 
-Same pattern as the `# Requires:` cascade's `(fallback: ...)` syntax — consistent across compile-time (`# Requires:`) and runtime (`$` dispatch and `shell()`).
-
-**Fallback value parsing.** Permissive: bare identifiers, quoted strings, and bracketed array literals all accepted. Matches the `# Requires:` cascade convention.
+Fallback-value parsing is permissive — bare identifiers, quoted strings, and bracketed array literals all accepted:
 
 ```
-$ data_read mode=fts query="..." -> RESULTS (fallback: [])           # array literal
-$ llm prompt="..." -> VERDICT (fallback: unknown)                    # bare identifier
-$ slack.post text="..." -> ACK (fallback: "post failed")             # quoted string
+$ data_read mode=fts query="..." -> RESULTS (fallback: [])       # array literal
+$ llm prompt="..." -> VERDICT (fallback: unknown)                # bare identifier
+$ slack.post text="..." -> ACK (fallback: "post failed")         # quoted string
 ```
 
-**Coerce-on-bind semantics.** On op throw or empty-result, the fallback value is bound to the outputVar via the same path as a successful result. Downstream targets see the fallback transparently — they don't need conditional checks to detect "did this op fail?" The op-level fallback IS the default-on-failure value.
+## Choosing a mechanism
 
-## Error propagation rules
+- **`(fallback:)`** — "any failure of this op → this default value." Uniform; the per-op opt-out.
+- **`else:`** — target-level; when you need the error's details (`${ERROR_CONTEXT}`) to branch, or to contain a throw spanning several ops.
+- **Structural guard** (pre-bind defaults + a `contains`/shape check before the risky op) — prevents the failure entirely; most robust. See *Robustness & error containment* for the discipline.
+- **`# OnError:`** — not currently wired (Layer 2); don't depend on it.
 
-- Op error → caught by `else:` if present, otherwise propagates to target
-- Target error → caught by `# OnError:` if present, otherwise propagates to caller
-- Caller can still catch via standard exception handling on compile / runtime invocation APIs
-- `else:` blocks are not allowed to declare their own error handlers
-- If an `else:` block itself fails, the whole target fails through `# OnError:` (if present)
+## Propagation
 
-## Visibility into errors
-
-Open spec question: should `${ERROR}` be ambient inside `else:` blocks (same shape as `${ERROR_CONTEXT}` in `# OnError:` fallbacks)? Current lean: yes. Useful for telemetry skills that need to know what failed before falling back. Not yet specified or shipped.
-
-## The fallback pattern is consistent across scopes
-
-Same idea at every scope:
-- Compile-time: `# Requires: ... (fallback: value)`
-- Runtime op: `$ dispatch ... (fallback: value)` and `shell(...) ... (fallback: value)`
-- Runtime target: `else:` block
-- Whole skill: `# OnError:` header
-
-Authors composing complex skills use these in combination — op-level for transient errors, target-level for cohesive error paths, skill-level for last-resort degradation.
-
-## Connection to runtime observability
-
-Per-op error contract is what makes cascading fallbacks work. When `$` returns `isError: true`, the executor throws via `makeOpError` rather than binding the error text to the output var. The throw routes through `else:` / `# OnError:` machinery and surfaces in `result.errors[]` for the scheduler to log. Without this discipline, op-level failures wouldn't propagate to the fallback layers and silent-fail would be the default. Op-level `(fallback:)` is distinct: it intercepts the throw/empty-result at the op and binds the fallback value rather than propagating — a fired fallback is recorded in `result.fallbacks[]`, not `result.errors[]`.
+- Op throw → contained by a `(fallback:)` on that op if present; else by the target's `else:`; else propagates to the caller (surfaces in `result.errors[]`).
+- A fired op-level `(fallback:)` is recorded in `result.fallbacks[]`, not `result.errors[]`.
+- Under the hood: when a `$` op returns `isError: true` the executor throws via `makeOpError` rather than binding the error text — that throw is what routes to `(fallback:)` / `else:` and surfaces in `result.errors[]`. Op-level `(fallback:)` intercepts it and binds the fallback value instead.
 
 ## Robustness & error containment — best practices (no try/catch by design)
 
-**Skillscript has no try/catch — by design.** The simplicity is deliberate: no exception-handling construct, no stack unwinding to catch. Robustness is *authored*, not caught. An unguarded fallible op propagates its failure up and aborts the whole target — and in a composition, aborts every sibling op that hadn't run yet. Containment uses two primitives (defined in the *Error handling* section): op-level `(fallback: <value>)` and the `|fallback:\"<value>\"` pipe filter. This section is the discipline for applying them.
+**Skillscript has no try/catch — by design. Robustness is authored, not caught.** An unguarded fallible op that fails aborts the whole target — and in a fan-out, aborts every sibling that hadn't run yet. You contain failures explicitly.
 
-**Rule 1 — Fallback every fallible op whose failure shouldn't be fatal.** `shell(...)`, external `$ connector.tool` dispatch, `execute_skill(...)`, `file_read(...)` — anything reaching outside the runtime can fail. A bare fallible op with no `(fallback:)` turns a transient upstream hiccup into a hard target abort. Give it `-> VAR (fallback: \"<sensible default>\")`.
+**One uniform rule (v0.27.0+): `(fallback:)` contains ANY op failure.** A `-> VAR (fallback: "<default>")` trailer catches whatever goes wrong with that op — a `$`/`shell` dispatch error, a `shell` spawn-fail/timeout, an empty result, AND a raised throw (`$ json_parse` on off-shape input, `execute_skill` whose child throws). The op degrades to the fallback value and the target continues. (History: before v0.27.0, `execute_skill` and `$ json_parse` were runtime intercepts that threw before the fallback wiring, so `(fallback:)` did NOT catch their throws — you needed `else:` or a structural guard. v0.27.0 made the intercepts consult `op.fallback` like `file_read`, retiring that split. Legacy note for ≤0.26.x authors at the end.)
 
-**Rule 2 — In a fan-out, fallback EACH leg independently.** A gather/compose skill running N independent legs (weather + mailbox + calendar + …) must fallback each leg, or the first leg to fail takes the rest down — the later ops never run and every output returns empty. One non-critical leg must never be able to sink the critical ones. (Observed 2026-07-05: an unguarded weather `execute_skill` leg threw on a transient upstream response and aborted an entire 7-leg morning-brief gather — six healthy legs lost to one. The fix is a per-leg fallback so weather degrades to a placeholder and mailbox/Olsen/board still run.)
+**The containment tools — pick by how much you want to handle:**
+| Tool | Catches | Scope |
+|---|---|---|
+| `(fallback: "…")` op trailer | ANY failure of that op — dispatch error / spawn-fail / timeout / empty result / raised throw | the single op |
+| `$\{ref\\|fallback:"x"}` filter | a missing / unresolved / empty value at use-time | the single reference |
+| `else:` block | a raised throw anywhere in the target body, WITH error context (`$\{ERROR_CONTEXT.kind/.message/.target}`) | the whole target |
+| structural guard (pre-bind defaults + a `contains`/shape check before the risky op) | PREVENTS the failure — the op isn't reached on bad input, so it can't fail | the risky op |
+| `# OnError: <skill>` | INERT in the current runtime (fallbackSkillExecutor never wired) — do NOT rely on it; prefer `else:` | — |
 
-**Rule 3 — a `|fallback` anywhere in a filter chain rescues an unresolved reference (v0.26.2+).** `${x|fallback:\"d\"}`, `${x|fallback:\"d\"|trim}`, and `${x|trim|fallback:\"d\"}` all degrade an unresolved/undefined `x` to the fallback — on an undefined base the chain skips the intervening filters and lets `|fallback` catch. Position no longer matters: as long as a `|fallback` is present, the chain won't throw on an unresolved base. Two edges to keep straight:
-- A chain with NO `|fallback` still throws on an unresolved ref (`${x|trim}` on undefined `x` throws) — that's your signal to add one.
-- `|fallback` only rescues the genuinely UNRESOLVED case. A present-but-empty value (e.g. `\"  \"`) still flows through the filters, so `${x|length|fallback:\"0\"}` on `x=\"  \"` returns `\"2\"`, not `\"0\"`.
+`(fallback:)` = "any failure → this default." `else:` = "I need the error's DETAILS to branch." Structural guard = "I'd rather this never fail" (most robust — the failure never reaches a handler).
 
-**Rule 4 — A body-text output template must not reference a var a fallible step might leave unset.** The template renders after the target runs; if a fallible `$set` was skipped by a throw upstream, its var is unset and the template itself hard-fails (this is how an upstream data hiccup surfaces as `Unresolved variable reference: $(AREA)` at the template). Either set every template var to a default before the fallible step, or source each with a `|fallback` at `$set` time so it is always bound.
+**Rule 1 — Fallback every fallible op whose failure shouldn't be fatal.** `shell`, `$` dispatch, `file_read`, `execute_skill`, `$ json_parse` can all fail; give each `-> VAR (fallback: "<default>")` unless its failure SHOULD abort the skill (leaving it bare is how you mark it critical).
 
-**Rule 5 — Degrade LOUD, not silent.** A fallback value should be a visible marker (\"unavailable\", \"—\", \"n/a\"), never empty and never a plausible-but-wrong value. A degraded run must be *diagnosable* — surface that a leg degraded, don't silently ship a blank or a fake reading. Clean-throw-then-clean-degrade beats both a hard abort and a silent lie: the failure stays contained AND legible.
+**Rule 2 — In a fan-out, fallback EACH leg.** A gather running N independent legs (weather + mailbox + calendar + …) must fallback each, or the first leg to fail takes the rest down — later ops never run, every output empties. One non-critical leg must never sink its siblings. For a leg whose child can throw, ALSO throw-proof the child (below) — belt and suspenders, and it keeps the failure legible at the leg. (Observed 2026-07-05: an unguarded weather leg threw and aborted a 7-leg morning brief, six healthy legs lost. Fix that held: per-leg fallback + a throw-proof weather child.)
 
-**Where the mechanisms live:** see *Error handling* (`else:` blocks, `# OnError:` skill-level fallback, op-level `(fallback:)`) for the primitives; this section is when/where to reach for them.
+Throw-proof child pattern (the strongest per-op guard — prevents rather than catches):
+```
+fetch:
+    $set AREA = "(weather unavailable)"          # degraded default — always bound
+    if ${RAW|contains:"current_condition"}:      # guard BEFORE the risky op
+        $ json_parse ${RAW} -> W
+        $set AREA = "${W.nearest_area|fallback:\"(weather unavailable)\"}"
+default: fetch
+```
+Bad input skips the `if`, the default stands, the child never throws — so a parent gather can't be sunk by it (independent of the parent's own fallback).
+
+**Rule 3 — a `fallback` filter anywhere in a chain rescues an unresolved reference** (order-independent, v0.26.2+; also rescues a missing dotted/numeric path on a present object — `${W.a.0.b|fallback:"d"}` when `W` lacks `a` → `"d"`). A chain with NO `fallback` still throws on an unresolved ref — that's your signal to add one. It rescues only genuinely-unresolved refs; a present-but-empty value (`"  "`) still flows through the other filters, so `${x|length|fallback:"0"}` on `"  "` is `"2"`.
+
+**Rule 4 — A body-text output template must not reference a var a fallible step might leave unset.** The template renders after the target runs; an unset var hard-fails the render (`Unresolved variable reference: $(AREA)`) — and that is exactly how a child skill throws OUT to its `execute_skill` parent. Pre-bind every template var to a default before the fallible step (this doubles as the throw-prevention structure in Rule 2), or source each with a `|fallback`.
+
+**Rule 5 — Degrade LOUD, not silent.** A fallback value should be a visible marker ("unavailable", "—", "n/a") — never empty, never a plausible-but-wrong value. A degraded run must be diagnosable: the throw's reason is preserved in `result.fallbacks[].reason`, so a degraded leg stays traceable. Don't silently ship a blank or a fake reading. Clean-degrade beats both a hard abort and a silent lie.
+
+**Legacy note (≤0.26.x runtimes):** before v0.27.0, `(fallback:)` did NOT catch a raised throw from `execute_skill` or `$ json_parse` (they bypassed op.fallback). On an older runtime, contain those two with `else:` or a structural guard — a `(fallback:)` on them is a no-op against a throw. v0.27.0+ unifies it, so this only matters if you must support an old runtime.
 
 ## Composition — skills calling skills
 
@@ -2202,6 +2189,18 @@ For *data skills* (skills marked `# Type: data`), the compile-time inline primit
 
 ## Session isolation — a skill can't mutate the calling agent's session
 A skill executes in its OWN session; agent session state (context, persona) is session-local. Calling `amp_set_session_context` (or similar) inside a skill sets it for the SKILL's session, not the caller's — the caller sees no change. The contract: **skills assemble and RETURN data; the agent owns its SESSION STATE.** To "enter a project," a skill returns the instruction bodies and the AGENT applies its own session context.
+
+## Current-runtime corrections (v0.27.0)
+
+This section predates the v0.27.0 error-containment model. Corrections to how it describes failure handling:
+
+1. **`# OnError:` is parsed but INERT — it never fires.** Everywhere this section says a "`# OnError:` fallback fires if declared" (skill resolution, `MissingSkillReferenceError` handling, the deferred-reference runtime path, the fallback-chain in Error surfacing), that is aspirational, not current behavior. The `fallbackSkillExecutor` is declared but never wired. For reliable throw-containment of a child failure, use the target-level `else:` handler (`${ERROR_CONTEXT}` available) or the op-level `(fallback: ...)` trailer. Read every "`# OnError:`" in this section as "`else:`".
+
+2. **`(fallback: ...)` is uniform (v0.27.0+).** The op-trailer now contains ANY op failure — a missing/unresolved value OR a raised throw — including an `execute_skill` child-throw (recursion-guard fire, missing-skill, or any error nested in the child). So `execute_skill(...) -> R (fallback: "child unavailable")` reliably degrades on a child failure regardless of nesting depth, and the fired fallback lands in `result.fallbacks[].reason`. This strengthens the "Pair composition with `(fallback: ...)`" guidance: it now works against raised child errors, not just a missing bind.
+
+3. **`execute_skill` canonical kwarg is `name=`.** Examples here use `skill_name=`, which remains a back-compat alias and still works. New authoring should prefer `execute_skill(name="child", inputs={...})`.
+
+The "Nested errors do NOT surface at the top level" observation remains accurate and important — inspect the bound `${R.errors}` or rely on `(fallback:)`/`else:`; a top-level `errors: []` does not mean nothing failed downstream.
 
 ## Static vs Dynamic — skill execution model
 
@@ -2592,7 +2591,11 @@ Most "right time" reasoning is relative, not wall-clock.
 
 When any of these primitives ship, the relevant grammar moves into its canonical section (Ops reference, Variables, Triggers, etc.) and the entry here is removed. This section stays alive as a continuous staging area for the next horizon of unshipped work.
 
+## Notation correction
+
+The planned time-primitive and introspection examples in this section are written with the `$(NAME)` paren sigil (`$(NOW)`, `$(SECONDS_SINCE_LAST_USER_MESSAGE)`, `$(PROMPT_CONTEXT.size)`, etc.). Skillscript's substitution sigil is `${...}` (brace) — the paren form is reserved to avoid bash `$(command)` collision (see Variable resolution). When these primitives ship they will use the brace form (`${NOW}`, `${SECONDS_SINCE_LAST_USER_MESSAGE}`), consistent with the Future-grammar section which already writes them correctly. Read the paren examples here as brace form.
+
 ---
 
-*Rendered from `skillscript/skillscript-language-reference` — 2026-07-06 10:00 EDT*  
+*Rendered from `skillscript/skillscript-language-reference` — 2026-07-09 10:21 EDT*  
 *Source of truth: AMP (`amp_render_document("skillscript/skillscript-language-reference")`)*

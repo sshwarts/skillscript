@@ -399,7 +399,7 @@ This is the **agent-reaches-MCP** path: any MCP-speaking agent (Claude, GPT, any
 Curated example skills in [`examples/`](https://github.com/sshwarts/skillscript/tree/main/examples), covering:
 
 - Multi-target DAG with `needs:` dependencies
-- Cron triggers with `# OnError:` fallback
+- Cron-fired gather with per-leg `(fallback:)` degrade (one failed source can't sink the brief)
 - Session-start `# Output: agent:` delivery
 - `# Requires:` cascade for compile-time data
 - `inline(skill=...)` skill composition

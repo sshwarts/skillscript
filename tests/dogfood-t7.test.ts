@@ -24,8 +24,8 @@ const REPO_ROOT = join(__dirname, "..");
 const PACKAGE_JSON = JSON.parse(readFileSync(join(REPO_ROOT, "package.json"), "utf8")) as Record<string, unknown>;
 
 describe("T7 — package.json polish", () => {
-  it("1. version is 0.27.0 (runtime: `(fallback:)` now contains a RAISED THROW from the execute_skill + json_parse intercepts too — uniform trailer semantics across every fallible op; throw reason kept in fallbacks[]; child policy failures still not swallowed; retires the two-shapes split; Perry decision B, c052581b)", () => {
-    expect(PACKAGE_JSON["version"]).toBe("0.27.0");
+  it("1. version is 0.27.1 (examples hardening for announcement: 4 contract-drifted example TS files fixed + morning-brief dead `# OnError:` → per-leg (fallback:) + new examples-corpus test [compile-all / execute-infra-free / demo-runs / TS-typecheck] + help composition topic depth-5 → depth-10 correction)", () => {
+    expect(PACKAGE_JSON["version"]).toBe("0.27.1");
   });
 
   it("2. main + types + bin + engines.node ≥ 22.5 declared", () => {

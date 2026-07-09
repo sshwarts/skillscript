@@ -2,6 +2,18 @@
 
 Each release carries an **Upgrade impact:** line (first in its section) so a bump's requirements are visible at a glance. Tags (closed set): **BREAKING** (a manual change is needed to keep working) · **RE-APPROVE** (secured-mode signature invalidation — skills must be re-approved before they run) · **CONFIG** (`connectors.json` / config edit needed) · **none (additive)** (no action; backward-compatible). Standard from 0.20.0 forward; the pre-0.20 transitions that need action are flagged inline below (0.14.0, 0.18.8, 0.19.0). Full walkthrough: [UPGRADING.md](UPGRADING.md).
 
+## 0.27.1 — 2026-07-09 — examples hardening (pre-announcement sweep)
+
+**Upgrade impact:** none (additive). Example + help-content fixes; no runtime behavior change.
+
+A pre-announcement review ran every shipped example against the current runtime and contracts. Findings, all fixed:
+
+- **Four example TypeScript files had drifted off the connector contracts** and no longer compiled — the fork-me `DataStoreTemplate` and the onboarding scaffold's `file-data-store` were missing the v0.13.8 `DataStore.get()`; `file-data-store` / `openai-local-model` / `tmux-shell-agent-connector` used stale feature-flag keys outside the closed per-kind unions; the tmux connector was missing `WakeReceipt.woken` plus the `health_check()` / `request_response()` contract methods. Nothing compiled the example `.ts` files, so the drift was silent — the worst first-copy experience for an adopter forking a template.
+- **`morning-brief` declared `# OnError: morning-brief-degraded`** — a skill that doesn't ship (dangling reference, so the example didn't compile standalone) *and* a mechanism that isn't wired in the runtime. Rewritten to the v0.27.0 pattern it should be teaching: a per-leg `(fallback:)` on every gather leg + a fallback-bound `BRIEF` so the output template always renders, degrading loudly per source.
+- **New `tests/examples-corpus.test.ts`** locks all of this in: every bundled skill **compiles** (with declared inputs), the infra-free skills **execute** end-to-end against the bundled bootstrap, the programmatic trace demo **runs**, and every example `.ts` **typechecks** against the current contracts — the fork-template-drift guard that was missing.
+- **`help({topic:"composition"})` recursion default corrected** — said "depth-5"; the runtime's `DEFAULT_MAX_RECURSION_DEPTH` is 10.
+- **Docs pass (pre-announcement).** `language-reference.md` re-rendered from the canonical atoms (v0.27.0 uniform `(fallback:)` semantics; `# OnError:` flagged parsed-but-not-wired throughout). `adopter-playbook.md`: the retired `??`/`ask()` mutation-authorization path removed (three mentions; retired in v0.16.0) and the `(fallback:)` trailer section updated to the uniform op list. `configuration.md`: `SKILLSCRIPT_SECRET_<NAME>` added to the env-var reference (the one runtime env var missing from the table). `adopter-agent-guide.md`: `help` topic lists updated to the current 7-topic set (incl. `error-handling`). `index.md`: examples bullet no longer advertises the unwired `# OnError:`. `ARCHITECTURE.md` re-synced to shipped reality (LOC ceiling, file inventory incl. `secrets.ts`, canonical parser grammar, ~77 lint rules, `delete` CLI command, v0.27.0 runtime row) and its AMP doc atoms updated to match.
+
 ## 0.27.0 — 2026-07-06 — runtime: `(fallback:)` now contains a raised throw (uniform trailer semantics)
 
 **Upgrade impact:** none (additive; no re-approval). A `(fallback:)` that previously did nothing against a throw now fires — a skill that used to abort now degrades. No skill breaks; see the one behavior note below.

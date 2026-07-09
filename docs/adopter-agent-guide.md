@@ -49,7 +49,7 @@ What you can script is the wired connectors, models, and allowed shell binaries 
 you catch yourself re-running the same multi-step routine over any of them, turn it into a skill:
 
 1. `help()` — learn the language (and `help({ topic })` for ops, frontmatter,
-   connectors, lint-codes).
+   examples, composition, error-handling, connectors, lint-codes).
 2. Draft the skill body against what's wired.
 3. `lint_skill({ source })` then `compile_skill({ source })` — catch mistakes
    before anything is stored.
@@ -116,7 +116,7 @@ The tools your agent has when a Skillscript runtime is wired:
 | `execute_skill({ name \| source, inputs? })` | Run a skill. `name` runs a stored, approved skill; `source` runs ad-hoc inline (bypasses the store — for one-offs). |
 | `skill_write({ name, source, overwrite? })` | Store a skill. Lands Draft unless approved. |
 | `skill_status({ name, new_state })` | Transition Draft / Approved / Disabled. |
-| `help({ topic? })` | Language reference — quickstart, plus `ops`, `frontmatter`, `connectors`, `lint-codes`, `examples`, `composition`. |
+| `help({ topic? })` | Language reference — quickstart, plus `ops`, `frontmatter`, `examples`, `composition`, `error-handling`, `connectors`, `lint-codes`. |
 | `runtime_capabilities()` | What's actually wired — connectors, models, shell mode. |
 | `register_trigger` / `list_triggers` / `unregister_trigger` | Inspect/manage autonomous dispatch (cron / event). |
 

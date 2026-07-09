@@ -828,7 +828,7 @@ Lint \`unknown-returns-ref\` (tier-1) catches names declared in \`# Returns:\` t
 
 ## Limits & lint signals
 
-- **Recursion**: depth-5 chain by default (\`ExecuteSkillRecursionError\` if exceeded).
+- **Recursion**: depth-10 chain by default (\`ExecuteSkillRecursionError\` if exceeded).
 - **Lint** (\`unknown-skill-reference\`, tier-2): both \`inline(skill="<name>")\` and \`execute_skill(skill_name="<name>", ...)\` validate the child exists in the SkillStore at compile time. Forward references are allowed: missing skills lint as warning (not error), runtime throws \`MissingSkillReferenceError\` if still unresolved at execute. Tier-3 \`deferred-skill-reference\` advisory confirms when the deferred-resolution path is engaged.
 - **Lint** (\`disabled-skill-reference\`, tier-1): any composition primitive pointing at a \`# Status: Disabled\` skill blocks compile.
 

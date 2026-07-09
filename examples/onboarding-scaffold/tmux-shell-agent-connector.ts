@@ -5,9 +5,11 @@
 // with agents running in tmux sessions can wire `# Output: agent: <agent>`
 // end-to-end against this impl.
 //
-// **Scope.** Implements `deliver()` + `list_agents()` + `wake()` +
-// `manifest()` per the AgentConnector contract. `wake()` is a no-op
-// here (tmux panes are always live; wake is for harnesses with sleep modes).
+// **Scope.** Implements the full AgentConnector contract: `deliver()` +
+// `list_agents()` + `wake()` + `agent_status()` + `health_check()` +
+// `request_response()` + `manifest()`. `wake()` degrades to a no-op (tmux
+// panes are always live; wake is for harnesses with sleep modes) and
+// `request_response()` throws not-implemented (send-keys is fire-and-forget).
 
 import { spawn } from "node:child_process";
 import type {
@@ -16,6 +18,8 @@ import type {
   AgentStatus,
   DeliveryPayload,
   DeliveryReceipt,
+  RequestResponseOpts,
+  Response,
   WakeOpts,
   WakeReceipt,
 } from "skillscript-runtime/connectors";
@@ -36,7 +40,10 @@ export class TmuxShellAgentConnector implements AgentConnector {
       connector_type: "agent_connector",
       implementation: "TmuxShellAgentConnector",
       contract_version: "1.0.0",
-      features: { supports_deliver: true, supports_wake: false },
+      // AgentConnector flags are method-presence shape (one per contract
+      // method). `wake` is present but degrades to a no-op — see wake()'s
+      // `woken: false` receipt.
+      features: { deliver: true, wake: true, list_agents: true, agent_status: true },
     };
   }
 
@@ -75,16 +82,45 @@ export class TmuxShellAgentConnector implements AgentConnector {
   }
 
   async wake(agent_id: string, _opts?: WakeOpts): Promise<WakeReceipt> {
-    // tmux panes are always live; no-op wake returns immediately.
+    // tmux panes are always live — there is nothing to wake. `woken: false`
+    // is the honest receipt: the substrate performed no wake action (the
+    // contract reads false as "degraded to deliver-only").
     const session = this.config.sessionMap[agent_id];
     return {
       woken_at: Date.now(),
+      woken: false,
       ...(session !== undefined ? { session_id: session } : {}),
     };
   }
 
   async agent_status(agent_id: string): Promise<AgentStatus> {
     return this.config.sessionMap[agent_id] !== undefined ? "active" : "unknown";
+  }
+
+  /**
+   * Substrate liveness: is the `tmux` binary reachable? Invoked at
+   * `Registry.registerAgentConnector()` — a false return refuses the wiring
+   * early instead of failing on the first deliver.
+   */
+  async health_check(): Promise<boolean> {
+    try {
+      await this.tmux(["-V"]);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * tmux send-keys is fire-and-forget — there is no reply channel to
+   * correlate a response on. Throw not-implemented per the contract's
+   * documented pattern (see NoOpAgentConnector) rather than fake a reply.
+   */
+  async request_response(agent_id: string, _payload: DeliveryPayload, _opts: RequestResponseOpts): Promise<Response> {
+    throw new Error(
+      `TmuxShellAgentConnector: request_response(${agent_id}) not implemented — ` +
+      `tmux send-keys has no reply channel. Use deliver() for one-way output.`,
+    );
   }
 
   async manifest(): Promise<ManifestInfo> {

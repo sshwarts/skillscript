@@ -5,7 +5,7 @@
 // their concrete substrate (e.g., swap the JSON file for a Postgres
 // table, the substring match for actual full-text search, etc.).
 //
-// **Scope.** Implements `query()` + `write()` per the DataStore contract.
+// **Scope.** Implements `query()` + `write()` + `get()` per the DataStore contract.
 
 import { readFileSync, existsSync, writeFileSync } from "node:fs";
 import { randomUUID } from "node:crypto";
@@ -35,7 +35,9 @@ export class FileDataStore implements DataStore {
       implementation: "FileDataStore",
       contract_version: "1.0.0",
       features: {
-        supports_fts: true,
+        // FTS is the baseline query mode — declared via `manifest().supported_modes`,
+        // not a feature flag. Flags are the closed `DataStoreFeature` set.
+        supports_writes: true,
         supports_semantic: false,
         supports_rerank: false,
       },
@@ -96,11 +98,20 @@ export class FileDataStore implements DataStore {
     return { id, created_at };
   }
 
+  /**
+   * Direct lookup by id (v0.13.8 DataStore contract). Null-on-miss —
+   * never throws for an unknown id.
+   */
+  async get(id: string): Promise<PortableData | null> {
+    return this.loadFile().find((r) => r.id === id) ?? null;
+  }
+
   async manifest(): Promise<ManifestInfo> {
     return {
       capabilities_version: "1",
       manifest: {
         kind: "file-data-store",
+        supported_modes: ["fts"],
         file_path: this.config.filePath,
         record_count: this.loadFile().length,
         supports_write: true,
