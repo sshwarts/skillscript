@@ -28,6 +28,23 @@ import {
 import type { SkillStore, SkillSource, SkillMeta, VersionInfo } from "../src/connectors/types.js";
 
 /**
+ * Poll until the sentinel file appears (positive-fire assertions only).
+ * `fireEvent` is async fire-and-forget; a fixed post-fire sleep races the
+ * dispatch (sig-verify + compile + execute) on slow CI runners — the exact
+ * flake that failed the v0.27.1 release run. Negative assertions ("gate
+ * refused → file absent") keep the fixed sleep: polling can't prove absence,
+ * and a short conservative window is the right shape there.
+ */
+async function waitForFile(path: string, timeoutMs = 5000): Promise<boolean> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (existsSync(path)) return true;
+    await new Promise((r) => setTimeout(r, 25));
+  }
+  return existsSync(path);
+}
+
+/**
  * A verbatim store — persists EXACTLY what it's told, no Draft-forcing. This is
  * the red-team substrate: it will happily report metadata.status === "Approved"
  * for a forged body, so the dispatch's *signature gate* (not the status
@@ -124,9 +141,8 @@ describe("secured-mode trigger/event dispatch refuses forged-Approved skills (st
       scheduler.registerTrigger({ skillName: "writer", source: "event", name: "go", declarative: false });
 
       scheduler.fireEvent("go", {});
-      await new Promise((r) => setTimeout(r, 50));
 
-      expect(existsSync(sentinel)).toBe(true); // valid sig → dispatch executes the effect
+      expect(await waitForFile(sentinel)).toBe(true); // valid sig → dispatch executes the effect
     } finally {
       cleanup();
     }
@@ -141,9 +157,8 @@ describe("secured-mode trigger/event dispatch refuses forged-Approved skills (st
       scheduler.registerTrigger({ skillName: "writer", source: "event", name: "go", declarative: false });
 
       scheduler.fireEvent("go", {});
-      await new Promise((r) => setTimeout(r, 50));
 
-      expect(existsSync(sentinel)).toBe(true);
+      expect(await waitForFile(sentinel)).toBe(true);
     } finally {
       cleanup();
     }
