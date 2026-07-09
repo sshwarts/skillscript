@@ -403,8 +403,8 @@ export class MissingSkillReferenceError extends OpError {
       `(forward-ref) and the skill never stored, or is this a typo?`;
     const remediation =
       `Store the missing skill via \`skill_write\`, fix the spelling at the call site, ` +
-      `or wire a \`# OnError: <fallback-skill>\` on the calling skill so the failure ` +
-      `routes to a recovery path. v0.3.1 demoted the lint to tier-2 — runtime is ` +
+      `or contain the failure with a \`(fallback: ...)\` trailer on the \`execute_skill\` op ` +
+      `(or a target-level \`else:\` block). v0.3.1 demoted the lint to tier-2 — runtime is ` +
       `the resolution gate.`;
     super(message, opKind, remediation, target);
     this.name = "MissingSkillReferenceError";

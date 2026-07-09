@@ -396,7 +396,7 @@ step by step,
 without skipping any steps.
 \`\`\`
 
-**\`$ json_parse \${VAR} -> P\`** parses input as JSON and binds the structured value to \`P\`. Dotted descent via \`\${P.field}\` works in conditions and emit. Throws on malformed JSON (caught by \`else:\` / \`# OnError:\`).
+**\`$ json_parse \${VAR} -> P\`** parses input as JSON and binds the structured value to \`P\`. Dotted descent via \`\${P.field}\` works in conditions and emit. Throws on malformed JSON — contain it with an op-level \`(fallback: ...)\` on the \`$ json_parse\` op, a target-level \`else:\` block, or a shape check before parsing.
 
 \`\`\`
 # Vars: PAYLOAD={"status":"ok","count":3}
@@ -489,7 +489,7 @@ Skill files open with \`# Key: value\` headers. Order isn't significant.
 - \`# Returns: X, Y, Z\` — declared export surface for \`execute_skill\` composition. Names that propagate from this skill's \`final_vars\` into the caller's bound \`R\`. Internal scratch vars NOT listed here stay local — never serialized into the caller's result. Skills without \`# Returns:\` export nothing from \`final_vars\` (outputs + transcript + metadata still flow). Symmetric with \`# Vars:\` (input surface ↔ output surface).
 - \`# Triggers: cron: 0 9 * * *, event: my-event\` — autonomous-dispatch sources. Two primitives: \`cron\` (time-based) and \`event\` (HTTP POST \`/event\` ingress, named registration). Comma-separated entries split by source-keyword boundary; cron expressions with commas (\`30,45 9 * * 1-5\`) parse correctly.
 - \`# Output: text | agent: <name> | template: <name> | file: path | none\` — output routing. Five kinds, all substrate-neutral. **Two substrate-neutral lifecycle hooks**: \`agent: <name>\` routes via AgentConnector as augment-kind delivery; \`template: <name>\` routes as template-kind delivery (receiving agent executes the rendered playbook). **Output content source**: if the skill has a body-text-as-output template (prose between frontmatter and first target), the rendered template populates the canonical output payload. Otherwise: agent/template kinds default to joined emissions; text/file kinds default to the last-bound variable value, falling back to the emissions array. Body template + emit() are complementary — template = canonical output, emit() = transcript. **For substrate-specific delivery destinations** (Slack, WhatsApp, Discord, pagerduty, custom dashboards, etc.) — that's contract-between-the-skill-and-the-substrate territory, downstream of the language. Two paths: (1) \`$ <connector>.<tool> ...\` inside the skill body to dispatch through an adopter-wired MCP connector, or (2) deliver via \`agent: <name>\` to an agent whose AgentConnector decides how to surface the result.
-- \`# OnError: <fallback-skill-name>\` — error-handler skill invoked when an op fails and no target-level \`else:\` catches.
+- \`# OnError: <fallback-skill-name>\` — **not wired in the current runtime; does nothing.** The named skill is never invoked. Use a target-level \`else:\` block for recovery logic, or an op-level \`(fallback: ...)\` trailer to degrade one op. (Header still parses for back-compat; a future release removes it. See \`help({topic: "error-handling"})\`.)
 - \`# Autonomous: true | false\` — declarative authorship intent for unattended-execution skills (cron-fired, agent-fired, etc.). Silences \`unconfirmed-mutation\` lint warnings for the whole skill (since the user-confirmation pattern doesn't apply to autonomous skills); reserved as the canonical autonomous-skill category marker for future rules + scheduling defaults + discovery surfaces. Omitted = interactive (default).
 
 ## Augmenting / Template only
@@ -538,7 +538,7 @@ The runtime injects these refs — don't declare them in \`# Vars:\` / \`# Requi
 | \`$(SESSION_CONTEXT)\` | runtime session | Free-form session snapshot for cross-skill carry |
 | \`$(TRIGGER_TYPE)\` | scheduler | \`cron\` / \`event\` / \`webhook\` / \`agent\` / \`cli\` / \`dashboard\` / \`inline\` |
 | \`$(TRIGGER_PAYLOAD)\` | scheduler | JSON-serializable payload attached to the firing trigger |
-| \`$(ERROR_CONTEXT)\` | runtime error handler | Inside \`else:\` and \`# OnError:\` only; \`.kind\` / \`.message\` / \`.target\` accessible |
+| \`$(ERROR_CONTEXT)\` | runtime error handler | Inside a target-level \`else:\` block only; \`.kind\` / \`.message\` / \`.target\` accessible |
 
 \`EVENT.*\` auto-populates on cron-fired skills:
 
@@ -786,7 +786,7 @@ brief:
 
 ## 2. \`execute_skill(name="<child>", ...kwargs) -> R\` — runtime invocation
 
-The general composition form: the host calls another skill at runtime, capturing its full execution record. Same depth-counted chain (default 5) as the recursion guard.
+The general composition form: the host calls another skill at runtime, capturing its full execution record. Same depth-counted chain (default 10) as the recursion guard.
 
 \`\`\`
 gather:

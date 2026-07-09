@@ -301,7 +301,7 @@ Closed list of language-intrinsic ops the runtime knows directly. Each is a func
 | `emit` | `emit(text="...")` | none | Append to the skill's emission stream; consumed by the configured `# Output:` delivery channel. |
 | `notify` | `notify(agent="...", message="...", [event_type=...], [correlation_id=...]) -> ACK` | optional | Mid-skill agent alert; synchronous send via configured AgentConnector. |
 | `inline` | `inline(skill="<data-skill-name>")` | none | Compile-time inline of an Approved `# Type: data` skill. Resolves at compile, records `content_hash` in provenance. |
-| `execute_skill` | `execute_skill(skill_name="...", inputs=\{...}) -> R` | optional | Composition primitive. Runtime-resolved. See Composition section. |
+| `execute_skill` | `execute_skill(name="...", inputs=\{...}) -> R` | optional | Composition primitive. Runtime-resolved. `skill_name=` accepted as back-compat alias. See Composition section. |
 | `shell` | `shell(command="...") -> R` / `shell(argv=[...]) -> R` / `shell(command="...", unsafe=true) -> R` | optional | Structural spawn (default), explicit-argv spawn (`argv=[...]`, no tokenizer), or full-shell exec (`unsafe=true`, gated by `runtime.enable_unsafe_shell`). Binary gated by the operator allowlist (see below). stdout binds. |
 | `file_read` | `file_read(path="...") -> R` | required | Read a file at `path`; binds string contents. Optional `encoding="utf8"\|"base64"` kwarg (default `utf8`). |
 | `file_write` | `file_write(path="...", content="...")` | none | Write `content` to `path`. `mkdir -p` semantics for parent directories. Mutation-classified. |
@@ -358,7 +358,7 @@ Returns ACK `{agent, dispatched: [{connector, ok, error?}]}` — fire-and-forget
 
 Three forms.
 
-**1. `shell(command="...")` — structural spawn (default).** The command string is whitespace-tokenized and quote-stripped, then one binary is spawned with the resulting tokens. No shell, no metacharacters, no pipes/redirects. The tokenizer is **quote-aware**: quotes are respected during the whitespace split, so a literal `'hello world'` stays one token (the surrounding quotes are then stripped). stdout binds; non-zero exit → op-error routed through `else:` / `# OnError:`.
+**1. `shell(command="...")` — structural spawn (default).** The command string is whitespace-tokenized and quote-stripped, then one binary is spawned with the resulting tokens. No shell, no metacharacters, no pipes/redirects. The tokenizer is **quote-aware**: quotes are respected during the whitespace split, so a literal `'hello world'` stays one token (the surrounding quotes are then stripped). stdout binds; non-zero exit → op-error routed through the target's `else:` handler.
 
 ```
 shell(command="curl -s 'wttr.in/${LOCATION|url}?format=j1'") -> RAW
@@ -437,10 +437,10 @@ See Composition section for the distinction between `inline` (compile-time), `ex
 
 ```
 classify:
-    execute_skill(skill_name="classifier", inputs={"text": "${INPUT}"}) -> VERDICT
+    execute_skill(name="classifier", inputs={"text": "${INPUT}"}) -> VERDICT
 ```
 
-Runtime-resolved against the SkillStore. Recursion-depth-guarded (default 10).
+Runtime-resolved against the SkillStore. Recursion-depth-guarded (default 10). Canonical kwarg is `name=`; `skill_name=` is an accepted back-compat alias.
 
 **Returns.** The caller's `-> R` binding receives `outputs` + `transcript` + execution metadata always, plus the child's declared `# Returns:` surface (each declared var accessible as `${R.X}`). Undeclared scratch is filtered — a child with no `# Returns:` yields `final_vars: {}`. This is what keeps composition from compounding (a child's internal state never propagates up). Full contract in Composition § Return contract.
 
@@ -517,7 +517,7 @@ $ amp.amp_olsen_task task_type="scan" timeout=120 -> DISPATCH
 $ data_write content="${REPORT}" tags=["oncall"] approved="morning roundup" -> ACK
 ```
 
-**`(fallback: "value")` trailer** — Fires on dispatch throw (including a `timeout=N` expiry) OR empty bound value (empty string after trim, empty array, null/undefined). Honored on `$` dispatch and on `shell()` (fires on shell op throw or empty stdout). Coerce-on-bind: the fallback value binds to the output var transparently, downstream targets need no conditional. Permissive value parsing — bare identifiers, quoted strings, bracketed array literals all accepted. A fired fallback is recorded in `result.fallbacks[]`.
+**`(fallback: "value")` trailer** — Uniform as of v0.27.0: fires on ANY op failure — a dispatch throw (including a `timeout=N` expiry), an empty bound value (empty string after trim, empty array, null/undefined), OR a raised throw from an `execute_skill` child or a `$ json_parse` off-shape input. Honored on `$` dispatch and on `shell()` (fires on shell op throw or empty stdout). Coerce-on-bind: the fallback value binds to the output var transparently, downstream targets need no conditional. Permissive value parsing — bare identifiers, quoted strings, bracketed array literals all accepted. A fired fallback is recorded in `result.fallbacks[]` (with its `.reason`).
 
 Note: an envelope object like `{items: []}` is a non-empty object and does NOT trigger the fallback even though its contained array is empty. To handle envelope-empty downstream, test the contained collection (`if ${R.items|length} == "0":`) or apply a filter (`${R.items|fallback:[]}`).
 
@@ -599,7 +599,7 @@ $ data_write content="${SUMMARY}" tags=["oncall"] approved="morning roundup, 202
 $ ticketing.search query="project:INFRA state:Open" limit=20 -> ISSUES
 ```
 
-Tool args are unconstrained `key=value` pairs — the connector forwards them to the underlying MCP tool. If a dispatched call returns `isError: true`, the executor throws via `makeOpError`, which routes through `else:` / `# OnError:` machinery. The inner tool's error text is preserved in `result.errors[]`.
+Tool args are unconstrained `key=value` pairs — the connector forwards them to the underlying MCP tool. If a dispatched call returns `isError: true`, the executor throws via `makeOpError`, which routes through the target's `else:` handler. The inner tool's error text is preserved in `result.errors[]`.
 
 **Substrate-neutrality.** Typed-contract bare ops (`$ llm`, `$ data_read`, `$ data_write`, `$ skill_*`, `$ json_parse`) are not reserved built-ins — they're typed-contract bridges the adopter wires through `substrate.local_model` / `substrate.data_store` / `substrate.skill_store` in `skillscript.config.json`. Substrate-specific tools (`$ amp.*`, `$ github.*`, etc.) are whatever the adopter declares in `connectors.json`. For external MCP servers, three bundled wiring paths cover the common cases:
 
@@ -669,22 +669,12 @@ deliver:
 | Runtime-intrinsic | `emit` | `emit(text="...")` or `emit(text="""...""")` for multi-line | none |
 | Runtime-intrinsic | `notify` | `notify(agent="...", [message=...], [event_type=...], [correlation_id=...]) -> ACK` | optional |
 | Runtime-intrinsic | `inline` | `inline(skill="<name>")` | none (compile-time) |
-| Runtime-intrinsic | `execute_skill` | `execute_skill(skill_name="...", inputs=\{...}) -> R` | optional |
+| Runtime-intrinsic | `execute_skill` | `execute_skill(name="...", inputs=\{...}) -> R` (`skill_name=` back-compat alias) | optional |
 | Runtime-intrinsic | `shell` | `shell(command="...", [unsafe=true], [approved="..."]) [-> R] [(fallback: "...")]` or `shell(argv=[...], [approved="..."]) [-> R] [(fallback: "...")]` (mutually exclusive forms; binary allowlist applies to both) | optional |
 | Runtime-intrinsic | `file_read` | `file_read(path="...", [encoding="utf8"\|"base64"]) -> R` | required |
 | Runtime-intrinsic | `file_write` | `file_write(path="...", content="...", [approved="..."])` | none |
 | External MCP — substrate-specific | `$ <connector>.<tool>` | `$ <connector>.<tool> kwarg=value, ... [timeout=N] [approved="..."] [-> R] [(fallback: "...")]` | optional |
 | External MCP — typed-contract | `$ <tool>` | `$ <tool> kwarg=value, ... [timeout=N] [approved="..."] [-> R] [(fallback: "...")]` (typed-contract ops only: `data_*`, `skill_*`, `json_parse`, `llm`) | optional |
-
----
-
-## Current-runtime corrections (v0.27.0)
-
-A few points above predate the 0.26/0.27 error-handling changes — read them with these corrections:
-
-- **`(fallback:)` is now UNIFORM (v0.27.0).** Beyond `$` dispatch and `shell()`, the op-level `(fallback:)` trailer now also contains a raised throw from `execute_skill` (a child skill that throws) and `$ json_parse` (malformed input). It contains ANY failure of the op — a raised throw OR an empty/missing result — on every fallible op. A fired fallback is recorded in `result.fallbacks[].reason`.
-- **`# OnError:` is parsed but NOT wired** in the current runtime — the named fallback skill never fires. Wherever the text above says an op-error "routes through `else:` / `# OnError:`", read it as `else:` only. Use `else:` (or an op-level `(fallback:)`, or a structural guard) for containment. See the Error handling and Robustness sections.
-- **`execute_skill` canonical kwarg is `name=`** (`skill_name=` is an accepted silent back-compat alias). Prefer `execute_skill(name="...", inputs={...}) -> R` in new skills; the `skill_name=` examples above still work but aren't canonical.
 
 ## Variable resolution — ${VAR} canonical, substitution + ambient refs + # Requires: cascade
 
@@ -714,7 +704,7 @@ Injected automatically at runtime; never declared by the author.
 | `$\{TRIGGER_TYPE}` | What event fired this skill |
 | `$\{TRIGGER_PAYLOAD}` | Event-specific data |
 | `$\{EVENT.*}` | Event-payload fields populated by the trigger source |
-| `$\{ERROR_CONTEXT}` | In `# OnError:` fallback skills: type + target where failure occurred |
+| `$\{ERROR_CONTEXT}` | Inside a target's `else:` error-handler: kind + message + target of the failure. |
 
 Iterator vars from `foreach` and output bindings from runtime-intrinsic / MCP-dispatch ops also pass through ambient at compile time; the runtime substitutes them per iteration / per op completion.
 
@@ -810,10 +800,6 @@ Missing-ref in the RHS produces a tier-1 runtime error.
 - `-> VAR` bindings are skill-global (visible to all targets after the op runs)
 - `foreach IDENT in EXPR:` iterator vars are loop-local — `$set` bindings inside the loop don't persist after the loop ends
 - Target outputs (`${target.output}`) are accessible after the target completes
-
-## Current-runtime correction (v0.27.0)
-
-**`${ERROR_CONTEXT}` is surfaced in `else:` error-handler blocks, not `# OnError:`.** The Tier-1 ambient table above describes `${ERROR_CONTEXT}` as available "In `# OnError:` fallback skills" — that is stale. `# OnError:` is parsed but inert (never fires). The working error-handler is the target-level `else:` block (runs when any op in the target body throws), and `${ERROR_CONTEXT}` (failure type + target) is populated inside that `else:` block. Read the table row as: "In an `else:` error-handler: type + target where failure occurred." See the Error handling and Conditionals sections for `else:`-handler semantics.
 
 ## Secrets — secret.NAME references, {{secret.NAME}} sink markers, SKILLSCRIPT_SECRET_ provisioning, use-only enforcement
 
@@ -968,6 +954,8 @@ emit:
     emit(text="nested:  ${ISSUE.customFields.Assignee|fallback:\"unassigned\"}")
 ```
 
+**Order-independent in a filter chain (v0.26.2+).** A `|fallback` anywhere in the chain rescues an unresolved base — `${x|trim|fallback:"d"}` and `${x|fallback:"d"|trim}` both degrade an unresolved `x` to `"d"`. Nuance: it rescues a genuinely-unresolved/missing base; a **present-but-empty value still flows through the other filters**, so `${x|length|fallback:"0"}` on `x="  "` returns `"2"`, not `"0"`. See the Robustness & error containment section for the chain semantics.
+
 **Why filter-shape, not ref-level `(fallback:)`.** Op-level `(fallback: ...)` exists on `$` dispatch and `shell()` for **error/empty recovery** (the op ran, then failed or returned empty). Ref-level `|fallback:` is **coalesce** (the lookup itself found nothing — missing, null, or empty). They rhyme but are adjacent concepts. The filter-chain attachment keeps composition clean (`${VAR|json_parse|fallback:"-"}` works as a chain step) and the vocabulary alignment with op-level `(fallback:)` lets cold authors learn "fallback" as the universal concept while the syntax disambiguates the attachment site.
 
 **Closes the missing-field strict-error trap**: `${ISSUE.customFields.Assignee}` against an object without that key threw `UnresolvedVariableError` and aborted whole-render. The filter is the per-ref opt-out.
@@ -1032,7 +1020,7 @@ elif ${BODY|length} > 1000:
 
 ## Error handling
 
-Unknown filter on a resolved variable produces a tier-1 `unknown-filter` compile error. Catches both bare (`|unknown`) and colon-positional (`|unknown:"arg"`) shapes. Filter chains that fail at runtime (e.g., `|json` on a non-serializable value, `|length` on a number, `|isodate` on a non-numeric value) produce op errors that route through `else:` / `# OnError:` machinery.
+Unknown filter on a resolved variable produces a tier-1 `unknown-filter` compile error. Catches both bare (`|unknown`) and colon-positional (`|unknown:"arg"`) shapes. Filter chains that fail at runtime (e.g., `|json` on a non-serializable value, `|length` on a number, `|isodate` on a non-numeric value) produce op errors that route through the target's `else:` handler.
 
 Bare `${NAME}` without a filter is unchanged.
 
@@ -1060,13 +1048,6 @@ Several filters are planned but not yet shipped:
 Filters are pure functions (input → output, no side effects). Stay small and orthogonal — each filter does one thing. Composition emerges from chaining, not from elaborate per-filter parameter spaces. The shipped set covers ~90% of real-world string-shaping needs; the pending set extends to slicing and array projection.
 
 `length`, `fallback:`, `isodate`, and `contains:` were all added in response to cold-author harness signal — authored skills demonstrated the gap was load-bearing before each filter shipped. `contains:` is also notable as the first filter to operate on structured types; filter-as-conditional-primitive is the design line that warranted the cross.
-
----
-
-## Current-runtime corrections
-
-- **`|fallback` is order-independent in a filter chain (v0.26.2+).** A `|fallback` anywhere in the chain rescues an unresolved base — `${x|trim|fallback:"d"}` and `${x|fallback:"d"|trim}` both degrade an unresolved `x` to `"d"`. Nuance: it rescues a genuinely-unresolved/missing base; a present-but-empty value still flows through the other filters, so `${x|length|fallback:"0"}` on `x="  "` returns `"2"`, not `"0"`. See the Robustness & error containment section for the chain semantics.
-- The "Error handling" note above ("Filter chains that fail at runtime … route through `else:` / `# OnError:` machinery") should read **`else:`** — `# OnError:` is parsed but not wired in the current runtime.
 
 ## Conditionals & iteration — if/elif/else, foreach, supported operators
 
@@ -1531,11 +1512,7 @@ The receiving agent reads `event_type` for routing ("911 — surface now" vs "ro
 
 ## Output routing failures
 
-If `# Output: agent: <name>` fires and the wired AgentConnector throws, delivery routes through `else:` / `# OnError:`; the failure is recorded on `agent_delivery_receipts[]` for the scheduler to log.
-
-## Current-runtime correction (v0.27.0)
-
-**Output routing failures land in `else:`, not `# OnError:`.** The "Output routing failures" section says a throwing AgentConnector "routes through `else:` / `# OnError:`." `# OnError:` is parsed but inert (never fires) — read that as `else:` only. The target-level `else:` handler catches the delivery throw; the failure is still recorded on `agent_delivery_receipts[]` for the scheduler regardless.
+If `# Output: agent: <name>` fires and the wired AgentConnector throws, delivery routes through the target's `else:` handler; the failure is recorded on `agent_delivery_receipts[]` for the scheduler to log.
 
 ## Connectors — substrate routing, the five connector types, agent_id resolution
 
@@ -1776,7 +1753,7 @@ interface PortableMemory {
   score?: number;
 
   // Curated substrate subset — concept-portable, value-substrate-specific.
-  // Top-level access via $(MEMORY.field). Connectors populate when the
+  // Top-level access via ${MEMORY.field}. Connectors populate when the
   // concept applies. MUST NOT also be duplicated into metadata.
   thread_status?: string;
   pinned?: boolean;
@@ -1790,7 +1767,7 @@ interface PortableMemory {
   agent_id?: string;
   vault?: string;
 
-  // Substrate-specific bag. Accessed via $(MEMORY.metadata.X).
+  // Substrate-specific bag. Accessed via ${MEMORY.metadata.X}.
   metadata?: Record<string, unknown>;
 }
 
@@ -1809,21 +1786,17 @@ interface McpDispatchCtx {
 
 ## Field access semantics
 
-`$(MEMORY.field)` resolves in tiers:
+`${MEMORY.field}` resolves in tiers:
 1. Core fields (id, summary, detail, score)
 2. Curated substrate subset (thread_status, pinned, etc.)
 3. `metadata.X` for everything else
-4. Ambient passthrough as literal `$(MEMORY.field)` if unresolved
+4. Ambient passthrough as literal `${MEMORY.field}` if unresolved
 
-**Connector duplication is a contract violation.** If a field is in the curated subset, the connector populates it at top-level only — `metadata.<same_name>` MUST be absent. Otherwise `$(M.thread_status)` and `$(M.metadata.thread_status)` can return different values (silent data divergence). Connectors enforce.
+**Connector duplication is a contract violation.** If a field is in the curated subset, the connector populates it at top-level only — `metadata.<same_name>` MUST be absent. Otherwise `${M.thread_status}` and `${M.metadata.thread_status}` can return different values (silent data divergence). Connectors enforce.
 
 ## Why connector abstraction matters
 
 Hard-coupling skills to specific substrates would make information-flow decisions infrastructural rather than skill-authored, defeating the point of skills as the agent's programming language. The connector layer is what lets the same skill body run against substrate A today and run against substrate B tomorrow without rewriting.
-
-## Notation correction
-
-The "Portable shapes" and "Field access semantics" sections write memory-field access as `$(MEMORY.field)` / `$(M.thread_status)` / `$(MEMORY.metadata.X)`. That is the wrong sigil. Skillscript's canonical substitution form is `${...}` (brace), not `$(...)` (paren) — the paren form is deliberately reserved to avoid collision with bash `$(command)` inside `shell(command=..., unsafe=true)` (see the Variable resolution section). Read every `$(MEMORY.field)` here as `${MEMORY.field}`. The tiered field-access resolution (core → curated subset → `metadata.X` → ambient passthrough) is otherwise accurate; only the sigil is wrong.
 
 ## Lifecycle and status — # Status: header, three canonical states (Draft / Approved / Disabled), compile + runtime enforcement
 
@@ -1890,9 +1863,9 @@ Lifecycle states are the language's operational-safety answer. A Disabled skill 
 
 ## Error handling — else: blocks, # OnError: fallback, op-level fallback values
 
-Skillscript has no try/catch — error handling is authored. Three mechanisms, local to global. **Note each one's current wiring status.**
+Skillscript has no try/catch — error handling is authored. Two runtime mechanisms (local to global) plus a structural discipline that prevents failure outright.
 
-## Layer 1: Target-level `else:` block — the reliable throw-container
+## Layer 1: Target-level `else:` block — the throw-container
 
 Runs if any op in the target's primary body throws. Local to the failing target; downstream targets that depend on it can still proceed with whatever the `else:` branch produced. `${ERROR_CONTEXT}` (`.kind` / `.message` / `.target`) is available inside it. This is the way to contain a raised throw — including an `execute_skill` child-throw and a `$ json_parse` on malformed input (both verified v0.27.0).
 
@@ -1906,11 +1879,7 @@ else:
 
 Distinguished from conditional `else:` (which appears after an `if:`/`elif:` chain inside a body) by the parser's scope-stack; both can coexist in a target. An `else:` block may not declare its own error handler.
 
-## Layer 2: Skill-level `# OnError:` header — PARSED BUT NOT YET WIRED
-
-`# OnError: <fallback-skill>` is accepted and existence-checked at compile time, but it is **NOT wired in the current runtime — the named fallback skill never fires.** Do not rely on it for containment; use `else:` (or a structural guard) instead. (Tracked: wire it or remove the header in a future release.)
-
-## Layer 3: Op-level `(fallback:)` value — uniform (v0.27.0+)
+## Layer 2: Op-level `(fallback:)` value — uniform (v0.27.0+)
 
 Inline fallback on the op line. As of **v0.27.0 it is uniform: it contains ANY failure of that op** — a raised throw OR an empty/missing result. It works on `$` (MCP dispatch), `shell()`, `file_read`, and — since v0.27.0 — `execute_skill` (child throw) and `$ json_parse` (malformed input). On failure the fallback value binds to the output var via the same path as a success (coerce-on-bind), so downstream sees it transparently and needs no "did this fail?" check. A fired fallback is recorded in `result.fallbacks[].reason` (not `result.errors[]`) — degrade-loud.
 
@@ -1929,18 +1898,33 @@ $ llm prompt="..." -> VERDICT (fallback: unknown)                # bare identifi
 $ slack.post text="..." -> ACK (fallback: "post failed")         # quoted string
 ```
 
+## Structural guard — prevent the failure
+
+Pre-bind defaults (`$set`) for every var the template/downstream reads, then gate the risky op behind a `contains`/shape check (`if ${RAW|contains:"expected_key"}:`) so the throw never happens. Most robust of all — no error to contain because none is raised. See *Robustness & error containment* for the full discipline.
+
 ## Choosing a mechanism
 
-- **`(fallback:)`** — "any failure of this op → this default value." Uniform; the per-op opt-out.
+- **`(fallback:)`** — "any failure of this op → this default value." Uniform; the per-op opt-out. Reach for it first.
 - **`else:`** — target-level; when you need the error's details (`${ERROR_CONTEXT}`) to branch, or to contain a throw spanning several ops.
-- **Structural guard** (pre-bind defaults + a `contains`/shape check before the risky op) — prevents the failure entirely; most robust. See *Robustness & error containment* for the discipline.
-- **`# OnError:`** — not currently wired (Layer 2); don't depend on it.
+- **Structural guard** — when you can cheaply validate the shape before the risky op; prevents the failure entirely.
+
+## Deprecated: `# OnError:` — parsed but not wired
+
+A skill-level `# OnError: <fallback-skill>` header parses, but it is **not wired in the current runtime: the named fallback never fires.** A skill that relies on it has, in effect, no error handling — so don't use it. Use a target-level `else:` handler (or an op-level `(fallback:)`) instead. Removal of the header is planned for a future release (v0.28); until then it is inert, not a compile error. To recover at the whole-skill level, wrap the body in a target with an `else:` that dispatches your recovery skill:
+
+```
+run:
+    execute_skill(name="do-the-work") -> R
+else:
+    execute_skill(name="recovery", inputs={"REASON": "${ERROR_CONTEXT.message}"}) -> R
+```
 
 ## Propagation
 
 - Op throw → contained by a `(fallback:)` on that op if present; else by the target's `else:`; else propagates to the caller (surfaces in `result.errors[]`).
 - A fired op-level `(fallback:)` is recorded in `result.fallbacks[]`, not `result.errors[]`.
 - Under the hood: when a `$` op returns `isError: true` the executor throws via `makeOpError` rather than binding the error text — that throw is what routes to `(fallback:)` / `else:` and surfaces in `result.errors[]`. Op-level `(fallback:)` intercepts it and binds the fallback value instead.
+- **Composition caveat:** a child skill's failures do NOT bubble to the parent's top-level `result.errors[]` — they nest in the bound `${R.errors}`. A top-level `errors: []` does not mean nothing failed downstream. Inspect `${R.errors}` or rely on `(fallback:)`/`else:`, which fire regardless of nesting depth. (See Composition.)
 
 ## Robustness & error containment — best practices (no try/catch by design)
 
@@ -1986,23 +1970,23 @@ Bad input skips the `if`, the default stands, the child never throws — so a pa
 
 Skillscript supports skill-to-skill composition via the runtime's public composition primitive. A parent skill invokes a child skill, optionally passes inputs, optionally binds the child's result. The runtime threads variable state, propagates errors, and enforces a recursion-depth guard.
 
-Composition is exposed as a runtime-intrinsic op: `execute_skill(skill_name="...", inputs={...}) -> R`. Symmetric with `compile_skill` and `lint_skill` — same surface, same naming convention, no external-namespace dependency.
+Composition is exposed as a runtime-intrinsic op: `execute_skill(name="...", inputs={...}) -> R`. Symmetric with `compile_skill` and `lint_skill` — same surface, same naming convention, no external-namespace dependency. (`skill_name=` is an accepted back-compat alias for `name=`; prefer `name=` in new skills.)
 
 ## Surface
 
 ```
 parent:
-    execute_skill(skill_name="child") -> RESULT
+    execute_skill(name="child") -> RESULT
     emit(text="Child returned: ${RESULT}")
 ```
 
-The runtime resolves `skill_name` against the configured SkillStore at dispatch time, runs the child to completion against the runtime's wired connectors, and binds the result.
+The runtime resolves `name` against the configured SkillStore at dispatch time, runs the child to completion against the runtime's wired connectors, and binds the result.
 
 ## Tool signature
 
 ```
 execute_skill({
-  skill_name: string,             // required — resolves via SkillStore
+  name: string,                   // required — resolves via SkillStore (skill_name= accepted as back-compat alias)
   inputs?: Record<string,string>, // optional — Vars override map
   mechanical?: boolean            // optional — dry-run mode (default false)
 })
@@ -2049,7 +2033,7 @@ default: fetch
 
 ## Semantics
 
-**Skill resolution.** Missing skills produce a clean structured error (`MissingSkillReferenceError extends OpError`) — the parent's `(fallback: ...)` discipline applies if specified, otherwise the parent skill's `# OnError:` fallback fires if declared, otherwise the parent fails with the error propagated through.
+**Skill resolution.** Missing skills produce a clean structured error (`MissingSkillReferenceError extends OpError`) — the parent's `(fallback: ...)` discipline applies if specified, otherwise a target-level `else:` handler catches it if declared, otherwise the parent fails with the error propagated through.
 
 **Input override.** `inputs` map keys must match the child's `# Vars:` declarations. Undeclared keys are ignored. Required vars without defaults must be supplied or dispatch fails before the child starts.
 
@@ -2063,28 +2047,27 @@ default: fetch
 
 Two non-obvious behaviors when reading a child's failures from the parent (both confirmed by the v1.0 runtime-semantics test battery):
 
-- **Nested errors do NOT surface at the top level.** When a child op fails — e.g. the recursion-depth guard fires — the structured error nests inside the child's `R.errors`, which nests inside *its* parent's `R.errors`, and so on up the chain. It does **not** bubble to the caller's top-level `result.errors`. So a top-level `errors: []` does **not** mean nothing failed downstream. To detect a child failure, inspect the bound `${R.errors}` (and deeper), or rely on `(fallback: ...)` / `# OnError:` — those fire on the structured error regardless of nesting depth.
+- **Nested errors do NOT surface at the top level.** When a child op fails — e.g. the recursion-depth guard fires — the structured error nests inside the child's `R.errors`, which nests inside *its* parent's `R.errors`, and so on up the chain. It does **not** bubble to the caller's top-level `result.errors`. So a top-level `errors: []` does **not** mean nothing failed downstream. To detect a child failure, inspect the bound `${R.errors}` (and deeper), or rely on `(fallback: ...)` / `else:` — those fire on the structured error regardless of nesting depth. As of v0.27.0 the op-level `(fallback: ...)` trailer is uniform: it contains a raised `execute_skill` child-throw (recursion-guard fire, missing-skill, or any error nested in the child), so `execute_skill(...) -> R (fallback: "...")` reliably degrades on a child failure regardless of nesting depth, and the fired fallback lands in `result.fallbacks[].reason`.
 - **`# Returns: R` is load-bearing for observability.** If the parent binds a child via `-> R` but does not declare `# Returns: R`, the `# Returns:` filter strips `R` from the parent's `final_vars` — and any nested child errors disappear from the parent's MCP-wire response along with it. A composition skill that wants its child's failures observable from *its own* caller must declare the binding (`# Returns: R`) explicitly. Observability of child failure is opt-in, the same way value export is.
 
 ## Forward-reference resolution
 
-Skill references (`inline(skill=...)`, `execute_skill(skill_name=...)`) are validated at compile time but allow forward references with tier-2 advisories — making it possible to author sibling skills together (chicken-and-egg).
+Skill references (`inline(skill=...)`, `execute_skill(name=...)`) are validated at compile time but allow forward references with tier-2 advisories — making it possible to author sibling skills together (chicken-and-egg).
 
 **Lint behavior:**
 - `unknown-skill-reference` (tier-2) — covers `inline()` and `execute_skill()` with missing targets
 - `deferred-skill-reference` (tier-3 advisory) — teaching message: *"Skill 'X' referenced via `<op>` is not currently in the SkillStore. Will resolve at execute time if the skill exists by then, or throw `SkillNotFoundError` if not. If this is a typo, fix it now; if it's a forward reference, this advisory will clear once you store 'X'."*
 
-**Runtime behavior:** when a deferred reference still can't resolve at execute time, the runtime throws `MissingSkillReferenceError extends OpError` with structured fields (`missingSkillName`, `viaOp` for the op kind, inherited `target` and `opKind`). The error flows through `# OnError:` fallback chain naturally.
+**Runtime behavior:** when a deferred reference still can't resolve at execute time, the runtime throws `MissingSkillReferenceError extends OpError` with structured fields (`missingSkillName`, `viaOp` for the op kind, inherited `target` and `opKind`). The error is containable by a target-level `else:` handler (or an op-level `(fallback: ...)`) naturally.
 
 **Stronger contracts kept tier-1:**
-- `# OnError: <missing>` — error-handler missing-at-runtime is the worst possible UX moment to discover a missing reference; explicit at compile is the right call.
 - `disabled-skill-reference` — pointing at a Disabled skill is a stronger contract than "missing yet to be authored"; explicit at compile.
 
 ## When to use composition vs other primitives
 
 Three distinct cases that look similar but have different intents:
 
-1. **Get a value back from another skill.** Use `execute_skill(skill_name="...") -> RESULT` and use `${RESULT}` locally — reaching declared returns (`${RESULT.X}`) or the output stream (`${RESULT.outputs.text}`). This is the composition primitive case.
+1. **Get a value back from another skill.** Use `execute_skill(name="...") -> RESULT` and use `${RESULT}` locally — reaching declared returns (`${RESULT.X}`) or the output stream (`${RESULT.outputs.text}`). This is the composition primitive case.
 
 2. **Delegate work to an agent as a task.** Use `# Output: template: <agent>` to route a compiled artifact through AgentConnector. The receiving agent acts on the prompt. *This is the Template-skill story* — uses compile-as-delivery, not execute-and-bind.
 
@@ -2112,7 +2095,7 @@ default: greet
 # Status: Approved
 
 call_greeting:
-    execute_skill(skill_name="greeting") -> GREETING_RESULT
+    execute_skill(name="greeting") -> GREETING_RESULT
     emit(text="Greeting skill said: ${GREETING_RESULT.outputs.text}")
 
 default: call_greeting
@@ -2141,7 +2124,7 @@ default: classify
 # Vars: INPUT="some text"
 
 call_with_inputs:
-    execute_skill(skill_name="classifier", inputs={"TEXT": "${INPUT}"}) -> R
+    execute_skill(name="classifier", inputs={"TEXT": "${INPUT}"}) -> R
     emit(text="Classified as: ${R.VERDICT}")
 
 default: call_with_inputs
@@ -2154,17 +2137,19 @@ default: call_with_inputs
 # Status: Approved
 
 call_maybe_missing:
-    execute_skill(skill_name="might-not-exist") -> RESULT (fallback: "child unavailable")
+    execute_skill(name="might-not-exist") -> RESULT (fallback: "child unavailable")
     emit(text="Result: ${RESULT.outputs.text}")
 
 default: call_maybe_missing
 ```
 
+As of v0.27.0 the `(fallback:)` trailer is uniform, so it contains an `execute_skill` child-throw (missing-skill, recursion-guard fire, or any error raised inside the child) as well as a missing/empty bind — `RESULT` degrades to `"child unavailable"` on any of those, and the fired fallback is recorded in `result.fallbacks[].reason`.
+
 **TestFlight preview (from the runtime caller, not from inside a skill):**
 
 ```
 execute_skill({
-  skill_name: "parent",
+  name: "parent",
   mechanical: true
 })
 ```
@@ -2182,25 +2167,13 @@ For *data skills* (skills marked `# Type: data`), the compile-time inline primit
 - Treat composition as a real cost. Each `execute_skill()` dispatch incurs the child's full execution time + side effects. Don't compose for trivial cases that could be inlined.
 - Declare `# Returns:` when a caller needs structured access to a child's variables. Leave it off for emit-only skills whose consumers read `.outputs.text` — the default-empty filter keeps scratch from propagating.
 - Want a child's failures visible to your caller? Declare the child binding in `# Returns:` — nested errors are filtered out with the binding otherwise (see Error surfacing in composition), and don't trust a top-level `errors: []`.
-- Pair composition with `(fallback: ...)` when the child skill might fail and the parent has a sensible degraded path.
+- Pair composition with `(fallback: ...)` when the child skill might fail and the parent has a sensible degraded path. As of v0.27.0 the `(fallback:)` catches a raised child throw, not just a missing bind.
 - Use mechanical mode to TestFlight any multi-skill chain before shipping it as a Headless skill on a cron trigger.
 - Forward references work — author sibling skills in any order, validate independently. The tier-2 warning surfaces the deferred-resolution path; runtime catches genuine misses.
 - Recursion is legal but bounded. If your design requires deeper recursion than the configured limit, reshape the workflow — almost always a sign of an iteration that should be expressed as `foreach` rather than recursion.
 
 ## Session isolation — a skill can't mutate the calling agent's session
 A skill executes in its OWN session; agent session state (context, persona) is session-local. Calling `amp_set_session_context` (or similar) inside a skill sets it for the SKILL's session, not the caller's — the caller sees no change. The contract: **skills assemble and RETURN data; the agent owns its SESSION STATE.** To "enter a project," a skill returns the instruction bodies and the AGENT applies its own session context.
-
-## Current-runtime corrections (v0.27.0)
-
-This section predates the v0.27.0 error-containment model. Corrections to how it describes failure handling:
-
-1. **`# OnError:` is parsed but INERT — it never fires.** Everywhere this section says a "`# OnError:` fallback fires if declared" (skill resolution, `MissingSkillReferenceError` handling, the deferred-reference runtime path, the fallback-chain in Error surfacing), that is aspirational, not current behavior. The `fallbackSkillExecutor` is declared but never wired. For reliable throw-containment of a child failure, use the target-level `else:` handler (`${ERROR_CONTEXT}` available) or the op-level `(fallback: ...)` trailer. Read every "`# OnError:`" in this section as "`else:`".
-
-2. **`(fallback: ...)` is uniform (v0.27.0+).** The op-trailer now contains ANY op failure — a missing/unresolved value OR a raised throw — including an `execute_skill` child-throw (recursion-guard fire, missing-skill, or any error nested in the child). So `execute_skill(...) -> R (fallback: "child unavailable")` reliably degrades on a child failure regardless of nesting depth, and the fired fallback lands in `result.fallbacks[].reason`. This strengthens the "Pair composition with `(fallback: ...)`" guidance: it now works against raised child errors, not just a missing bind.
-
-3. **`execute_skill` canonical kwarg is `name=`.** Examples here use `skill_name=`, which remains a back-compat alias and still works. New authoring should prefer `execute_skill(name="child", inputs={...})`.
-
-The "Nested errors do NOT surface at the top level" observation remains accurate and important — inspect the bound `${R.errors}` or rely on `(fallback:)`/`else:`; a top-level `errors: []` does not mean nothing failed downstream.
 
 ## Static vs Dynamic — skill execution model
 
@@ -2323,7 +2296,6 @@ Normal `prompt` / `prose` compilation ignores the `# Tests:` section entirely �
 ### Runtime assertions (for `format: "test"` execution)
 
 - `target_else_executed: "<target_name>"` — verifies the `else:` branch ran
-- `onerror_invoked: "<fallback_skill>"` — verifies the `# OnError:` skill was called
 - `op_fallback_used: "<target.op_index>"` — verifies an op-level fallback value was substituted
 - `result_value: "<expected_string>"` — the skill's final output value
 
@@ -2566,12 +2538,12 @@ Scopes: skill-local (persists across fires of this skill, not visible to other s
 
 ## Time as first-class primitives
 
-Currently `$(NOW)` (wall-clock). Planned relative-time primitives:
+Currently `${NOW}` (wall-clock). Planned relative-time primitives:
 
 ```
-$(SECONDS_SINCE_LAST_USER_MESSAGE)
-$(MINUTES_SINCE_SESSION_START)
-$(SECONDS_SINCE_LAST_FIRE_OF.<skill-name>)
+${SECONDS_SINCE_LAST_USER_MESSAGE}
+${MINUTES_SINCE_SESSION_START}
+${SECONDS_SINCE_LAST_FIRE_OF.<skill-name>}
 ```
 
 Most "right time" reasoning is relative, not wall-clock.
@@ -2585,17 +2557,13 @@ Most "right time" reasoning is relative, not wall-clock.
 - **Cross-skill pub-sub** — `# Publishes: signal.X` / `# Subscribes: signal.Y` decoupling
 - **Confidence/threshold gating** — `# RequiresConfidence: classifier >= 0.8` / `# RequiresThreshold:`
 - **Invocation-control axis** — `# Invocable-By: user | agent | trigger` (sensitive ops shouldn't leak across invocation boundaries)
-- **Introspection primitives** — `$(PROMPT_CONTEXT.size)`, `$(SKILLS_FIRED_RECENTLY.last-1h)`, `$(SELF.confidence-trend)`
+- **Introspection primitives** — `${PROMPT_CONTEXT.size}`, `${SKILLS_FIRED_RECENTLY.last-1h}`, `${SELF.confidence-trend}`
 
 ## When the language extends, this section shrinks
 
 When any of these primitives ship, the relevant grammar moves into its canonical section (Ops reference, Variables, Triggers, etc.) and the entry here is removed. This section stays alive as a continuous staging area for the next horizon of unshipped work.
 
-## Notation correction
-
-The planned time-primitive and introspection examples in this section are written with the `$(NAME)` paren sigil (`$(NOW)`, `$(SECONDS_SINCE_LAST_USER_MESSAGE)`, `$(PROMPT_CONTEXT.size)`, etc.). Skillscript's substitution sigil is `${...}` (brace) — the paren form is reserved to avoid bash `$(command)` collision (see Variable resolution). When these primitives ship they will use the brace form (`${NOW}`, `${SECONDS_SINCE_LAST_USER_MESSAGE}`), consistent with the Future-grammar section which already writes them correctly. Read the paren examples here as brace form.
-
 ---
 
-*Rendered from `skillscript/skillscript-language-reference` — 2026-07-09 10:21 EDT*  
+*Rendered from `skillscript/skillscript-language-reference` — 2026-07-09 18:31 EDT*  
 *Source of truth: AMP (`amp_render_document("skillscript/skillscript-language-reference")`)*

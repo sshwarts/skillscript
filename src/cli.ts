@@ -237,7 +237,7 @@ const COMMAND_HELP: Readonly<Record<string, CommandHelp>> = {
     ],
     examples: [
       "skillfile serve",
-      "skillfile serve --host 0.0.0.0 --port 7878   # container deployment",
+      "skillfile serve --host 0.0.0.0 --port 7878   # bind all interfaces (container/cross-namespace reach); auth the surface on a shared network",
       "skillfile serve --config ./adopter.config.json   # two-instance posture",
     ],
   },
@@ -253,7 +253,7 @@ const COMMAND_HELP: Readonly<Record<string, CommandHelp>> = {
     examples: [
       "skillfile dashboard",
       "skillfile dashboard --port 8080",
-      "skillfile dashboard --host 0.0.0.0 --port 7878   # container only",
+      "skillfile dashboard --host 0.0.0.0 --port 7878   # bind all interfaces (container/cross-namespace reach); auth the surface on a shared network",
       "skillfile dashboard --config ./adopter.config.json   # two-instance posture",
     ],
   },
@@ -412,6 +412,10 @@ async function cmdInit(): Promise<number> {
 
 Next:
   skillfile dashboard --host 0.0.0.0 --port 7878
+  # --host 0.0.0.0 binds all interfaces so a containerized client (e.g. NanoClaw)
+  # can reach the runtime across the namespace. On a shared/untrusted host this
+  # exposes the control surface — use --host 127.0.0.1, or set the /event ingress
+  # auth token (SKILLSCRIPT_EVENT_INGRESS_AUTH_TOKEN).
   # Then dispatch a seeded demo via the MCP wire:
   #   curl -s -X POST http://localhost:7878/rpc \\
   #     -H "content-type: application/json" \\

@@ -24,8 +24,8 @@ const REPO_ROOT = join(__dirname, "..");
 const PACKAGE_JSON = JSON.parse(readFileSync(join(REPO_ROOT, "package.json"), "utf8")) as Record<string, unknown>;
 
 describe("T7 — package.json polish", () => {
-  it("1. version is 0.27.1 (examples hardening for announcement: 4 contract-drifted example TS files fixed + morning-brief dead `# OnError:` → per-leg (fallback:) + new examples-corpus test [compile-all / execute-infra-free / demo-runs / TS-typecheck] + help composition topic depth-5 → depth-10 correction)", () => {
-    expect(PACKAGE_JSON["version"]).toBe("0.27.1");
+  it("1. version is 0.27.2 (launch doc-honesty: # OnError: presented as inert/deprecated across help + errors.ts remediation + language-ref re-render [grammar removal deferred to v0.28]; recursion help second-spot 5→10; onboarding 0.0.0.0 caption + EACCES note)", () => {
+    expect(PACKAGE_JSON["version"]).toBe("0.27.2");
   });
 
   it("2. main + types + bin + engines.node ≥ 22.5 declared", () => {

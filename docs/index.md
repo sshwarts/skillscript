@@ -189,6 +189,8 @@ npm install -g skillscript-runtime
 skillfile init             # scaffolds ~/.skillscript/ — config, signing keys, demo skills
 ```
 
+> If `npm install -g` fails with `EACCES: permission denied`, your global prefix is root-owned (system-managed Node). Re-run with `sudo`, or use an nvm-style prefix you own. Not a Skillscript issue — standard npm-global behavior.
+
 Set up your environment the way you want it — all optional; the defaults work:
 
 ```bash
@@ -200,9 +202,11 @@ cp ~/.skillscript/.env.example ~/.skillscript/.env
 Start the runtime — this is the MCP server your agent connects to:
 
 ```bash
-skillfile dashboard --port 7878    # foreground server — Ctrl-C to stop
+skillfile dashboard --host 0.0.0.0 --port 7878    # foreground server — Ctrl-C to stop
 # then, in your browser, open http://localhost:7878
 ```
+
+> **On `--host 0.0.0.0`:** binds all interfaces so a containerized client (e.g. NanoClaw) can reach the runtime across the namespace — this is the primary deployment posture. On a laptop or a shared/untrusted network it exposes the control surface; use `--host 127.0.0.1` for localhost-only, or set the `/event` ingress auth token (`SKILLSCRIPT_EVENT_INGRESS_AUTH_TOKEN`) so the exposed surface isn't open.
 
 Prefer headless? `skillfile serve` runs the same MCP server without the dashboard SPA. Or run the container:
 

@@ -2,6 +2,17 @@
 
 Each release carries an **Upgrade impact:** line (first in its section) so a bump's requirements are visible at a glance. Tags (closed set): **BREAKING** (a manual change is needed to keep working) · **RE-APPROVE** (secured-mode signature invalidation — skills must be re-approved before they run) · **CONFIG** (`connectors.json` / config edit needed) · **none (additive)** (no action; backward-compatible). Standard from 0.20.0 forward; the pre-0.20 transitions that need action are flagged inline below (0.14.0, 0.18.8, 0.19.0). Full walkthrough: [UPGRADING.md](UPGRADING.md).
 
+## 0.27.2 — 2026-07-09 — launch doc-honesty + onboarding caption
+
+**Upgrade impact:** none (additive). Docs, help-content, one error message, and CLI onboarding copy; no runtime behavior change.
+
+Final pre-launch pass — make every surface tell the truth and steer safely.
+
+- **`# OnError:` is now presented as inert/deprecated everywhere it appears**, instead of contradicting itself. It parses but is **not wired** in the runtime (the named fallback never fires), so a skill relying on it has no error handling. Fixed: the `help({topic:"frontmatter"})` entry (was "error-handler skill invoked when an op fails"), the `${ERROR_CONTEXT}` ambient table (was "Inside `else:` and `# OnError:`"), the `$ json_parse` line, and — the sharpest one — the `MissingSkillReferenceError` **runtime remediation message**, which previously told users to *wire `# OnError:`* as the fix. All now point at a target-level `else:` block or an op-level `(fallback: ...)`. `language-reference.md` re-rendered from atoms with a "Deprecated: parsed but not wired — removal planned for v0.28" section. **The grammar removal itself is deferred to v0.28** (a parser/compile/runtime change kept off the launch path).
+- **Recursion help correction completed.** 0.27.1 fixed one of two "default 5" strings in the composition topic; the `execute_skill` section still contradicted the Limits section. Both now read `default 10` (matching `DEFAULT_MAX_RECURSION_DEPTH`).
+- **Onboarding: `--host 0.0.0.0` kept as the deliberate default** (container-native: `127.0.0.1` is unreachable across a container namespace, so a client like NanoClaw needs all-interfaces) — now with a caption on the init hint, getting-started, and CLI help examples: *binds all interfaces so a containerized client can reach it; on a shared/untrusted host use `--host 127.0.0.1` or set `SKILLSCRIPT_EVENT_INGRESS_AUTH_TOKEN`.* (Requiring the token when binding off-localhost is tracked as a v0.28 behavioral hardening.)
+- **EACCES install note** added to the README + docs getting-started: `npm install -g` may fail with `EACCES` on a root-owned global prefix — re-run with `sudo` or use an nvm-style prefix. Standard npm behavior, not a Skillscript issue.
+
 ## 0.27.1 — 2026-07-09 — examples hardening (pre-announcement sweep)
 
 **Upgrade impact:** none (additive). Example + help-content fixes; no runtime behavior change.
