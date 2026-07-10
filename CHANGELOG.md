@@ -2,6 +2,16 @@
 
 Each release carries an **Upgrade impact:** line (first in its section) so a bump's requirements are visible at a glance. Tags (closed set): **BREAKING** (a manual change is needed to keep working) · **RE-APPROVE** (secured-mode signature invalidation — skills must be re-approved before they run) · **CONFIG** (`connectors.json` / config edit needed) · **none (additive)** (no action; backward-compatible). Standard from 0.20.0 forward; the pre-0.20 transitions that need action are flagged inline below (0.14.0, 0.18.8, 0.19.0). Full walkthrough: [UPGRADING.md](UPGRADING.md).
 
+## 0.27.3 — 2026-07-10 — dashboard highlighter fix + adopter-facing docs audit
+
+**Upgrade impact:** none (additive). One dashboard rendering fix + docs; no runtime behavior change.
+
+- **Dashboard: fixed the skill-source security highlighter leaking character offsets into the rendered body.** The approval-review source viewer was showing stray numbers glued to mutation ops and `approved=` kwargs (e.g. `$ data_write2861 … approved="…"3021`). The highlight pass's single-capture-group patterns were treating `String.replace`'s third callback argument — the match *offset*, a number — as a capture group, and rendering it. Fixed (`typeof p2 === "string"` guard); added a regression test that fails on the leak. The stored skill source was never affected — this was render-only.
+- **Adopter-facing docs audit** (`adopter-agent-guide.md`, `adopter-playbook.md`, `connector-contract-reference.md`). Pre-announcement pass for accuracy + no internal leakage:
+  - Removed internal-process references (thread ids, internal-agent names, dev-cadence/roadmap phrasing, an internal substrate name used as an example) and stripped version-provenance citations, keeping only the genuine `v1.0` *contract-version* mentions.
+  - **Accuracy:** the `SkillStore` contract block + ship-status table were missing `manifest()` (claimed 8 methods, listed 7) — corrected, and `DataStore` made consistent; the `AgentConnector` `WakeReceipt` interface block was missing `warnings?: string[]` — added; the agent-guide MCP tool reference completed from 13 to the full **17** tools.
+- **`language-reference.md` re-rendered from atoms** — the `# OnError:` deprecation section now states removal is planned for a post-launch release (after 0.30), replacing the earlier reference to a version that will be skipped.
+
 ## 0.27.2 — 2026-07-09 — launch doc-honesty + onboarding caption
 
 **Upgrade impact:** none (additive). Docs, help-content, one error message, and CLI onboarding copy; no runtime behavior change.

@@ -117,8 +117,11 @@ The tools your agent has when a Skillscript runtime is wired:
 | `skill_write({ name, source, overwrite? })` | Store a skill. Lands Draft unless approved. |
 | `skill_status({ name, new_state })` | Transition Draft / Approved / Disabled. |
 | `help({ topic? })` | Language reference — quickstart, plus `ops`, `frontmatter`, `examples`, `composition`, `error-handling`, `connectors`, `lint-codes`. |
+| `data_read({ mode, query, limit, ... })` | Query the wired DataStore — substrate-neutral memory/data retrieval (the `$ data_read` op's tool surface). |
 | `runtime_capabilities()` | What's actually wired — connectors, models, shell mode. |
-| `register_trigger` / `list_triggers` / `unregister_trigger` | Inspect/manage autonomous dispatch (cron / event). |
+| `health_metrics()` | Aggregated runtime health — dispatch counts, error rates, per-op timing. |
+| `blocked_shell_attempts()` | Shell-allowlist refusals: which binaries skills tried to run that the allowlist blocked. |
+| `register_trigger` / `list_triggers` / `unregister_trigger` / `set_trigger_enabled` | Inspect/manage autonomous dispatch (cron / event), including enabling or disabling a registered trigger. |
 
 ---
 

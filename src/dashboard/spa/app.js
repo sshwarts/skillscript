@@ -693,8 +693,14 @@ function renderHighlightedSkillBody(source) {
   ];
   for (const re of highPatterns) {
     body = body.replace(re, (_match, p1, p2) => {
-      const prefix = p2 !== undefined ? p1 : "";
-      const captured = p2 !== undefined ? p2 : p1;
+      // Only the `# Autonomous:` pattern has a second CAPTURE group (the
+      // leading newline/BOL is p1, the signal is p2). The single-group
+      // patterns receive the match OFFSET as the third arg — a NUMBER, not a
+      // capture — so test for a string, not `!== undefined`, or the offset
+      // gets rendered as highlighted text (e.g. `$ data_write2861`).
+      const hasPrefixGroup = typeof p2 === "string";
+      const prefix = hasPrefixGroup ? p1 : "";
+      const captured = hasPrefixGroup ? p2 : p1;
       return `${prefix}<span class="sig-high">${captured}</span>`;
     });
   }

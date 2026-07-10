@@ -1861,7 +1861,7 @@ Test, Deployed, and Deprecated were considered and deferred — today's Draft/Ap
 
 Lifecycle states are the language's operational-safety answer. A Disabled skill can't fire even if every author forgets it's broken; in secured mode, an Approved skill can't fire if its body was tampered post-signature, and an agent can't approve its own work. The constraint IS the safety story, here as elsewhere.
 
-## Error handling — else: blocks, # OnError: fallback, op-level fallback values
+## Error handling — else: blocks and op-level (fallback:) values
 
 Skillscript has no try/catch — error handling is authored. Two runtime mechanisms (local to global) plus a structural discipline that prevents failure outright.
 
@@ -1910,7 +1910,7 @@ Pre-bind defaults (`$set`) for every var the template/downstream reads, then gat
 
 ## Deprecated: `# OnError:` — parsed but not wired
 
-A skill-level `# OnError: <fallback-skill>` header parses, but it is **not wired in the current runtime: the named fallback never fires.** A skill that relies on it has, in effect, no error handling — so don't use it. Use a target-level `else:` handler (or an op-level `(fallback:)`) instead. Removal of the header is planned for a future release (v0.28); until then it is inert, not a compile error. To recover at the whole-skill level, wrap the body in a target with an `else:` that dispatches your recovery skill:
+A skill-level `# OnError: <fallback-skill>` header parses, but it is **not wired in the current runtime: the named fallback never fires.** A skill that relies on it has, in effect, no error handling — so don't use it. Use a target-level `else:` handler (or an op-level `(fallback:)`) instead. Removal of the header is planned for a post-launch release (after 0.30); until then it is inert, not a compile error. To recover at the whole-skill level, wrap the body in a target with an `else:` that dispatches your recovery skill:
 
 ```
 run:
@@ -2565,5 +2565,5 @@ When any of these primitives ship, the relevant grammar moves into its canonical
 
 ---
 
-*Rendered from `skillscript/skillscript-language-reference` — 2026-07-09 18:31 EDT*  
+*Rendered from `skillscript/skillscript-language-reference` — 2026-07-10 13:59 EDT*  
 *Source of truth: AMP (`amp_render_document("skillscript/skillscript-language-reference")`)*

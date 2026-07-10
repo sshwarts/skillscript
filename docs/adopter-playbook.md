@@ -28,6 +28,7 @@ DataStore — substrate-neutral data persistence
   query(filters)    runtime asks: "find records matching these filters"
   write(record)     runtime asks: "store this; return id + timestamp"
   get(id)           runtime asks: "give me this specific record"
+  manifest()        runtime asks: "what can you do?" (capability snapshot)
 
 SkillStore — substrate-neutral skill source persistence
   load(name)             "give me this skill's source"
@@ -37,6 +38,7 @@ SkillStore — substrate-neutral skill source persistence
   versions(name)         "audit trail"
   metadata(name)         "header info without body"
   delete(name)           "remove all versions"
+  manifest()             "substrate capability snapshot"
 
 LocalModel — substrate-neutral LLM dispatch
   run(prompt, opts)      "complete this prompt; return text"
@@ -368,7 +370,7 @@ Every skill carries a lifecycle status — `Draft → Approved → Disabled`. **
 
 Approval is an Ed25519 signature, not a shared secret:
 
-- **Private key** — held by the operator, read **only** by the approve flow. That flow is either `skillfile approve` at a terminal (the runtime process never loads the key) or, if you opt into in-browser approval, the dashboard's passcode-gated `/approve` — which reads the key only after a live human enters the session passcode, never on its own. For maximum isolation, keep signing terminal-side and run the runtime under a uid that cannot read the private key — then a co-resident agent can't forge approvals even with full read access to the runtime process. Same-uid (or in-browser signing) still works, but isn't fully isolated (a documented 1.0 precondition; managed custody closes it later).
+- **Private key** — held by the operator, read **only** by the approve flow. That flow is either `skillfile approve` at a terminal (the runtime process never loads the key) or, if you opt into in-browser approval, the dashboard's passcode-gated `/approve` — which reads the key only after a live human enters the session passcode, never on its own. For maximum isolation, keep signing terminal-side and run the runtime under a uid that cannot read the private key — then a co-resident agent can't forge approvals even with full read access to the runtime process. Same-uid (or in-browser signing) still works, but isn't fully isolated — a future managed-custody option will close this.
 - **Public key** — non-secret; the runtime reads it to *verify* signatures on every execution. No hot-path secret is the point: verification needs only the public key.
 
 First-run provisioning is automatic — starting the runtime or `skillfile init` in secured mode generates the keypair if absent (private written `0600`, default `~/.config/skillscript/approval.{key,pub}`, deliberately outside `SKILLSCRIPT_HOME`, the agent-readable data dir).
@@ -514,7 +516,7 @@ To wire your **own custom substrate** (e.g. a remote `SkillStore`), two paths:
 
 This closes the silent CLI-vs-programmatic asymmetry described below; reach for raw `bootstrap()` only when you're hand-assembling a registry that neither `connectors.json` nor `overrides` can express.
 
-**⚠ Migrating an existing hand-assembled bootstrap to `bootstrapFromEnv()`?** Move any options you previously hardcoded on `bootstrap()` / `new DashboardServer({...})` to their `SKILLSCRIPT_*` env equivalents — `bootstrapFromEnv()` resolves them from env, so a value you drop reverts to the default. Two to watch (adopter-verified, 0.24.0): `enableUnsafeShell: true` → `SKILLSCRIPT_ENABLE_UNSAFE_SHELL=true` (fails **loud** — unsafe ops just refuse, you'll notice); and **`mcpCallerIdentityHeader: "X-Agent-Id"` → `SKILLSCRIPT_MCP_CALLER_IDENTITY_HEADER=X-Agent-Id`, which fails *silently*** — drop it and skill-author attribution quietly reverts to the store's default writer identity, with no error. (`bootstrap()`-level opts like `enableUnsafeShell` can instead go through `overrides`; the `DashboardServer`-level `mcpCallerIdentityHeader` is env-only via `bootstrapFromEnv` — set the env var.) Verify after migrating: send your identity header on a `/rpc` `skill_write` and confirm the captured `author`.
+**⚠ Migrating an existing hand-assembled bootstrap to `bootstrapFromEnv()`?** Move any options you previously hardcoded on `bootstrap()` / `new DashboardServer({...})` to their `SKILLSCRIPT_*` env equivalents — `bootstrapFromEnv()` resolves them from env, so a value you drop reverts to the default. Two to watch: `enableUnsafeShell: true` → `SKILLSCRIPT_ENABLE_UNSAFE_SHELL=true` (fails **loud** — unsafe ops just refuse, you'll notice); and **`mcpCallerIdentityHeader: "X-Agent-Id"` → `SKILLSCRIPT_MCP_CALLER_IDENTITY_HEADER=X-Agent-Id`, which fails *silently*** — drop it and skill-author attribution quietly reverts to the store's default writer identity, with no error. (`bootstrap()`-level opts like `enableUnsafeShell` can instead go through `overrides`; the `DashboardServer`-level `mcpCallerIdentityHeader` is env-only via `bootstrapFromEnv` — set the env var.) Verify after migrating: send your identity header on a `/rpc` `skill_write` and confirm the captured `author`.
 
 #### Raw `bootstrap()` — the CLI-auto-vs-programmatic-explicit asymmetry
 
@@ -608,7 +610,7 @@ Per-skill capability declaration: skills declare what shell binaries they need i
 # Status: Approved
 ```
 
-The operator policy validates `declared ∩ allowlist` — each skill's shell footprint becomes self-documenting and auditable. Slated for a future ring once the chokepoint + observability surfaces ship.
+The operator policy validates `declared ∩ allowlist` — each skill's shell footprint becomes self-documenting and auditable. Planned for a future release.
 
 ## Filesystem path allowlist
 
@@ -1185,8 +1187,8 @@ See `examples/custom-bootstrap.example.ts` for a worked walkthrough.
 
 | Substrate | Shipped contract | Shipped impls | Shipped bridge |
 |---|---|---|---|
-| SkillStore | ✓ 8 methods (`load` / `query` / `store` / `update_status` / `delete` / `versions` / `metadata` / `staticCapabilities`) | `FilesystemSkillStore`, `SqliteSkillStore` | n/a |
-| DataStore | ✓ 3 methods (`query` / `write` / `get`) | `SqliteDataStore` | ✓ `DataStoreMcpConnector` |
+| SkillStore | ✓ 8 methods (`load` / `query` / `store` / `update_status` / `delete` / `versions` / `metadata` / `manifest`) + `staticCapabilities` | `FilesystemSkillStore`, `SqliteSkillStore` | n/a |
+| DataStore | ✓ 4 methods (`query` / `write` / `get` / `manifest`) + `staticCapabilities` | `SqliteDataStore` | ✓ `DataStoreMcpConnector` |
 | LocalModel | ✓ 1 method (`run`) | `OllamaLocalModel` | ✓ `LocalModelMcpConnector` |
 | McpConnector | ✓ 1 method (`call`) | `RemoteMcpConnector`, `CallbackMcpConnector` | n/a |
 | AgentConnector | ✓ 5 required (`list_agents` / `deliver` / `wake` / `health_check` / `request_response`) + 1 optional (`agent_status`) | `NoOpAgentConnector` (default), `HttpWebhookAgentConnector` | n/a |
@@ -1201,7 +1203,7 @@ See `examples/custom-bootstrap.example.ts` for a worked walkthrough.
 - **Your `DataStore.write()` is never called if the mutation gate rejects the skill.** The runtime gates `$ data_write` (and other mutation ops) upstream of the bridge — substrates only see authorized writes. If your own probes hit `UnconfirmedMutationError`, that's a skill-body issue (missing `# Autonomous: true` / `approved=`), not a substrate issue.
 - **Filter scope is enforced at the bridge.** `DataStoreMcpConnector` rejects every filter key outside the substrate's declared `manifest().supported_filters` set, throwing `UnsupportedFilterError`. This prevents silent scope leaks where unsupported filters get dropped without the caller knowing. Per-call opt-out: `permissive_filters: true` acknowledges "unknown keys are advisory; substrate may ignore them." Substrate implementors: declare every filter your `query()` actually honors so the bridge validates against your truth, not a guess.
 - **FTS matching strictness varies by substrate.** The `DataStore.query()` contract names the modes (`fts` / `semantic` / `rerank`) but doesn't pin down matching semantics within each mode — token-OR, phrase-tokens, fuzzy, exact, FTS5-syntax-passthrough, etc. are all conformant. The bundled `data-store-roundtrip` demo asserts `N ≥ 1` (a successful round-trip) rather than a specific count, which works across any FTS-supporting substrate. For adopters who need deterministic exact-count reads (round-trip tests, idempotency checks, exact-record-matched fetches), the portable strict-match path is `domain_tags=[...]` filtering — the bridge enforces tag-key against `supported_filters` and substrates declaring `supports_tag_filter: true` honor exact-tag any-of-match per the contract. Use FTS for relevance ranking against open content; use tag filters when you need to be sure you got the specific record you wrote.
-- **Durable-forever opt-in via `expires_at: null`.** `DataWrite.expires_at` accepts a unix timestamp for finite expiry, `null` to opt into "durable forever" (the portable verb for substrates with default TTL — AMP memory vaults, Redis with default expiry, hosted memory APIs), or omitted (substrate's default lifecycle, may be durable or may have decay). Substrates that are durable-by-default (the bundled `SqliteDataStore`) treat `null` as a no-op. Substrates with default sweep should map `null` to their pin / no-decay flag.
+- **Durable-forever opt-in via `expires_at: null`.** `DataWrite.expires_at` accepts a unix timestamp for finite expiry, `null` to opt into "durable forever" (the portable verb for substrates with default TTL — Redis with default expiry, hosted memory APIs), or omitted (substrate's default lifecycle, may be durable or may have decay). Substrates that are durable-by-default (the bundled `SqliteDataStore`) treat `null` as a no-op. Substrates with default sweep should map `null` to their pin / no-decay flag.
 - **Two trigger primitives, both functional.** `cron` (time-based) and `event` (HTTP `/event` ingress, named registration). All other concepts that look like triggers — session-start, agent-event, file-watch, sensor — are adapter responsibilities: the adapter POSTs `/event` when relevant. Keeps the runtime substrate-neutral; the trigger surface stays tight.
 - **Output kinds are intentionally substrate-neutral.** `# Output:` accepts `text` / `agent: <name>` / `template: <name>` / `file: <path>` / `none`. Substrate-specific values (`slack:`, `card:`, etc.) are out of scope — adopters wanting Slack / WhatsApp / Discord / etc. delivery use either `$ slack.post ...` MCP dispatch inside the skill body OR deliver via `agent: <name>` and let the receiving agent decide.
 - **Authorization is signature-based in secured mode.** An `Approved` skill runs unkeyed in unsecured mode (a bare `# Status: Approved` is sufficient) and requires a valid Ed25519 operator signature in secured mode — verified on every execution against the operator's public key, with the private key held off the runtime. See [Approval + secured mode](#approval--secured-mode) for the model, the approve flow, key custody, and migration. The shell + filesystem allowlists bound blast radius in *both* modes; secured mode is what gates whether an unapproved skill runs at all.
@@ -1228,7 +1230,7 @@ The multi-layer-promise pattern (lint passes; runtime fails, or vice versa) is t
 2. **Runtime test** — same shape executed end-to-end (`executeSkillByName` or `executeSkillFromSource`)
 3. **E2E test** — the full user path (write skill → store → execute via MCP, or trigger fire → dispatch)
 
-PR description must call out which dispatch shape is exercised. If you can't write all three for a shape, that's a signal the shape is incompletely specified — file a thread before merging.
+PR description must call out which dispatch shape is exercised. If you can't write all three for a shape, that's a signal the shape is incompletely specified — open an issue before merging.
 
 Connector class authors implementing new `McpConnectorClass`-shaped contracts should also implement `staticTools(): string[] | null` whenever the tool surface is closed and knowable at compile time. Lift `unknown-tool-on-connector` from "advisory you fix at runtime" to "tier-1 error caught at compile time" for every adopter who wires your class.
 

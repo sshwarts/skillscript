@@ -4,11 +4,11 @@ description: "The substrate-neutral contracts adopters implement to wire their o
 mode: wide
 ---
 
-The substrate-neutral contracts skillscript-runtime exposes for adopters to wire their own substrate behind. This doc is the **canonical source of truth** for the AgentConnector contract. The interface shape was locked at v1.0 by the v0.9.6 audit (thread `b722bbf4`); the wake/deliver receipt shapes carry post-lock refinements per the v0.18.2 session-targeting + graceful-degradation requirements.
+The substrate-neutral contracts skillscript-runtime exposes for adopters to wire their own substrate behind. This doc is the **canonical source of truth** for the AgentConnector contract, whose interface shape is locked at v1.0. The wake/deliver receipt shapes carry refinements for session-targeting and graceful degradation.
 
 **Audience**: this doc is written for the agent that's implementing an adopter's AgentConnector — typically an LLM-class agent supervised by a human. If you're a human reading it directly, the same content applies; the prose is tightened for agent comprehension (literal field semantics, explicit precedence rules, worked examples).
 
-Other contracts (McpConnector, SkillStore, DataStore, LocalModel) audit + lock in subsequent v0.9.x slots; this doc grows with each lock.
+The other contracts (McpConnector, SkillStore, DataStore, LocalModel) are covered in the sections below; this doc grows to cover each.
 
 ---
 
@@ -73,7 +73,7 @@ interface DeliveryMeta {
 
 - **`meta.origin.trigger_kind`**: how the originating skill was fired. Receiver routes on this without parsing content (cron-fired triage vs agent-initiated request vs webhook from external system).
 
-- **`meta.origin.caller_agent_id`**: the AUTHENTICATED CALLER who fired the dispatch — distinct from the skill's author/owner. When an MCP `/rpc` call carries the configured caller-identity header (e.g., `X-Agent-Id: cc`), that value flows here. The chain originator is preserved across composition: if `cc` invokes Alice's skill A which composes Bob's skill B, B's notify() still emits `caller_agent_id: cc`. Cron / event / cli / dashboard triggers leave it undefined (no human caller); direct `execute_skill` without an identity header also leaves it undefined (the owner is NOT used as fallback — that would be the v0.16.8-era confusion that v0.18.4 split). See [Adopter Playbook](adopter-playbook.md) §"Identity propagation" for the inbound-header wiring.
+- **`meta.origin.caller_agent_id`**: the AUTHENTICATED CALLER who fired the dispatch — distinct from the skill's author/owner. When an MCP `/rpc` call carries the configured caller-identity header (e.g., `X-Agent-Id: web-ui`), that value flows here. The chain originator is preserved across composition: if `web-ui` invokes Alice's skill A which composes Bob's skill B, B's notify() still emits `caller_agent_id: web-ui`. Cron / event / cli / dashboard triggers leave it undefined (no human caller); direct `execute_skill` without an identity header also leaves it undefined (the owner is NOT used as fallback — caller-identity and ownership are deliberately distinct). See [Adopter Playbook](adopter-playbook.md) §"Identity propagation" for the inbound-header wiring.
 
 - **`meta.event_type`**: adopter-defined routing vocabulary — opaque to skillscript. Set via `notify(event_type=...)` kwarg (per-emit) OR `# Event-type:` skill frontmatter (skill-wide fallback). Kwarg takes precedence per-emit.
 
@@ -95,7 +95,7 @@ interface DeliveryReceipt {
 - **`delivery_id`**: substrate-specific id for callers to correlate later.
 - **`session_id`**: the session that received the delivery. Set when the substrate routes to a specific session (e.g., per-terminal mailbox, per-tab webhook). Omitted when the substrate is agent-level only (Slack DM, email — no session concept) or when the substrate fans out / accepts without committing to a session. See *agent@session targeting* below.
 - **`delivery_skipped`**: adopter signals "accepted but not pushed to the agent" — offline, rate-limit drop, tmux session exists but agent hasn't read, etc. Distinct from outright failure (which throws). Runtime echoes this on the receipt record for dashboard observability.
-- **`warnings`** (v0.18.4): non-fatal substrate notes about the delivery. Surfaced onto `AgentDeliveryReceiptRecord` so the dashboard + observability surfaces show them instead of substrate-side stderr noise. Examples: `"stripped @session suffix — deliver is mailbox-class"`, `"rate-limit hint: backoff 5s before next deliver"`, `"fan-out: delivered to 3 active sessions"`. Distinct from `delivery_skipped` (accepted-not-pushed) and from thrown errors (delivery failed) — warnings are advisory; the delivery succeeded, the substrate just has commentary.
+- **`warnings`**: non-fatal substrate notes about the delivery. Surfaced onto `AgentDeliveryReceiptRecord` so the dashboard + observability surfaces show them instead of substrate-side stderr noise. Examples: `"stripped @session suffix — deliver is mailbox-class"`, `"rate-limit hint: backoff 5s before next deliver"`, `"fan-out: delivered to 3 active sessions"`. Distinct from `delivery_skipped` (accepted-not-pushed) and from thrown errors (delivery failed) — warnings are advisory; the delivery succeeded, the substrate just has commentary.
 
 ### WakeOpts + WakeReceipt
 
@@ -110,6 +110,7 @@ interface WakeReceipt {
   woken_at: number;
   woken: boolean;
   session_id?: string;
+  warnings?: string[];
 }
 ```
 
@@ -119,41 +120,42 @@ interface WakeReceipt {
 - **`WakeReceipt.woken_at`**: substrate's acknowledgement timestamp.
 - **`WakeReceipt.woken`** (required): honest signal of whether the substrate actually interrupted the agent. See *Graceful degradation on wake* below — this is the read every caller does to distinguish interrupted-them from delivered-only.
 - **`WakeReceipt.session_id`**: the session that received the wake (or delivery, if degraded). Set when the substrate knows; omit otherwise.
+- **`WakeReceipt.warnings`**: optional non-fatal substrate notes about the wake — advisory commentary surfaced onto the receipt record for dashboard + observability instead of substrate-side stderr noise. Symmetric with `DeliveryReceipt.warnings`.
 
 ### agent@session targeting
 
 `agent_id` is an opaque string. The substrate may treat it as:
 
 - A bare agent identifier (`alice`, an email address, a Slack `@user`, a Discord user ID).
-- A composite `agent@session` (e.g., `"perry@kitchen-terminal"`) when the substrate tracks multiple live sessions per identity.
+- A composite `agent@session` (e.g., `"alice@terminal-1"`) when the substrate tracks multiple live sessions per identity.
 
 The substrate decomposes the composite if it cares; non-session substrates ignore the suffix or treat the whole string as the address. This keeps the contract substrate-neutral while preserving session-granular routing — every messaging substrate either addresses a bare identity OR a specific live session, and the opaque-composite form covers both without locking adopters into a particular session model.
 
-**Address-routed dispatch (v0.18.5)**: the runtime uses the presence of `@` in `agent_id` to decide between `deliver()` and `wake()` for skill-author surfaces (`notify()` op + `# Output: agent:` / `# Output: template:` lifecycle hooks):
+**Address-routed dispatch**: the runtime uses the presence of `@` in `agent_id` to decide between `deliver()` and `wake()` for skill-author surfaces (`notify()` op + `# Output: agent:` / `# Output: template:` lifecycle hooks):
 
 | Skill-author syntax | Address shape | Connector method called |
 |---|---|---|
-| `notify(agent="perry", …)` | bare | `deliver()` |
-| `notify(agent="perry@kitchen-terminal", …)` | composite | `wake()` |
-| `# Output: agent: perry` | bare | `deliver()` |
-| `# Output: agent: perry@kitchen-terminal` | composite | `wake()` |
-| `# Output: template: perry@browser-tab-3` | composite | `wake()` |
+| `notify(agent="alice", …)` | bare | `deliver()` |
+| `notify(agent="alice@terminal-1", …)` | composite | `wake()` |
+| `# Output: agent: alice` | bare | `deliver()` |
+| `# Output: agent: alice@terminal-1` | composite | `wake()` |
+| `# Output: template: alice@tab-3` | composite | `wake()` |
 
-The runtime threads the FULL composite to `wake()` — substrate decomposes per the rule above. For wake-routed dispatches, the skill's content (notify message or accumulated emissions) rides as `WakeOpts.context`. Per Perry's design call (thread `c453afa2`): "the address encodes delivery class" — same rule as the broader `waiting_on` / mailbox / broker convention. No `wake=true` kwarg exists; the `@` IS the signal.
+The runtime threads the FULL composite to `wake()` — substrate decomposes per the rule above. For wake-routed dispatches, the skill's content (notify message or accumulated emissions) rides as `WakeOpts.context`. The rule: "the address encodes delivery class" — same convention as the broader `waiting_on` / mailbox / broker convention. No `wake=true` kwarg exists; the `@` IS the signal.
 
 **Two forms, one wire**:
 
 ```typescript
 // Form A — composite in agent_id (works for deliver + wake)
-await conn.wake("perry@kitchen-terminal");
+await conn.wake("alice@terminal-1");
 
 // Form B — structured WakeOpts.session_id (wake only)
-await conn.wake("perry", { session_id: "kitchen-terminal" });
+await conn.wake("alice", { session_id: "terminal-1" });
 ```
 
 Substrates that care about sessions read both — `opts.session_id` wins if both are set. Substrates that don't care ignore both. Callers that already have agent + session as separate variables prefer Form B; callers passing an opaque user-supplied address prefer Form A.
 
-`DeliveryReceipt.session_id` and `WakeReceipt.session_id` echo the resolved session back to the caller. Useful for dashboards rendering "delivered to perry@kitchen-terminal" rather than just "delivered to perry."
+`DeliveryReceipt.session_id` and `WakeReceipt.session_id` echo the resolved session back to the caller. Useful for dashboards rendering "delivered to alice@terminal-1" rather than just "delivered to alice."
 
 ### Graceful degradation on wake
 
@@ -185,7 +187,7 @@ The distinction `wake-capability` vs `network-fault` matters. The former is stru
 | `notify(agent=X@session, message=..., ...)` op | composite | `AgentConnector.wake()` | n/a (message as `WakeOpts.context`) | n/a |
 | `exchange(agent=X, message=..., timeout=...)` op (locked-shape, runtime support pending) | bare | `AgentConnector.request_response()` | `augment` | Same as notify; correlation_id required |
 
-The address-routing rule (v0.18.5) is uniform across all skill-author surfaces: `@session` present → wake-class; bare → deliver-class. See *agent@session targeting* below for the contract-level convention.
+The address-routing rule is uniform across all skill-author surfaces: `@session` present → wake-class; bare → deliver-class. See *agent@session targeting* below for the contract-level convention.
 
 ---
 
@@ -208,7 +210,7 @@ Wiring failures surface at boot (health_check throws), not at first skill-fire. 
 
 ### Writing your own AgentConnector
 
-If you're an agent implementing this contract against an adopter substrate, the canonical worked example is `HttpWebhookAgentConnector` (shipping post-audit; see `examples/` once bundled).
+If you're an agent implementing this contract against an adopter substrate, the canonical worked example is `HttpWebhookAgentConnector`, bundled under `examples/connectors/`.
 
 Implementation checklist:
 
@@ -234,7 +236,7 @@ If your substrate matches the shape of a bundled connector closely (e.g., HTTP w
 
 ---
 
-## Footnotes pinned during the v0.9.6 audit (Perry's thread b722bbf4)
+## Load-bearing semantic footnotes
 
 These are the load-bearing semantic rules. Internalize before implementing.
 
@@ -250,15 +252,15 @@ These are the load-bearing semantic rules. Internalize before implementing.
 
 ## Storage-layer conventions (SkillStore + DataStore)
 
-The cold-adopter Phase 3 dogfood (writing AmpSkillStore + AmpDataStore against AMP) surfaced several conventions that live in the bundled reference impls but aren't first-class in the typed contracts. Adopters writing their own SkillStore/DataStore impls need to know about these, or skills/memories misbehave silently.
+The following conventions live in the bundled reference impls but aren't first-class in the typed contracts. Adopters writing their own SkillStore/DataStore impls need to know about these, or skills/memories misbehave silently.
 
 ### SkillStore conventions
 
-**`author` field on SkillMeta + filter on `query()` (v0.18.6).** `SkillMeta.author` is optional; substrates that track authorship populate it (bundled `FilesystemSkillStore` reads from `os.userInfo().username`; `SqliteSkillStore` stores at write time). Substrates without an authorship concept leave it `undefined`; the catalog layer surfaces `null` to the wire.
+**`author` field on SkillMeta + filter on `query()`.** `SkillMeta.author` is optional; substrates that track authorship populate it (bundled `FilesystemSkillStore` reads from `os.userInfo().username`; `SqliteSkillStore` stores at write time). Substrates without an authorship concept leave it `undefined`; the catalog layer surfaces `null` to the wire.
 
-`SkillStore.query({ author: "X" })` is an optional substrate-honored filter. Substrates that natively track authorship can filter at the substrate layer; substrates that don't return all status-matching rows and the `buildSkillCatalog()` layer filters in-memory per `meta.author`. Either way the caller sees only matching authors. Per Perry's spec (thread `1f278e5e`): generic, connector-implemented, graceful-degrading. The substrate-neutrality property holds — adopters wire whichever shape fits their ownership model.
+`SkillStore.query({ author: "X" })` is an optional substrate-honored filter. Substrates that natively track authorship can filter at the substrate layer; substrates that don't return all status-matching rows and the `buildSkillCatalog()` layer filters in-memory per `meta.author`. Either way the caller sees only matching authors — a generic, connector-implemented, graceful-degrading filter. The substrate-neutrality property holds — adopters wire whichever shape fits their ownership model.
 
-Adopter substrates with their own ownership concept (e.g., AMP's `author:<id>` tag) should map the filter onto their native query so subset-fetching stays efficient. Adopters with no ownership concept can leave `query()` unchanged and let the catalog-layer in-memory filter handle narrowing.
+Adopter substrates with their own ownership concept (e.g., a native `author:<id>` tag) should map the filter onto their native query so subset-fetching stays efficient. Adopters with no ownership concept can leave `query()` unchanged and let the catalog-layer in-memory filter handle narrowing.
 
 
 
@@ -276,9 +278,9 @@ Adopter substrates with their own ownership concept (e.g., AMP's `author:<id>` t
 
 ### DataStore conventions
 
-**`summary`/`detail` split is convention, not contract field.** The DataStore contract gives `write()` a single `content: string`. Bundled `SqliteDataStore` maps this to `summary = first line (≤200 chars)` and `detail = full content`. Adopter substrates with native summary/detail concepts (AMP's `summary` + `detail` columns) can pre-compose and pass via `metadata`, but the basic mapping convention is "first line is the preview." Diverge and the dashboard's memory rendering looks weird, but skills still work.
+**`summary`/`detail` split is convention, not contract field.** The DataStore contract gives `write()` a single `content: string`. Bundled `SqliteDataStore` maps this to `summary = first line (≤200 chars)` and `detail = full content`. Adopter substrates with native summary/detail concepts (their own `summary` + `detail` columns) can pre-compose and pass via `metadata`, but the basic mapping convention is "first line is the preview." Diverge and the dashboard's memory rendering looks weird, but skills still work.
 
-**`get(id)` returns null on miss, doesn't throw.** Distinct from SkillStore's `load(name)` which throws `SkillNotFoundError`. DataStore's empty-set convention (`query()` returns `[]` not throws; `get()` returns `null` not throws) is **load-bearing for the runtime's control flow** — query callers branch on `result.length`, get callers branch on `result === null`. Don't change this in your impl. Per cold agent's "credit where due": *"unambiguous, and the runtime keys control flow on the specific classes."*
+**`get(id)` returns null on miss, doesn't throw.** Distinct from SkillStore's `load(name)` which throws `SkillNotFoundError`. DataStore's empty-set convention (`query()` returns `[]` not throws; `get()` returns `null` not throws) is **load-bearing for the runtime's control flow** — query callers branch on `result.length`, get callers branch on `result === null`. Don't change this in your impl.
 
 ### Durability stance (both contracts)
 
@@ -298,8 +300,8 @@ Implementer responsibility: **declare every filter your `query()` actually honor
 
 ### Why these aren't in the typed interface
 
-The shape-vs-semantics split is deliberate (see [[ARCHITECTURE INVARIANT 88df79c1]]): the typed contract guarantees shape portability (same methods, same return types); the conventions above are semantic portability concerns that the contract chose not to encode. Bundled impls follow them; custom impls SHOULD follow them. Capability flags + manifest fields make some conventions inspectable at runtime (`regexp_fallback_active`, `supported_filters`, `supported_modes`), but most live in source comments + this doc.
+The shape-vs-semantics split is deliberate: the typed contract guarantees shape portability (same methods, same return types); the conventions above are semantic portability concerns that the contract chose not to encode. Bundled impls follow them; custom impls SHOULD follow them. Capability flags + manifest fields make some conventions inspectable at runtime (`regexp_fallback_active`, `supported_filters`, `supported_modes`), but most live in source comments + this doc.
 
 ---
 
-*This doc reflects the v0.9.6 AgentConnector interface lock, v0.13.8 storage-conventions addition, v0.18.2 receipt-shape refinements (woken-honesty + session targeting + graceful degradation), v0.18.4 caller-identity-threading + `DeliveryReceipt.warnings`, and v0.18.5 address-routed dispatch (skill-author surfaces route deliver vs. wake on `@session` presence) + `WakeReceipt.warnings`. Future contract changes update this file alongside the code.*
+*Future contract changes update this file alongside the code; the CHANGELOG owns version history.*

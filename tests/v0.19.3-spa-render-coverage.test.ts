@@ -311,6 +311,22 @@ describe("v0.19.3 — skill detail renders v0.18.9 security signals + highlighti
     expect(html).toContain("sig-high");
     // Aggregated counts mention shell ops
     expect(html).toMatch(/shell op/);
+
+    // Regression: the single-capture-group HIGH patterns must NOT leak the
+    // match OFFSET into the rendered body (String.replace's 3rd callback arg
+    // is the offset, a number — not a capture group). Pre-fix this rendered
+    // `$ data_write<span class="sig-high">2861</span>` and
+    // `approved=&quot;autonomous&quot;<span ...>3021</span>`.
+    // NB: read from innerHTML, so `&quot;` is re-serialized back to a bare `"`
+    // in text content (quotes only need escaping in attributes).
+    const sourceBlock = html.slice(html.indexOf("skill-source"));
+    // The signal text itself must be inside the span, not a bare number.
+    expect(sourceBlock).toContain(`<span class="sig-high">$ data_write</span>`);
+    expect(sourceBlock).toContain(`<span class="sig-high">approved="autonomous"</span>`);
+    // And no digit may sit immediately after a mutation op or a closing
+    // approved quote in the highlighted source.
+    expect(sourceBlock).not.toMatch(/data_write\d/);
+    expect(sourceBlock).not.toMatch(/approved="[^"]*"\d/);
   });
 
   it("v0.21.0 — the effectful-footprint approver checklist renders from skill_preflight's contract", async () => {
