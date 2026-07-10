@@ -2,6 +2,16 @@
 
 Each release carries an **Upgrade impact:** line (first in its section) so a bump's requirements are visible at a glance. Tags (closed set): **BREAKING** (a manual change is needed to keep working) · **RE-APPROVE** (secured-mode signature invalidation — skills must be re-approved before they run) · **CONFIG** (`connectors.json` / config edit needed) · **none (additive)** (no action; backward-compatible). Standard from 0.20.0 forward; the pre-0.20 transitions that need action are flagged inline below (0.14.0, 0.18.8, 0.19.0). Full walkthrough: [UPGRADING.md](UPGRADING.md).
 
+## 0.30.0 — 2026-07-10 — public launch cut
+
+**Upgrade impact:** none (additive). Documentation only; no runtime, API, or behavior change.
+
+The public-announcement release. A final leakage-scrub pass over the shipped docs, closing the coverage gap the 0.27.3 audit left, so no doc names an internal substrate as an example.
+
+- **`sqlite-skill-store.md` (npm-shipped): removed AMP from the three substrate examples** the 0.27.3 audit didn't cover — the "choose your substrate" list (`AMP, Pinecone, S3, Postgres…` → `Pinecone, S3, Postgres, Redis…`), the forking-checklist class-rename example (`AmpSkillStore` → `RedisSkillStore`), and the `manifest()` example (`kind: "amp"` → `kind: "postgres"`). Example-name swaps only; no structural change.
+- **`configuration.md`: genericized two AMP-named examples** — the `connectors.json` `${VAR}`-substitution example (an `"amp"` connector using `${AMP_ENDPOINT}`/`${AMP_TOKEN}` → a generic `"memory"` connector using `${MEMORY_ENDPOINT}`/`${MEMORY_TOKEN}`) and an inline `_comment` ("AMP-style dogfooding" → "local dogfooding").
+- **`language-reference.md` re-rendered from atoms** — the worked-example op dispatches that previously used `$ amp.*` connector calls (mailbox / memory-write / query) now use `$ github.*` / `$ linear.*`, and the substrate-neutrality note lists `$ github.*` / `$ linear.*` as the "substrate-specific tools the adopter declares" example. The "Source of truth: AMP" provenance footer is intentionally retained.
+
 ## 0.27.3 — 2026-07-10 — dashboard highlighter fix + adopter-facing docs audit
 
 **Upgrade impact:** none (additive). One dashboard rendering fix + docs; no runtime behavior change.

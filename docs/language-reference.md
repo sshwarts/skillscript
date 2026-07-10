@@ -460,11 +460,11 @@ Calls a tool through a configured connector. Connector name resolves against `co
 $ <connector>.<tool> kwarg=value, ... [-> R]
 ```
 
-The text before the dot is the connector name (must match an entry in `connectors.json`); the rest is the tool name + args. Named form is canonical for any tool whose semantics are substrate-specific — adopter MCP servers (`amp_*`, `github_*`, `linear_*`, etc.).
+The text before the dot is the connector name (must match an entry in `connectors.json`); the rest is the tool name + args. Named form is canonical for any tool whose semantics are substrate-specific — adopter MCP servers (`github_*`, `linear_*`, etc.).
 
 ```
-$ amp.amp_check_mailbox limit=20 -> MAIL
-$ amp.amp_write_memory summary="..." domain_tags=["x"] vault="private" -> ACK
+$ youtrack.search_issues query="project:INFRA state:Open" limit=20 -> ISSUES
+$ github.create_issue repo="acme/foo" title="..." body="..." -> ACK
 $ github.search_issues query="repo:acme/foo state:open" -> ISSUES
 $ linear.find_issues filter="project:INFRA" -> TICKETS
 ```
@@ -508,7 +508,7 @@ Four surfaces apply to every `$` dispatch and to `shell()` (notably `(fallback:)
 
 ```
 $ llm prompt="..." timeout=30 -> R
-$ amp.amp_olsen_task task_type="scan" timeout=120 -> DISPATCH
+$ youtrack.run_report report_id="INFRA-weekly" timeout=120 -> DISPATCH
 ```
 
 **`approved="<reason>"`** — Author-intent marker for the mutation-gate lint. Any non-empty string satisfies. Extracted at runtime; **not forwarded to the connector**. The value is required but not parsed semantically — presence is the signal.
@@ -523,7 +523,7 @@ Note: an envelope object like `{items: []}` is a non-empty object and does NOT t
 
 ```
 $ llm prompt="Classify: ${INPUT}" -> VERDICT (fallback: "unknown")
-$ amp.amp_query_memories query="${TOPIC}" -> RESULTS (fallback: [])
+$ youtrack.search_issues query="${TOPIC}" -> RESULTS (fallback: [])
 shell(argv=["gh","pr","list","--repo","acme/foo"]) -> PRS (fallback: "No open PRs")
 $ ticketing.search query="..." -> ISSUES (fallback: "search-unavailable")
 ```
@@ -590,8 +590,8 @@ $ json_parse ${RAW_JSON} -> PARSED
 ### Worked examples
 
 ```
-$ amp.amp_olsen_task task_type="scan" -> DISPATCH
-$ amp.amp_query_memories query="recent activity" limit=5 -> RECENT
+$ youtrack.run_report report_id="INFRA-weekly" -> DISPATCH
+$ github.search_issues query="repo:acme/foo updated:>2026-01-01" limit=5 -> RECENT
 $ llm prompt="Classify: ${INPUT}" timeout=30 -> VERDICT
 $ llm prompt="Summarize: ${TEXT}" model="qwen" maxTokens=500 -> SUMMARY
 $ data_read mode=fts query="${TOPIC}" limit=5 -> RESULTS (fallback: [])
@@ -601,7 +601,7 @@ $ ticketing.search query="project:INFRA state:Open" limit=20 -> ISSUES
 
 Tool args are unconstrained `key=value` pairs — the connector forwards them to the underlying MCP tool. If a dispatched call returns `isError: true`, the executor throws via `makeOpError`, which routes through the target's `else:` handler. The inner tool's error text is preserved in `result.errors[]`.
 
-**Substrate-neutrality.** Typed-contract bare ops (`$ llm`, `$ data_read`, `$ data_write`, `$ skill_*`, `$ json_parse`) are not reserved built-ins — they're typed-contract bridges the adopter wires through `substrate.local_model` / `substrate.data_store` / `substrate.skill_store` in `skillscript.config.json`. Substrate-specific tools (`$ amp.*`, `$ github.*`, etc.) are whatever the adopter declares in `connectors.json`. For external MCP servers, three bundled wiring paths cover the common cases:
+**Substrate-neutrality.** Typed-contract bare ops (`$ llm`, `$ data_read`, `$ data_write`, `$ skill_*`, `$ json_parse`) are not reserved built-ins — they're typed-contract bridges the adopter wires through `substrate.local_model` / `substrate.data_store` / `substrate.skill_store` in `skillscript.config.json`. Substrate-specific tools (`$ github.*`, `$ linear.*`, etc.) are whatever the adopter declares in `connectors.json`. For external MCP servers, three bundled wiring paths cover the common cases:
 
 - `HttpMcpConnector` — declarative wiring for any Streamable HTTP MCP server (JSON-RPC over HTTP + SSE). No subprocess. Adopters declare instances by class name in `connectors.json`.
 - `RemoteMcpConnector` — stdio bridging for MCPs distributed as spawnable binaries (YouTrack, GitHub, Linear when run locally) or HTTP MCPs adapted via `npx mcp-remote ... --sse`.
@@ -2173,7 +2173,7 @@ For *data skills* (skills marked `# Type: data`), the compile-time inline primit
 - Recursion is legal but bounded. If your design requires deeper recursion than the configured limit, reshape the workflow — almost always a sign of an iteration that should be expressed as `foreach` rather than recursion.
 
 ## Session isolation — a skill can't mutate the calling agent's session
-A skill executes in its OWN session; agent session state (context, persona) is session-local. Calling `amp_set_session_context` (or similar) inside a skill sets it for the SKILL's session, not the caller's — the caller sees no change. The contract: **skills assemble and RETURN data; the agent owns its SESSION STATE.** To "enter a project," a skill returns the instruction bodies and the AGENT applies its own session context.
+A skill executes in its OWN session; agent session state (context, persona) is session-local. Calling a session-context tool (or similar) inside a skill sets it for the SKILL's session, not the caller's — the caller sees no change. The contract: **skills assemble and RETURN data; the agent owns its SESSION STATE.** To "enter a project," a skill returns the instruction bodies and the AGENT applies its own session context.
 
 ## Static vs Dynamic — skill execution model
 
@@ -2565,5 +2565,5 @@ When any of these primitives ship, the relevant grammar moves into its canonical
 
 ---
 
-*Rendered from `skillscript/skillscript-language-reference` — 2026-07-10 13:59 EDT*  
+*Rendered from `skillscript/skillscript-language-reference` — 2026-07-10 14:34 EDT*  
 *Source of truth: AMP (`amp_render_document("skillscript/skillscript-language-reference")`)*

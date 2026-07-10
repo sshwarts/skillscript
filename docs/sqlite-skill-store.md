@@ -21,7 +21,7 @@ SkillStore (choose which connector)
    └── Adopter-custom        (you write your own)
 ```
 
-If your substrate is AMP, Pinecone, S3, Postgres, or anything else, write a `class FooSkillStore implements SkillStore { ... }` and call `registry.registerSkillStore("primary", new FooSkillStore(...))`. The runtime is none the wiser.
+If your substrate is Pinecone, S3, Postgres, Redis, or anything else, write a `class FooSkillStore implements SkillStore { ... }` and call `registry.registerSkillStore("primary", new FooSkillStore(...))`. The runtime is none the wiser.
 
 This SqliteSkillStore is one such impl — useful as a copy-paste starting point, or directly usable if your needs match.
 
@@ -160,10 +160,10 @@ The same holds for a fork: your `store()` neither stamps nor verifies — persis
 
 When forking into your codebase:
 
-1. Rename the class (e.g., `PostgresSkillStore`, `AmpSkillStore`)
+1. Rename the class (e.g., `PostgresSkillStore`, `RedisSkillStore`)
 2. Replace the SQL with your substrate's API (HTTP, DataStore, vector DB, etc.)
 3. Update `staticCapabilities()` to match what your substrate actually supports — drop `supports_versioning` if you can't track history, drop `supports_tag_filter` if querying tags isn't tractable
-4. Update `manifest()` to describe your substrate (`kind: "amp"` or whatever)
+4. Update `manifest()` to describe your substrate (`kind: "postgres"` or whatever)
 5. **Optional but high-value for network-backed forks: implement `version()`** — a cheap store-wide change-token computed WITHOUT loading bodies (a list ETag, max-revision, or metadata digest), where any add/remove/edit/status-change moves it. It lets `skill_list` skip its N+1 catalog rebuild on unchanged polls (each entry otherwise costs a `load()` — one network round-trip per skill against a remote store). `SqliteSkillStore` hashes `(name, status, current_version)` in one body-free query. Skip it and `skill_list` just always rebuilds.
 6. Tests: copy `tests/SqliteSkillStore.test.ts` as a starting point + run the conformance suite (`SkillStoreConformance.buildTests()` from `skillscript-runtime/testing`)
 

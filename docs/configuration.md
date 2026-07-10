@@ -83,18 +83,18 @@ Once `.env` populates `process.env`, both `skillscript.config.json` (`runtime-co
 
   ```json
   {
-    "amp": {
+    "memory": {
       "class": "HttpMcpConnector",
       "config": {
-        "endpoint": "${AMP_ENDPOINT}",
-        "headers": { "Authorization": "Bearer ${AMP_TOKEN}" },
+        "endpoint": "${MEMORY_ENDPOINT}",
+        "headers": { "Authorization": "Bearer ${MEMORY_TOKEN}" },
         "identityHeader": "X-Agent-Id"
       }
     }
   }
   ```
 
-  `AMP_ENDPOINT` and `AMP_TOKEN` in `.env`; declarative shape committed to `connectors.json`.
+  `MEMORY_ENDPOINT` and `MEMORY_TOKEN` in `.env`; declarative shape committed to `connectors.json`.
 
 ### `.env` file format
 
@@ -365,7 +365,7 @@ Underscore-prefixed top-level keys (`_comment`, `_note_security`, etc.) are igno
 
 ```json
 {
-  "_comment": "Last edited 2026-05-28 — switched skill_store to sqlite for AMP-style dogfooding",
+  "_comment": "Last edited 2026-05-28 — switched skill_store to sqlite for local dogfooding",
   "substrate": { "skill_store": "sqlite" }
 }
 ```

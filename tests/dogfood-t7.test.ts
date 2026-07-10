@@ -24,8 +24,8 @@ const REPO_ROOT = join(__dirname, "..");
 const PACKAGE_JSON = JSON.parse(readFileSync(join(REPO_ROOT, "package.json"), "utf8")) as Record<string, unknown>;
 
 describe("T7 — package.json polish", () => {
-  it("1. version is 0.27.3 (dashboard highlighter offset-leak fix + adopter-facing docs audit [internal-refs/version-provenance strip + SkillStore manifest()/WakeReceipt.warnings/17-tool accuracy] + language-ref re-render [# OnError: removal reframed to post-0.30])", () => {
-    expect(PACKAGE_JSON["version"]).toBe("0.27.3");
+  it("1. version is 0.30.0 (public launch cut — final doc-leakage scrub: AMP removed from sqlite-skill-store.md + configuration.md examples; language-reference.md re-rendered from atoms with connector examples genericized to github.*/linear.*)", () => {
+    expect(PACKAGE_JSON["version"]).toBe("0.30.0");
   });
 
   it("2. main + types + bin + engines.node ≥ 22.5 declared", () => {
