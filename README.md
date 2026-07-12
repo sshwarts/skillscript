@@ -8,7 +8,7 @@
 
 <p align="center">
   <a href="https://skillscript.ai">skillscript.ai</a>&nbsp; • &nbsp;
-  <a href="https://skillscript.mintlify.app/docs">docs</a>&nbsp;
+  <a href="https://docs.skillscript.ai">docs</a>&nbsp;
   </p>
 
 

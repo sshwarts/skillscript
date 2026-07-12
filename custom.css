@@ -1,0 +1,29 @@
+/*
+ * Workaround for a Mintlify mint-theme responsive bug (not our config).
+ *
+ * The left nav (#sidebar) is `hidden lg:block fixed w-[18rem]` — it appears at
+ * the `lg` breakpoint (>=1024px) as a position:fixed, 18rem-wide panel. But
+ * #content-area's width clamp (`xl:w-[calc(100%-19rem)]`) only engages at `xl`
+ * (>=1280px). In the 1024-1279px band the fixed sidebar is shown while the
+ * content's centering math (`mx-auto` + `lg:-ml-12`) leaves the body text
+ * under it -> the sidebar overlaps the text.
+ *
+ * Fix: in that band, pin the sidebar to the container's left edge and reserve a
+ * matching left gutter on the content so the text clears it. The sidebar stays
+ * VISIBLE on purpose — the mobile hamburger is `lg:hidden`, so hiding the
+ * sidebar here would strand navigation entirely.
+ *
+ * Scope is exactly the dead band: <1024px (sidebar hidden) and >=1280px (clamp
+ * active) are untouched. Remove this file once Mintlify fixes the theme
+ * (support ticket filed).
+ */
+@media (min-width: 1024px) and (max-width: 1279.98px) {
+  #sidebar {
+    left: 0 !important;
+  }
+
+  #content-area {
+    margin-left: 0 !important;
+    padding-left: 19rem !important;
+  }
+}

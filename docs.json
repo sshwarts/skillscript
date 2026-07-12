@@ -5,6 +5,7 @@
   "colors": {
     "primary": "#0EA5E9"
   },
+  "customCSS": ["/custom.css"],
   "navigation": {
     "groups": [
       {
