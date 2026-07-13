@@ -67,6 +67,7 @@
     "examples",
     "docs/configuration.md",
     "docs/adopter-playbook.md",
+    "docs/adopter-agent-guide.md",
     "docs/connector-contract-reference.md",
     "docs/language-reference.md",
     "docs/sqlite-skill-store.md",
