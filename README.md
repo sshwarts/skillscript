@@ -63,6 +63,8 @@ Skillscript narrows that execution surface:
 
 The goal is not to replace scripts. It is to place scripts and APIs behind capabilities the operator explicitly exposes.
 
+There is also a scaling reason. Reviewing arbitrary code means auditing everything it could do, which takes a skilled reader. A skillscript puts its full effect surface on the page, so approval stays tractable even when agents author faster than anyone can read code, and the operator who knows what their systems should allow can approve on the declared effects rather than by re-reading logic.
+
 ## A skill
 
 A skill is a typed, declarative workflow with variables, operations, dependencies, and an output template.
