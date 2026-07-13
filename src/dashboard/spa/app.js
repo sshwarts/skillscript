@@ -224,7 +224,7 @@ async function renderApprovals() {
     return `
       <tr>
         <td><a href="#skill/${encodeURIComponent(s.name)}"><strong>${esc(s.name)}</strong></a> ${whyBadge}<br>
-            <span style="color:#6c757d;font-size:0.85em;">${esc(s.description ?? "—")}</span></td>
+            <span style="color:var(--text-muted);font-size:0.85em;">${esc(s.description ?? "—")}</span></td>
         <td>${sigBadges}</td>
         <td>
           <a href="#skill/${encodeURIComponent(s.name)}">Review →</a>
@@ -463,7 +463,7 @@ async function renderSkillDetail(name) {
       ? `<div class="remediation" style="margin-top: 12px;"><strong>Approval token stale.</strong> ${esc(approval.reason ?? "")}. Re-transition to Approved to stamp a fresh token.</div>`
       : "";
     return `
-      <div style="margin-bottom: 8px;"><a href="#" onclick="event.preventDefault(); window.history.back();" style="font-size: 0.9em; color: #6c757d;">← Back</a></div>
+      <div style="margin-bottom: 8px;"><a href="#" onclick="event.preventDefault(); window.history.back();" style="font-size: 0.9em; color: var(--text-muted);">← Back</a></div>
       <h2>Skill: ${esc(metadata.name)} <span class="badge ${esc(metadata.status)}">${esc(metadata.status)}</span>${approvalBadge}</h2>
 
       <section>
@@ -471,9 +471,9 @@ async function renderSkillDetail(name) {
         <p>${esc(metadata.description ?? "(no description)")}</p>
         ${approvalBanner}
         ${renderStatusActions(name, metadata, approval)}
-        <div style="margin-top: 16px; border-top: 1px solid #eee; padding-top: 12px;">
+        <div style="margin-top: 16px; border-top: 1px solid var(--border); padding-top: 12px;">
           <button class="danger" onclick="deleteSkill('${esc(name).replace(/'/g, "\\'")}')">Delete skill</button>
-          <span style="color:#6c757d; font-size:0.85em; margin-left:8px;">permanent — no undo; warns if other skills reference it, then frees the name</span>
+          <span style="color:var(--text-muted); font-size:0.85em; margin-left:8px;">permanent — no undo; warns if other skills reference it, then frees the name</span>
         </div>
       </section>
 
@@ -528,17 +528,17 @@ async function renderSkillDetail(name) {
                 ? `<span class="badge ok">ok</span>`
                 : `<span class="badge error">err</span>`;
               return `
-                <div style="border-bottom: 1px solid #e6e8eb; padding: 12px 0;">
+                <div style="border-bottom: 1px solid var(--border); padding: 12px 0;">
                   <div style="display: flex; align-items: center; gap: 12px;">
                     ${status}
-                    <code style="font-size: 11px; color: #6c757d;">${esc(fire.trace_id.slice(0, 8))}</code>
+                    <code style="font-size: 11px; color: var(--text-muted);">${esc(fire.trace_id.slice(0, 8))}</code>
                     <span>${ts}</span>
-                    <span style="color: #6c757d; margin-left: auto;">${fire.duration_ms}ms · ${fire.ops.length} ops</span>
+                    <span style="color: var(--text-muted); margin-left: auto;">${fire.duration_ms}ms · ${fire.ops.length} ops</span>
                   </div>
                   ${fire.errors.map((e) => `
                     <div class="remediation">
                       <strong>${esc(e.class)}</strong> in ${esc(e.target)}/${esc(e.opKind)}: ${esc(e.message)}
-                      ${e.remediation ? `<div style="margin-top: 4px; color: #4a5158;">→ ${esc(e.remediation)}</div>` : ""}
+                      ${e.remediation ? `<div style="margin-top: 4px; color: var(--text-dim);">→ ${esc(e.remediation)}</div>` : ""}
                     </div>
                   `).join("")}
                 </div>
@@ -1065,12 +1065,12 @@ function renderComposesSection(currentName, source) {
       <div style="display: flex; flex-direction: column; gap: 6px;">
         ${refs.map((r) => `
           <details data-compose-ref="${esc(r.kind)}:${esc(r.name)}" data-parent="${esc(currentName)}">
-            <summary style="cursor: pointer; padding: 8px 12px; background: #f6f8fa; border-radius: 4px; font-family: monospace;">
+            <summary style="cursor: pointer; padding: 8px 12px; background: var(--surface-2); border-radius: 4px; font-family: monospace;">
               <span class="badge ${r.kind === "execute_skill" ? "ok" : "info"}" style="margin-right: 8px;">${esc(r.kind)}</span>
               <strong>${esc(r.name)}</strong>
-              <span style="color: #6c757d; margin-left: 8px; font-size: 0.85em;">${r.kind === "execute_skill" ? "(runtime invocation)" : "(compile-time data inline)"}</span>
+              <span style="color: var(--text-muted); margin-left: 8px; font-size: 0.85em;">${r.kind === "execute_skill" ? "(runtime invocation)" : "(compile-time data inline)"}</span>
             </summary>
-            <div class="compose-panel" style="padding: 12px 16px; border-left: 2px solid #e6e8eb; margin-left: 12px; margin-top: 8px;">
+            <div class="compose-panel" style="padding: 12px 16px; border-left: 2px solid var(--border); margin-left: 12px; margin-top: 8px;">
               <div class="empty">Loading contract…</div>
             </div>
           </details>
@@ -1115,10 +1115,10 @@ function renderContractPanel(name, kind, meta, inlinedBody) {
   const returns = Array.isArray(meta.returns) && meta.returns.length > 0
     ? `<dl class="kv"><dt>Returns (<code># Returns:</code>)</dt><dd>${meta.returns.map((r) => `<code>${esc(r)}</code>`).join(", ")}</dd></dl>`
     : `<dl class="kv"><dt>Returns</dt><dd><span class="empty">(no declared <code># Returns:</code> — caller sees <code>outputs</code> + <code>transcript</code> only)</span></dd></dl>`;
-  const authorBadge = meta.author ? ` <span style="color: #6c757d; font-size: 0.85em;">by ${esc(meta.author)}</span>` : "";
+  const authorBadge = meta.author ? ` <span style="color: var(--text-muted); font-size: 0.85em;">by ${esc(meta.author)}</span>` : "";
   const drillLink = `<a href="#skill/${encodeURIComponent(name)}" style="font-size: 0.85em;">Open in detail view →</a>`;
   const inlineBodyBlock = inlinedBody !== null
-    ? `<details style="margin-top: 12px;"><summary style="cursor: pointer; color: #6c757d; font-size: 0.85em;">Inlined body (bakes at compile)</summary><pre style="margin-top: 8px; font-size: 12px;">${esc(inlinedBody)}</pre></details>`
+    ? `<details style="margin-top: 12px;"><summary style="cursor: pointer; color: var(--text-muted); font-size: 0.85em;">Inlined body (bakes at compile)</summary><pre style="margin-top: 8px; font-size: 12px;">${esc(inlinedBody)}</pre></details>`
     : "";
   return `
     <div style="font-size: 0.95em;">
@@ -1179,8 +1179,28 @@ async function renderCurrentView() {
 
 window.addEventListener("hashchange", renderCurrentView);
 window.addEventListener("DOMContentLoaded", () => {
+  initThemeToggle();
   startPolling();
 });
+
+// Dark/light toggle. The initial theme is set before paint by the inline script
+// in index.html; this wires the header button to flip + persist it.
+function initThemeToggle() {
+  const btn = document.getElementById("theme-toggle");
+  if (!btn) return;
+  const paint = (theme) => {
+    document.documentElement.setAttribute("data-theme", theme);
+    btn.textContent = theme === "dark" ? "☀" : "☾";
+    btn.setAttribute("aria-label", theme === "dark" ? "Switch to light mode" : "Switch to dark mode");
+    btn.setAttribute("title", theme === "dark" ? "Switch to light mode" : "Switch to dark mode");
+  };
+  paint(document.documentElement.getAttribute("data-theme") === "dark" ? "dark" : "light");
+  btn.addEventListener("click", () => {
+    const next = document.documentElement.getAttribute("data-theme") === "dark" ? "light" : "dark";
+    try { localStorage.setItem("skillscript-theme", next); } catch (e) { /* private mode */ }
+    paint(next);
+  });
+}
 
 // ─── Utils ──────────────────────────────────────────────────────────────────
 

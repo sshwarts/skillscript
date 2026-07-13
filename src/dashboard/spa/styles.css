@@ -1,20 +1,99 @@
-/* Dashboard styles — minimal, readable, no framework. */
+/* Dashboard styles — minimal, readable, no framework.
+ * Colors are driven by CSS custom properties so the whole surface themes from
+ * one place. `:root` is the light palette (values are byte-identical to the
+ * pre-theme hardcoded colors, so light mode is unchanged); `[data-theme="dark"]`
+ * overrides them. The theme attribute is set on <html> before first paint by a
+ * tiny inline script in index.html (no flash), and toggled from the header. */
+:root {
+  --bg: #f6f7f9;
+  --surface: #ffffff;
+  --surface-2: #fafbfc;
+  --text: #1a1d21;
+  --text-dim: #4a5158;
+  --text-muted: #6c757d;
+  --border: #e6e8eb;
+  --border-strong: #c4cad0;
+
+  --header-bg: #1a1d21;
+  --header-text: #f6f7f9;
+  --nav-link: #b8c0c8;
+  --nav-hover-bg: #2a2e34;
+
+  --btn-bg: #ffffff;
+  --btn-hover-bg: #f6f7f9;
+  --btn-primary-bg: #1a1d21;
+  --btn-primary-text: #ffffff;
+  --danger: #b91c1c;
+  --danger-text: #ffffff;
+
+  --code-bg: #1a1d21;
+  --code-text: #d4d4d4;
+  --code-inline-bg: rgba(0, 0, 0, 0.06);
+
+  --badge-draft-bg: #fff3cd;    --badge-draft-text: #6c5500;
+  --badge-approved-bg: #d1f0d6; --badge-approved-text: #1a5a23;
+  --badge-disabled-bg: #f0d6d1; --badge-disabled-text: #8b1d1d;
+
+  --banner-secured-bg: #eef4ff; --banner-secured-border: #b9ccf0; --banner-secured-text: #1a3a6b;
+  --banner-error-bg: #fdecea;   --banner-error-border: #f0b4ad;   --banner-error-text: #8b1d1d;
+  --remediation-bg: #fff5f5;    --remediation-border: #b91c1c;
+
+  --shadow: rgba(0, 0, 0, 0.12);
+}
+
+[data-theme="dark"] {
+  --bg: #0d1117;
+  --surface: #161b22;
+  --surface-2: #1c2128;
+  --text: #e6edf3;
+  --text-dim: #adbac7;
+  --text-muted: #8b949e;
+  --border: #30363d;
+  --border-strong: #444c56;
+
+  --header-bg: #010409;
+  --header-text: #e6edf3;
+  --nav-link: #8b949e;
+  --nav-hover-bg: #21262d;
+
+  --btn-bg: #21262d;
+  --btn-hover-bg: #30363d;
+  --btn-primary-bg: #2f81f7;
+  --btn-primary-text: #ffffff;
+  --danger: #da3633;
+  --danger-text: #ffffff;
+
+  --code-bg: #010409;
+  --code-text: #d4d4d4;
+  --code-inline-bg: rgba(255, 255, 255, 0.10);
+
+  --badge-draft-bg: #3d3418;    --badge-draft-text: #e3b341;
+  --badge-approved-bg: #16351f; --badge-approved-text: #56d364;
+  --badge-disabled-bg: #3d1d1d; --badge-disabled-text: #f85149;
+
+  --banner-secured-bg: #0d2847; --banner-secured-border: #1f4b7f; --banner-secured-text: #79c0ff;
+  --banner-error-bg: #3d1d1d;   --banner-error-border: #6e2a2a;   --banner-error-text: #f85149;
+  --remediation-bg: #2d1616;    --remediation-border: #da3633;
+
+  --shadow: rgba(0, 0, 0, 0.5);
+}
 
 * { box-sizing: border-box; }
 body {
   font: 14px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, sans-serif;
   margin: 0;
-  color: #1a1d21;
-  background: #f6f7f9;
+  color: var(--text);
+  background: var(--bg);
+  transition: background-color 0.15s ease, color 0.15s ease;
 }
 header {
-  background: #1a1d21;
-  color: #f6f7f9;
+  background: var(--header-bg);
+  color: var(--header-text);
   padding: 12px 20px;
   display: flex;
   align-items: center;
   gap: 24px;
-  box-shadow: 0 1px 4px rgba(0,0,0,0.12);
+  box-shadow: 0 1px 4px var(--shadow);
 }
 header h1 {
   font-size: 16px;
@@ -23,65 +102,77 @@ header h1 {
 }
 nav { display: flex; gap: 16px; }
 nav a {
-  color: #b8c0c8;
+  color: var(--nav-link);
   text-decoration: none;
   font-size: 13px;
   padding: 4px 8px;
   border-radius: 4px;
 }
-nav a:hover, nav a.active { color: #f6f7f9; background: #2a2e34; }
+nav a:hover, nav a.active { color: var(--header-text); background: var(--nav-hover-bg); }
 #poll-status {
   margin-left: auto;
   font-size: 12px;
-  color: #b8c0c8;
+  color: var(--nav-link);
 }
+.theme-toggle {
+  background: transparent;
+  border: 1px solid var(--nav-hover-bg);
+  color: var(--nav-link);
+  border-radius: 4px;
+  padding: 4px 9px;
+  font-size: 14px;
+  line-height: 1;
+  cursor: pointer;
+}
+.theme-toggle:hover { color: var(--header-text); background: var(--nav-hover-bg); }
 main { padding: 24px; max-width: 1200px; margin: 0 auto; }
-footer { padding: 16px 24px; color: #6c757d; text-align: center; font-size: 12px; }
+footer { padding: 16px 24px; color: var(--text-muted); text-align: center; font-size: 12px; }
 
 h2 { font-size: 18px; margin: 0 0 16px; }
-section { background: #fff; border: 1px solid #e6e8eb; border-radius: 6px; padding: 20px; margin-bottom: 16px; }
+section { background: var(--surface); border: 1px solid var(--border); border-radius: 6px; padding: 20px; margin-bottom: 16px; }
 
 table { width: 100%; border-collapse: collapse; }
-th, td { padding: 8px 12px; text-align: left; border-bottom: 1px solid #e6e8eb; font-size: 13px; }
-th { font-weight: 600; color: #4a5158; background: #fafbfc; font-size: 12px; text-transform: uppercase; letter-spacing: 0.04em; }
-tbody tr:hover { background: #fafbfc; cursor: pointer; }
+th, td { padding: 8px 12px; text-align: left; border-bottom: 1px solid var(--border); font-size: 13px; }
+th { font-weight: 600; color: var(--text-dim); background: var(--surface-2); font-size: 12px; text-transform: uppercase; letter-spacing: 0.04em; }
+tbody tr:hover { background: var(--surface-2); cursor: pointer; }
 
 .badge { display: inline-block; padding: 2px 8px; border-radius: 10px; font-size: 11px; font-weight: 500; }
-.badge.Draft     { background: #fff3cd; color: #6c5500; }
-.badge.Approved  { background: #d1f0d6; color: #1a5a23; }
-.badge.Disabled  { background: #f0d6d1; color: #8b1d1d; }
-.badge.error     { background: #f0d6d1; color: #8b1d1d; }
-.badge.ok        { background: #d1f0d6; color: #1a5a23; }
+.badge.Draft     { background: var(--badge-draft-bg); color: var(--badge-draft-text); }
+.badge.Approved  { background: var(--badge-approved-bg); color: var(--badge-approved-text); }
+.badge.Disabled  { background: var(--badge-disabled-bg); color: var(--badge-disabled-text); }
+.badge.error     { background: var(--badge-disabled-bg); color: var(--badge-disabled-text); }
+.badge.ok        { background: var(--badge-approved-bg); color: var(--badge-approved-text); }
 
 button {
   font: inherit;
   padding: 6px 12px;
-  border: 1px solid #c4cad0;
-  background: #fff;
+  border: 1px solid var(--border-strong);
+  background: var(--btn-bg);
+  color: var(--text);
   border-radius: 4px;
   cursor: pointer;
 }
-button:hover { background: #f6f7f9; }
-button.primary { background: #1a1d21; color: #fff; border-color: #1a1d21; }
-button.danger  { background: #b91c1c; color: #fff; border-color: #b91c1c; }
+button:hover { background: var(--btn-hover-bg); }
+button.primary { background: var(--btn-primary-bg); color: var(--btn-primary-text); border-color: var(--btn-primary-bg); }
+button.danger  { background: var(--danger); color: var(--danger-text); border-color: var(--danger); }
 
 .kv { display: grid; grid-template-columns: 200px 1fr; gap: 8px 16px; font-size: 13px; }
-.kv dt { color: #4a5158; font-weight: 500; }
+.kv dt { color: var(--text-dim); font-weight: 500; }
 .kv dd { margin: 0; }
 
 .kpi-row { display: flex; gap: 16px; flex-wrap: wrap; }
 .kpi {
   flex: 1 1 180px;
-  background: #fafbfc;
+  background: var(--surface-2);
   padding: 12px 16px;
   border-radius: 4px;
-  border: 1px solid #e6e8eb;
+  border: 1px solid var(--border);
 }
-.kpi .label { font-size: 11px; text-transform: uppercase; color: #6c757d; letter-spacing: 0.04em; }
+.kpi .label { font-size: 11px; text-transform: uppercase; color: var(--text-muted); letter-spacing: 0.04em; }
 .kpi .value { font-size: 24px; font-weight: 600; margin-top: 4px; }
 
 pre {
-  background: #1a1d21; color: #d4d4d4;
+  background: var(--code-bg); color: var(--code-text);
   padding: 12px;
   border-radius: 4px;
   font: 12px/1.4 ui-monospace, SFMono-Regular, monospace;
@@ -89,19 +180,20 @@ pre {
 }
 
 .remediation {
-  border-left: 3px solid #b91c1c;
+  border-left: 3px solid var(--remediation-border);
   padding: 8px 12px;
-  background: #fff5f5;
+  background: var(--remediation-bg);
   margin: 8px 0;
   font-size: 12px;
 }
 
-.empty { color: #6c757d; padding: 24px; text-align: center; font-style: italic; }
+.empty { color: var(--text-muted); padding: 24px; text-align: center; font-style: italic; }
 
 /* v0.18.9 — Security signal highlighting in the skill source viewer.
  * Two tiers as soft tints on the dark <pre> background. Low alpha so
  * the prose stays readable; the eye picks up the tinted spans on a
- * scan without being overwhelmed. */
+ * scan without being overwhelmed. The <pre> stays dark in both themes,
+ * so these tints need no per-theme override. */
 pre.skill-source { white-space: pre-wrap; word-break: break-word; }
 .sig-high {
   background: rgba(255, 140, 50, 0.30);
@@ -132,10 +224,10 @@ pre.skill-source { white-space: pre-wrap; word-break: break-word; }
   border-left-color: rgba(255, 215, 0, 0.80);
 }
 .security-signals .sig-info-text {
-  background: #fafbfc;
-  border-left-color: #c4cad0;
+  background: var(--surface-2);
+  border-left-color: var(--border-strong);
 }
-.security-signals small { color: #6c757d; }
+.security-signals small { color: var(--text-muted); }
 
 /* v1.0 Gate #7 — secured-mode banner + approval queue */
 #secured-banner:empty { display: none; }
@@ -146,20 +238,20 @@ pre.skill-source { white-space: pre-wrap; word-break: break-word; }
   font-size: 13px;
   line-height: 1.5;
 }
-.banner code { background: rgba(0,0,0,0.06); padding: 1px 5px; border-radius: 3px; }
-.banner-secured { background: #eef4ff; border: 1px solid #b9ccf0; color: #1a3a6b; }
-.banner-error   { background: #fdecea; border: 1px solid #f0b4ad; color: #8b1d1d; }
+.banner code { background: var(--code-inline-bg); padding: 1px 5px; border-radius: 3px; }
+.banner-secured { background: var(--banner-secured-bg); border: 1px solid var(--banner-secured-border); color: var(--banner-secured-text); }
+.banner-error   { background: var(--banner-error-bg); border: 1px solid var(--banner-error-border); color: var(--banner-error-text); }
 
 .approve-panel {
-  background: #f6f8fa;
-  border: 1px solid #e6e8eb;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
   border-radius: 6px;
   padding: 12px 14px;
   margin-top: 4px;
   max-width: 640px;
 }
 .approve-panel-head { font-weight: 600; margin-bottom: 4px; }
-.approve-panel p { margin: 4px 0 8px; color: #4a5158; font-size: 0.92em; }
+.approve-panel p { margin: 4px 0 8px; color: var(--text-dim); font-size: 0.92em; }
 .approve-cmd {
   display: flex;
   align-items: center;
@@ -167,8 +259,8 @@ pre.skill-source { white-space: pre-wrap; word-break: break-word; }
   margin-top: 4px;
 }
 .approve-cmd code {
-  background: #1a1d21;
-  color: #e6e8eb;
+  background: var(--code-bg);
+  color: var(--code-text);
   padding: 6px 10px;
   border-radius: 4px;
   font-size: 12px;

@@ -379,3 +379,45 @@ describe("v0.19.3 — skill detail renders v0.18.9 security signals + highlighti
     expect(html).toContain("Nothing effectful to authorize");
   });
 });
+
+// ────────────────────────────────────────────────────────────────────────
+// Dark mode (Phase 1 of the non-programmer-approver dashboard arc). The
+// theme is a CSS-variable palette toggled via `data-theme` on <html>. These
+// guard the three moving parts so a future edit can't silently unwire it:
+// the no-flash init + toggle button (index.html), the light+dark palettes
+// (styles.css), and the toggle handler (app.js).
+// ────────────────────────────────────────────────────────────────────────
+
+describe("dark mode — theming machinery is wired across the SPA assets", () => {
+  const indexHtml = readFileSync(join(SPA_DIR, "index.html"), "utf8");
+  const stylesCss = readFileSync(join(SPA_DIR, "styles.css"), "utf8");
+  const appJs = readFileSync(join(SPA_DIR, "app.js"), "utf8");
+
+  it("index.html sets the theme before paint and exposes the toggle button", () => {
+    // No-flash init: reads the stored/OS preference and stamps data-theme.
+    expect(indexHtml).toMatch(/localStorage\.getItem\("skillscript-theme"\)/);
+    expect(indexHtml).toMatch(/setAttribute\("data-theme"/);
+    expect(indexHtml).toMatch(/id="theme-toggle"/);
+  });
+
+  it("styles.css defines a light :root palette and a dark override, both variable-driven", () => {
+    expect(stylesCss).toMatch(/:root\s*\{/);
+    expect(stylesCss).toMatch(/\[data-theme="dark"\]\s*\{/);
+    // The palette is variables, not hardcoded colors, so surfaces theme from one place.
+    expect(stylesCss).toMatch(/--bg:/);
+    expect(stylesCss).toMatch(/background:\s*var\(--bg\)/);
+    expect(stylesCss).toMatch(/color:\s*var\(--text\)/);
+  });
+
+  it("app.js wires the toggle to flip + persist the theme", () => {
+    expect(appJs).toMatch(/function initThemeToggle\(/);
+    expect(appJs).toMatch(/initThemeToggle\(\)/); // called on load
+    expect(appJs).toMatch(/localStorage\.setItem\("skillscript-theme"/);
+  });
+
+  it("app.js no longer hardcodes inline hex colors (they are CSS variables now)", () => {
+    // The pre-theme inline styles used hex like #6c757d / #e6e8eb; dark mode
+    // requires them to be var(--…) so they invert with the palette.
+    expect(appJs).not.toMatch(/(?:color|background):\s*#[0-9a-fA-F]{3,6}/);
+  });
+});
