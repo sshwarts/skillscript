@@ -2,6 +2,18 @@
 
 Each release carries an **Upgrade impact:** line (first in its section) so a bump's requirements are visible at a glance. Tags (closed set): **BREAKING** (a manual change is needed to keep working) · **RE-APPROVE** (secured-mode signature invalidation — skills must be re-approved before they run) · **CONFIG** (`connectors.json` / config edit needed) · **none (additive)** (no action; backward-compatible). Standard from 0.20.0 forward; the pre-0.20 transitions that need action are flagged inline below (0.14.0, 0.18.8, 0.19.0). Full walkthrough: [UPGRADING.md](UPGRADING.md).
 
+## 0.31.0 — 2026-07-13 — dashboard approval UX for the non-programmer approver
+
+**Upgrade impact:** none (additive). Dashboard + one additive `skill_preflight` field; no breaking change.
+
+A pass on the review view to let someone who can't read skillscript understand a skill's blast radius and approve with confidence — "approve on the declared effects, without being the one who could have written the code."
+
+- **Dark mode.** The whole dashboard is now a CSS-variable palette with a header toggle (☾/☀); the theme is set before first paint (no flash), follows the OS setting by default, and persists. Light mode is unchanged.
+- **Collapsible review sections.** The approval-decision surface (Status/actions, What this skill touches, Security signals, Source, and the new diagram) always stays open; telemetry/reference (Metrics, Recent fires, Version history, Triggers) collapses by default via native `<details>`; Composes shows only when the skill composes a child.
+- **"What it does, step by step" diagram.** A dependency-ordered SVG flowchart of the skill's actual steps, in the decision surface under "What this skill touches." Targets are boxes joined by branch/merge arrows; ops are plain-language rows ("Read from the data store", "Ask the local model", "Run a bash command") with their key argument; loops and branches nest; each step shows the variable it produces (`→ VAR`) so data flow is traceable; steps that change data / run commands are marked; composed skills link through to their own review view; the entry/default target is flagged (`result` when it runs last, `default` when single-target). Drawn client-side — no diagram dependency added. The CLI's `skillfile diagram` still emits Mermaid text.
+- **New `skill_preflight` field:** `contract.flow` — the structured control-flow (targets, plain-language steps, dependencies) the diagram is drawn from. Single-skill only (not added to `skill_list`, to keep the catalog lean).
+- **Fix:** the dashboard no longer resets scroll position (or flashes "Loading…") on its 30-second poll when re-rendering the same view.
+
 ## 0.30.0 — 2026-07-10 — public launch cut
 
 **Upgrade impact:** none (additive). Documentation only; no runtime, API, or behavior change.

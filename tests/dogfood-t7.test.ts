@@ -24,8 +24,8 @@ const REPO_ROOT = join(__dirname, "..");
 const PACKAGE_JSON = JSON.parse(readFileSync(join(REPO_ROOT, "package.json"), "utf8")) as Record<string, unknown>;
 
 describe("T7 — package.json polish", () => {
-  it("1. version is 0.30.0 (public launch cut — final doc-leakage scrub: AMP removed from sqlite-skill-store.md + configuration.md examples; language-reference.md re-rendered from atoms with connector examples genericized to github.*/linear.*)", () => {
-    expect(PACKAGE_JSON["version"]).toBe("0.30.0");
+  it("1. version is 0.31.0 (dashboard approval-UX arc for the non-programmer approver: dark mode + collapsible review sections + an SVG 'what it does' step-flowchart from skill_preflight's contract.flow, plus a poll scroll-preservation fix)", () => {
+    expect(PACKAGE_JSON["version"]).toBe("0.31.0");
   });
 
   it("2. main + types + bin + engines.node ≥ 22.5 declared", () => {

@@ -489,3 +489,71 @@ describe("collapsible review sections — telemetry collapses, decision surface 
     expect(html).not.toContain("doesn't compose other skills");
   });
 });
+
+// ────────────────────────────────────────────────────────────────────────
+// "What it does, step by step" walkthrough (Phase 3 of the non-programmer-
+// approver arc). A plain-language flow drawn from skill_preflight's
+// contract.flow — targets as lanes, ops as steps, in the open decision surface
+// under "What this skill touches". Body-only skills (empty flow) show nothing.
+// ────────────────────────────────────────────────────────────────────────
+
+describe("control-flow walkthrough — plain-language flow in the review view", () => {
+  const withFlow = (flow: unknown) => ({
+    skill_preflight: {
+      metadata: { name: "pipeline", description: "demo", status: "Approved" },
+      versions: [{ version: "v1", status: "Approved", changed_at: 1779000000, content_hash: "v1" }],
+      recent_fires: [],
+      approval: { gate_ok: true },
+      contract: {
+        vars: [], returns: [], requires: [],
+        effectful_footprint: { connectors: [], builtins: ["data_write"], shell_binaries: [], unsafe_shell: 0, file_writes: 0, file_reads: 0, notifies: 0 },
+        flow,
+      },
+    },
+    skill_read: { name: "pipeline", version: "v1", status: "Approved", source: `# Skill: pipeline\n# Status: Approved\nfetch:\n    $ data_write content="x"\ndefault: fetch\n` },
+  });
+
+  it("renders lanes + plain-language steps, marks the entry, tags mutations", async () => {
+    const flow = {
+      lanes: [
+        { id: "fetch", isEntry: false, deps: [], steps: [
+          { label: "Read from the data store", detail: "recent activity", tone: "normal" },
+          { label: "Run the greeting-helper skill", tone: "normal", ref: { skill: "greeting-helper" } },
+        ] },
+        { id: "publish", isEntry: true, deps: ["fetch"], steps: [{ label: "Write to the data store", tone: "mutation" }] },
+      ],
+      entry: "publish",
+      truncated: false,
+    };
+    const fixture = await loadSpa(withFlow(flow));
+    await fixture.triggerRefresh();
+    await fixture.navigateTo("#skill/pipeline");
+    const html = fixture.document.getElementById("main")!.innerHTML;
+    expect(html).toContain("What it does, step by step");
+    // An SVG flowchart with plain-language step rows carrying their key argument.
+    expect(html).toContain("flow-svg");
+    expect(html).toContain("Read from the data store");
+    expect(html).toContain("recent activity");
+    expect(html).toContain("Write to the data store");
+    // Target boxes in a layered graph: the entry box (runs last) is emphasized
+    // and flagged as the result.
+    expect(html).toContain("flow-box");
+    expect(html).toContain("flow-box-entry");
+    expect(html).toContain("result");
+    // Dependencies are shown as real arrows; mutation steps get the ● marker.
+    expect(html).toContain("flow-arrow");
+    expect(html).toContain("flow-dot-mutation");
+    // A composed-skill step names it and links through to its review view.
+    expect(html).toContain("Run the greeting-helper skill");
+    expect(html).toContain('href="#skill/greeting-helper"');
+  });
+
+  it("shows no diagram for a body-only skill (empty flow)", async () => {
+    const fixture = await loadSpa(withFlow({ lanes: [], entry: null, truncated: false }));
+    await fixture.triggerRefresh();
+    await fixture.navigateTo("#skill/pipeline");
+    const html = fixture.document.getElementById("main")!.innerHTML;
+    expect(html).not.toContain("What it does, step by step");
+    expect(html).not.toContain("flow-svg");
+  });
+});

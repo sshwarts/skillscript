@@ -9,7 +9,7 @@ import { healthMetrics, type HealthMetrics } from "./metrics.js";
 import { lint } from "./lint.js";
 import { compile } from "./compile.js";
 import { parse as parseSkill } from "./parser.js";
-import { extractEffectfulFootprint, extractConnectorToolRefs } from "./skill-surface.js";
+import { extractEffectfulFootprint, extractConnectorToolRefs, buildSkillFlow, type SkillFlow } from "./skill-surface.js";
 import { listKnownConnectorClasses } from "./connectors/config.js";
 import { LintFailureError, MissingSkillReferenceError, OpError } from "./errors.js";
 import {
@@ -422,7 +422,7 @@ export class McpServer {
         // parser's frontmatter), RETURNS (exported vars), REQUIRES (capability
         // clauses), and TOUCHES (effectful footprint). Derived statically from
         // the body. Null when the source isn't loadable.
-        let contract: { vars: string[]; returns: string[]; requires: unknown[]; secret_requires: string[]; effectful_footprint: ReturnType<typeof extractEffectfulFootprint> } | null = null;
+        let contract: { vars: string[]; returns: string[]; requires: unknown[]; secret_requires: string[]; effectful_footprint: ReturnType<typeof extractEffectfulFootprint>; flow: SkillFlow } | null = null;
         // v0.23.0 — per-tool input schemas for the connector tools this skill
         // calls (selective). Null when none / no registry / unreachable.
         let connector_tools: Array<Record<string, unknown>> | null = null;
@@ -436,6 +436,10 @@ export class McpServer {
             requires: parsed.requires,
             secret_requires: parsed.secretRequires,
             effectful_footprint: extractEffectfulFootprint(parsed),
+            // Reading-order flow (lanes of plain-language steps) for the
+            // dashboard's approval view. Single-skill only — deliberately not
+            // added to skill_list's per-entry contracts (would bloat the catalog).
+            flow: buildSkillFlow(parsed),
           };
           // v0.23.0 — surface the input schema for ONLY the connector tools
           // this skill calls (selective by construction). Warms each connector's

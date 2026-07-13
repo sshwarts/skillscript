@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { parse } from "../src/parser.js";
-import { extractEffectfulFootprint } from "../src/skill-surface.js";
+import { extractEffectfulFootprint, buildSkillFlow } from "../src/skill-surface.js";
 
 /**
  * Effectful-footprint extraction — the "what does this skill touch" surface
@@ -82,5 +82,94 @@ default: run
       connectors: [], builtins: [], shell_binaries: [],
       unsafe_shell: 0, file_writes: 0, file_reads: 0, notifies: 0,
     });
+  });
+});
+
+describe("buildSkillFlow", () => {
+  it("projects targets into dependency-ordered lanes of plain-language steps", () => {
+    const flow = buildSkillFlow(parse(`# Skill: pipeline
+# Status: Approved
+fetch:
+    $ data_read query="topic" -> HITS
+verify: fetch
+    $ llm prompt="check" -> V
+dedup: fetch
+    $ data_read query="log" -> D
+publish: verify dedup
+    $ data_write content="x"
+default: publish
+`));
+    const ids = flow.lanes.map((l) => l.id);
+    // A needed target precedes its dependents; the entry (publish) lands last.
+    expect(ids[0]).toBe("fetch");
+    expect(ids[ids.length - 1]).toBe("publish");
+    expect(flow.entry).toBe("publish");
+    expect(flow.truncated).toBe(false);
+
+    const publish = flow.lanes.find((l) => l.id === "publish")!;
+    expect(publish.isEntry).toBe(true);
+    expect(publish.deps.slice().sort()).toEqual(["dedup", "verify"]);
+
+    // Ops are described in plain language, writes toned for attention, and each
+    // step carries its key argument ("what" it reads / asks / writes).
+    const fetchStep = flow.lanes.find((l) => l.id === "fetch")!.steps[0];
+    expect(fetchStep.label).toBe("Read from the data store");
+    expect(fetchStep.detail).toBe("topic");
+    // Each step carries the variable it produces, so data flow is traceable.
+    expect(fetchStep.produces).toBe("HITS");
+    expect(flow.lanes.find((l) => l.id === "verify")!.steps[0].produces).toBe("V");
+    expect(flow.lanes.find((l) => l.id === "verify")!.steps[0].label).toBe("Ask the local model");
+    expect(flow.lanes.find((l) => l.id === "verify")!.steps[0].detail).toBe("check");
+    expect(publish.steps[0].label).toBe("Write to the data store");
+    expect(publish.steps[0].tone).toBe("mutation");
+  });
+
+  it("names a composed skill and carries a drill-in ref", () => {
+    const flow = buildSkillFlow(parse(`# Skill: caller
+# Status: Approved
+run:
+    execute_skill(skill_name="greeting-helper", inputs={"WHO": "world"}) -> G
+    emit(text="\${G}")
+default: run
+`));
+    const step = flow.lanes[0].steps[0];
+    expect(step.label).toBe("Run the greeting-helper skill");
+    expect(step.ref).toEqual({ skill: "greeting-helper" });
+  });
+
+  it("nests loop bodies and branch arms as child steps", () => {
+    const flow = buildSkillFlow(parse(`# Skill: loopy
+# Status: Approved
+run:
+    $set LIST = [a, b]
+    $set MODE = go
+    foreach I in $(LIST):
+        $ data_write content="$(I)"
+    if $(MODE) == "go":
+        emit(text="done")
+    else:
+        emit(text="wait")
+default: run
+`));
+    const steps = flow.lanes[0].steps;
+    const loop = steps.find((s) => s.label.startsWith("For each"))!;
+    expect(loop.children?.[0].label).toBe("Write to the data store");
+    expect(loop.children?.[0].tone).toBe("mutation");
+
+    const branch = steps.find((s) => Array.isArray(s.branches))!;
+    expect(branch.branches?.[0].label).toMatch(/^If/);
+    expect(branch.branches?.[branch.branches.length - 1].label).toBe("Otherwise");
+    expect(branch.branches?.[0].steps[0].label).toBe("Produce output");
+  });
+
+  it("body-only skill → no lanes; big skills truncate + flag", () => {
+    expect(buildSkillFlow(parse(`# Skill: hello\n# Status: Approved\n\nHi.\n`)).lanes).toEqual([]);
+
+    let src = "# Skill: big\n# Status: Approved\n";
+    for (let i = 0; i < 45; i++) src += `t${i}:\n    emit(text="x")\n`;
+    src += "default: t0\n";
+    const big = buildSkillFlow(parse(src));
+    expect(big.truncated).toBe(true);
+    expect(big.lanes.length).toBe(40);
   });
 });

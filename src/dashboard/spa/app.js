@@ -479,6 +479,8 @@ async function renderSkillDetail(name) {
 
       ${renderEffectfulFootprintPanel(contract?.effectful_footprint)}
 
+      ${renderSkillFlow(contract?.flow)}
+
       ${source ? renderSecuritySignalsPanel(source) : ""}
 
       <section>
@@ -708,6 +710,153 @@ function renderHighlightedSkillBody(source) {
     body = body.replace(re, (m) => `<span class="sig-medium">${m}</span>`);
   }
   return body;
+}
+
+// ─── Control-flow "what it does" diagram ─────────────────────────────────
+// The orientation layer for a NON-PROGRAMMER approver: an SVG flowchart of the
+// skill's actual steps, built from skill_preflight's contract.flow (targets →
+// boxes, ops → step rows, loops/branches indented). Each target is a box; the
+// boxes stack top-to-bottom in dependency order, joined by arrows. It sits in
+// the always-open decision surface under "What this skill touches" — but it is
+// NOT the decision surface. A tidy diagram can still gloss a dangerous arg, so
+// the concrete effects (the footprint + Source) remain the artifact to approve;
+// this answers "what is it doing, in order?" for someone who can't read
+// skillscript. Steps that change data / run commands get a colored marker.
+function renderSkillFlow(flow) {
+  if (!flow || !Array.isArray(flow.lanes) || flow.lanes.length === 0) return ""; // body-only skill — nothing to diagram
+  return `
+    <section>
+      <h2>What it does, step by step</h2>
+      <p class="flow-caption">A diagram of the actual steps, top to bottom. A ● marks steps that <em>change data</em> or <em>run commands</em>. The exact effects to approve are in “What this skill touches” and the source below.</p>
+      <div class="flow-scroll">${flowSvg(flow)}</div>
+      ${flow.truncated ? `<p class="flow-caption">Large skill — showing the first 40 stages.</p>` : ""}
+    </section>
+  `;
+}
+
+// Flatten a lane's nested steps into flat rows with an indent depth, so the SVG
+// lays them out as simple text lines. Loop bodies and branch arms become deeper
+// rows under their heading.
+function flattenFlowRows(steps, depth, out) {
+  for (const s of steps) {
+    // A conditional: its "If …" / "Otherwise" arms are self-describing, so skip
+    // the redundant container heading and show the arms directly.
+    if (Array.isArray(s.branches)) {
+      for (const b of s.branches) {
+        out.push({ label: b.label, tone: "normal", depth, isBranch: true });
+        flattenFlowRows(b.steps, depth + 1, out);
+      }
+      continue;
+    }
+    out.push({ label: s.label, detail: s.detail, tone: s.tone, ref: s.ref, produces: s.produces, depth });
+    // A loop keeps its "For each …" heading, with the body indented under it.
+    if (Array.isArray(s.children)) flattenFlowRows(s.children, depth + 1, out);
+  }
+  return out;
+}
+
+function truncate(s, max) {
+  if (max < 2) return "";
+  return s.length <= max ? s : s.slice(0, max - 1) + "…";
+}
+
+function flowSvg(flow) {
+  const BOX_W = 340, ROW_H = 22, TITLE_H = 30, PAD_Y = 10, GAP_X = 30, GAP_Y = 46, MARGIN = 10, INDENT = 14, CHAR_W = 6.6;
+
+  const byId = new Map();
+  const boxes = flow.lanes.map((lane) => {
+    const rows = flattenFlowRows(lane.steps, 0, []);
+    const h = TITLE_H + Math.max(rows.length, 1) * ROW_H + PAD_Y;
+    const box = { lane, rows, h };
+    byId.set(lane.id, box);
+    return box;
+  });
+
+  // Longest-path layering: a target's dependencies sit in the layer above it, so
+  // reading top-to-bottom follows execution order (deps run first). Siblings (a
+  // shared dependency's dependents) land in the same layer, side by side — the
+  // real branch/merge shape rather than a fake vertical chain.
+  const layer = new Map(boxes.map((b) => [b.lane.id, 0]));
+  for (let it = 0; it < boxes.length; it++) {
+    let changed = false;
+    for (const b of boxes) {
+      let mx = 0;
+      for (const d of b.lane.deps || []) if (byId.has(d)) mx = Math.max(mx, layer.get(d) + 1);
+      if (mx !== layer.get(b.lane.id)) { layer.set(b.lane.id, mx); changed = true; }
+    }
+    if (!changed) break;
+  }
+  const maxLayer = Math.max(0, ...boxes.map((b) => layer.get(b.lane.id)));
+  const byLayer = Array.from({ length: maxLayer + 1 }, () => []);
+  boxes.forEach((b) => byLayer[layer.get(b.lane.id)].push(b));
+  const layerW = byLayer.map((ls) => (ls.length ? ls.length * BOX_W + (ls.length - 1) * GAP_X : 0));
+  const maxLayerW = Math.max(0, ...layerW);
+
+  const pos = new Map();
+  let ly = MARGIN;
+  byLayer.forEach((ls, L) => {
+    const startX = MARGIN + (maxLayerW - layerW[L]) / 2;
+    ls.forEach((b, i) => pos.set(b.lane.id, { x: startX + i * (BOX_W + GAP_X), y: ly }));
+    ly += Math.max(0, ...ls.map((b) => b.h)) + GAP_Y;
+  });
+  const totalW = maxLayerW + MARGIN * 2;
+  const totalH = ly - GAP_Y + MARGIN;
+
+  // Arrows point from a dependency (above) down into the step that needs it.
+  const arrows = boxes.flatMap((b) => {
+    const p = pos.get(b.lane.id);
+    return (b.lane.deps || []).map((d) => {
+      const pd = pos.get(d);
+      if (!pd) return "";
+      const x1 = pd.x + BOX_W / 2, y1 = pd.y + byId.get(d).h;
+      const x2 = p.x + BOX_W / 2, y2 = p.y;
+      const my = (y1 + y2) / 2;
+      return `<path class="flow-arrow" d="M ${x1} ${y1} C ${x1} ${my}, ${x2} ${my}, ${x2} ${y2}" marker-end="url(#flow-arrowhead)"/>`;
+    });
+  });
+
+  // The entry/default target is what runs when you invoke the skill — always
+  // flag it so it's never ambiguous which box is the one. When it has
+  // dependencies it runs LAST (everything feeds it), so it's the "result";
+  // when it has none it's simply the "default" (single-target skills).
+  const boxSvg = boxes.map((b) => {
+    const p = pos.get(b.lane.id);
+    const { lane } = b;
+    const entryWord = lane.deps && lane.deps.length ? "result" : "default";
+    const badge = lane.isEntry ? `<tspan class="flow-box-badge"> · ${entryWord}</tspan>` : "";
+    const tip = lane.isEntry ? `<title>The target that runs when you invoke this skill${lane.deps && lane.deps.length ? " — after the steps it depends on" : ""}.</title>` : "";
+    let g = `<g class="flow-box${lane.isEntry ? " flow-box-entry" : ""}">
+      ${tip}<rect x="${p.x}" y="${p.y}" width="${BOX_W}" height="${b.h}" rx="8"/>
+      <line class="flow-box-rule" x1="${p.x}" y1="${p.y + TITLE_H}" x2="${p.x + BOX_W}" y2="${p.y + TITLE_H}"/>
+      <text class="flow-box-title" x="${p.x + 12}" y="${p.y + 20}">${esc(lane.id)}${badge}</text>`;
+    (b.rows.length ? b.rows : [{ label: "Nothing to do.", tone: "normal", depth: 0 }]).forEach((r, ri) => {
+      const rowY = p.y + TITLE_H + ri * ROW_H + 16;
+      const dot = (r.tone === "mutation" || r.tone === "shell")
+        ? `<tspan class="flow-dot flow-dot-${r.tone}">● </tspan>` : "";
+      const rowX = p.x + 14 + r.depth * INDENT;
+      const producesTxt = r.produces ? ` → ${r.produces}` : "";
+      // Budget the main text in PIXELS, reserving room for the ● marker and the
+      // monospace "→ VAR" so nothing overruns the box's right border. CHAR_W is
+      // deliberately generous (chars render narrower) so we under-fill rather
+      // than let the border bisect the text.
+      const reservedPx = 18 + (dot ? 13 : 0) + producesTxt.length * 6.8;
+      const budget = Math.max(6, Math.floor((BOX_W - (rowX - p.x) - reservedPx) / CHAR_W));
+      const text = truncate(r.label + (r.detail ? " — " + r.detail : ""), budget);
+      const cls = "flow-row" + (r.isBranch ? " flow-row-branch" : "");
+      const produces = r.produces ? `<tspan class="flow-produces">${esc(producesTxt)}</tspan>` : "";
+      const rowSvg = `<text class="${cls}" x="${rowX}" y="${rowY}">${dot}${esc(text)}${produces}</text>`;
+      g += r.ref && r.ref.skill
+        ? `<a href="#skill/${encodeURIComponent(r.ref.skill)}" class="flow-row-link">${rowSvg}</a>`
+        : rowSvg;
+    });
+    return g + `</g>`;
+  });
+
+  return `<svg class="flow-svg" viewBox="0 0 ${totalW} ${totalH}" width="${totalW}" height="${totalH}" role="img" aria-label="Skill step diagram">
+      <defs><marker id="flow-arrowhead" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+        <path class="flow-arrowhead-path" d="M0 0 L10 5 L0 10 z"/></marker></defs>
+      ${arrows.join("")}${boxSvg.join("")}
+    </svg>`;
 }
 
 // v0.18.9 — security signals summary panel. Glance-first surface
@@ -1157,18 +1306,30 @@ async function renderCurrentView() {
     link.classList.toggle("active", link.getAttribute("href") === `#${hash}`);
   }
 
+  // Preserve scroll across a same-view re-render (the 30s poll) — and skip the
+  // "Loading…" flash in that case. On navigation to a different view, let scroll
+  // reset to the top as usual.
+  const newView = hash.startsWith("skill/")
+    ? `skill/${decodeURIComponent(hash.slice("skill/".length))}`
+    : hash;
+  const sameView = newView === currentView;
+  const scrollY = window.scrollY;
+  const restore = () => { if (sameView) window.scrollTo(0, scrollY); };
+
   if (hash.startsWith("skill/")) {
     const name = decodeURIComponent(hash.slice("skill/".length));
     currentView = `skill/${name}`;
-    main.innerHTML = "Loading…";
+    if (!sameView) main.innerHTML = "Loading…";
     main.innerHTML = await renderSkillDetail(name);
+    restore();
     return;
   }
 
   currentView = hash;
   if (hash === "approvals") {
-    main.innerHTML = "Loading…";
+    if (!sameView) main.innerHTML = "Loading…";
     main.innerHTML = await renderApprovals();
+    restore();
     return;
   }
   switch (hash) {
@@ -1179,6 +1340,7 @@ async function renderCurrentView() {
     case "security":   main.innerHTML = renderSecurity(); break;
     default: main.innerHTML = `<section><div class="empty">Unknown view: ${esc(hash)}</div></section>`;
   }
+  restore();
 }
 
 window.addEventListener("hashchange", renderCurrentView);
