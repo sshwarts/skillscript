@@ -421,3 +421,71 @@ describe("dark mode — theming machinery is wired across the SPA assets", () =>
     expect(appJs).not.toMatch(/(?:color|background):\s*#[0-9a-fA-F]{3,6}/);
   });
 });
+
+// ────────────────────────────────────────────────────────────────────────
+// Collapsible review sections (Phase 2 of the non-programmer-approver arc).
+// Firm principle: the approval-decision surface is NEVER hidden behind a
+// click — Status, What this skill touches, Security signals, Source, and
+// Composes-when-present stay open <section>s. Only telemetry/reference
+// (Metrics, Recent fires, Version history, Triggers) collapses by default,
+// via native <details>. Composes hides entirely when the skill composes
+// nothing (no empty state to spend space on).
+// ────────────────────────────────────────────────────────────────────────
+
+describe("collapsible review sections — telemetry collapses, decision surface stays open", () => {
+  const nonComposingDetail = {
+    skill_preflight: {
+      metadata: { name: "flow", description: "demo", status: "Approved" },
+      versions: [{ version: "v1", status: "Approved", changed_at: 1779000000, content_hash: "v1" }],
+      recent_fires: [],
+      approval: { gate_ok: true },
+      contract: {
+        vars: [], returns: [], requires: [],
+        effectful_footprint: { connectors: [], builtins: ["data_write"], shell_binaries: [], unsafe_shell: 0, file_writes: 0, file_reads: 0, notifies: 0 },
+      },
+    },
+    skill_read: {
+      name: "flow",
+      version: "v1",
+      status: "Approved",
+      source: `# Skill: flow\n# Status: Approved\nm:\n    $ data_write content="x"\ndefault: m\n`,
+    },
+  };
+
+  it("telemetry sections are collapsed <details>; decision surface stays open <section>", async () => {
+    const fixture = await loadSpa(nonComposingDetail);
+    await fixture.triggerRefresh();
+    await fixture.navigateTo("#skill/flow");
+    const doc = fixture.document;
+
+    const collapsibles = [...doc.querySelectorAll("details.section.collapsible")];
+    const summaries = collapsibles.map((d) => d.querySelector("summary")?.textContent?.trim() ?? "");
+
+    // The four reference/telemetry sections collapse.
+    expect(summaries).toContain("Metrics (24h)");
+    expect(summaries.some((s) => s.startsWith("Recent fires"))).toBe(true);
+    expect(summaries.some((s) => s.startsWith("Version history"))).toBe(true);
+    expect(summaries.some((s) => s.startsWith("Triggers"))).toBe(true);
+
+    // Collapsed BY DEFAULT — none carry the `open` attribute.
+    expect(collapsibles.every((d) => !d.hasAttribute("open"))).toBe(true);
+
+    // The decision surface is NOT collapsible — it renders as open <section>.
+    const openHeads = [...doc.querySelectorAll("section > h2")].map((h) => h.textContent ?? "");
+    expect(openHeads).toContain("Source");
+    expect(openHeads.some((h) => h.includes("What this skill touches"))).toBe(true);
+    // …and must never be hidden behind a summary.
+    expect(summaries).not.toContain("Source");
+    expect(summaries.some((s) => s.includes("What this skill touches"))).toBe(false);
+  });
+
+  it("Composes is hidden entirely when the skill composes nothing", async () => {
+    const fixture = await loadSpa(nonComposingDetail);
+    await fixture.triggerRefresh();
+    await fixture.navigateTo("#skill/flow");
+    const html = fixture.document.getElementById("main")!.innerHTML;
+    // No "Composes" heading/summary and no empty-state placeholder for it.
+    expect(html).not.toContain("Composes");
+    expect(html).not.toContain("doesn't compose other skills");
+  });
+});

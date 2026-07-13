@@ -488,8 +488,8 @@ async function renderSkillDetail(name) {
 
       ${renderComposesSection(name, source)}
 
-      <section>
-        <h2>Triggers (${triggersForSkill.length})</h2>
+      <details class="section collapsible">
+        <summary>Triggers (${triggersForSkill.length})</summary>
         ${triggersForSkill.length === 0
           ? `<div class="empty">No triggers registered for this skill.</div>`
           : `<table>
@@ -504,10 +504,10 @@ async function renderSkillDetail(name) {
                 `).join("")}
               </tbody>
             </table>`}
-      </section>
+      </details>
 
-      <section>
-        <h2>Metrics (24h)</h2>
+      <details class="section collapsible">
+        <summary>Metrics (24h)</summary>
         ${metrics
           ? `<dl class="kv">
               <dt>Fires</dt><dd>${metrics.fireCount}</dd>
@@ -516,10 +516,10 @@ async function renderSkillDetail(name) {
               <dt>Success rate</dt><dd>${(metrics.successRate * 100).toFixed(1)}%</dd>
             </dl>`
           : `<div class="empty">No traces recorded in window.</div>`}
-      </section>
+      </details>
 
-      <section>
-        <h2>Recent fires (${recent_fires.length})</h2>
+      <details class="section collapsible">
+        <summary>Recent fires (${recent_fires.length})</summary>
         ${recent_fires.length === 0
           ? `<div class="empty">No fires recorded.</div>`
           : recent_fires.map((fire) => {
@@ -544,10 +544,10 @@ async function renderSkillDetail(name) {
                 </div>
               `;
             }).join("")}
-      </section>
+      </details>
 
-      <section>
-        <h2>Version history (${versions.length})</h2>
+      <details class="section collapsible">
+        <summary>Version history (${versions.length})</summary>
         <table>
           <thead><tr><th>Version</th><th>Status</th><th>Changed at</th></tr></thead>
           <tbody>
@@ -560,7 +560,7 @@ async function renderSkillDetail(name) {
             `).join("")}
           </tbody>
         </table>
-      </section>
+      </details>
     `;
   } catch (err) {
     return `<h2>Skill: ${esc(name)}</h2><section><div class="empty">Failed to load: ${esc(err.message)}</div></section>`;
@@ -1056,8 +1056,12 @@ function extractCompositionRefs(source) {
 
 function renderComposesSection(currentName, source) {
   const refs = extractCompositionRefs(source);
+  // Conditional decision-surface section: a composed child is part of the blast
+  // radius, so when present it renders as an open section. When the skill
+  // composes nothing there's nothing approval-relevant to show — hide it
+  // entirely rather than spend a section on an empty state.
   if (refs.length === 0) {
-    return `<section><h2>Composes</h2><div class="empty">This skill doesn't compose other skills (no <code>execute_skill</code> or <code>inline</code> refs).</div></section>`;
+    return "";
   }
   return `
     <section>
