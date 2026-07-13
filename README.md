@@ -102,7 +102,7 @@ The runtime will refuse the shell command and file write until the operator allo
 
 ## How it works
 
-1. **Author:** An MCP-connected agent discovers the available tools, writes a skill, and lints it. It arrives as `Draft`.
+1. **Author:** An MCP-connected agent discovers the available tools, writes a skill, and lints it. In secured mode it arrives as `Draft`, inert until you approve it.
 2. **Review:** A human inspects and approves the skill. In secured mode, approval signs the approved content with an operator-held key.
 3. **Run:** The skill executes from the CLI, MCP, cron, an HTTP event, or another skill.
 4. **Observe:** The runtime records traces, outputs, failures, and blocked operations.
@@ -146,7 +146,7 @@ Use `--host 0.0.0.0` only when another container or machine must reach the runti
 
 > Author a skill that greets someone by name.
 
-The agent writes a draft through MCP. Approve it in the dashboard or CLI:
+The agent writes the skill through MCP. Approve it in the dashboard or CLI:
 
 ```bash
 skillfile approve hello
