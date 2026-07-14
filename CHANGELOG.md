@@ -2,6 +2,16 @@
 
 Each release carries an **Upgrade impact:** line (first in its section) so a bump's requirements are visible at a glance. Tags (closed set): **BREAKING** (a manual change is needed to keep working) · **RE-APPROVE** (secured-mode signature invalidation — skills must be re-approved before they run) · **CONFIG** (`connectors.json` / config edit needed) · **none (additive)** (no action; backward-compatible). Standard from 0.20.0 forward; the pre-0.20 transitions that need action are flagged inline below (0.14.0, 0.18.8, 0.19.0). Full walkthrough: [UPGRADING.md](UPGRADING.md).
 
+## 0.32.0 — 2026-07-14 — risk-legible "what it does" diagram
+
+**Upgrade impact:** none (additive). Dashboard rendering only; no runtime or API change.
+
+Sharpens the "What it does, step by step" diagram so a non-programmer approver can see a skill's blast radius at a glance — the acceptance bar being "could they, from the diagram alone, correctly say what it touches and what it changes?" (if not, approval is rubber-stamping).
+
+- **Risk-first weighting.** Steps are now rendered by effect tier so the eye lands on what matters: **mutations** (`data_write` / `file_write` / `skill_write` / `notify`) get a colored highlight band + bold; **shell** (runs a command) gets a band + bold; **external effects** (data/file reads, model calls, connector dispatch, `execute_skill`) sit at normal weight; **plumbing** (`$set` / `emit` / `json_parse` — internal var-shuffling with no external effect) is recessed (muted + smaller). Previously every step had equal weight, so the one mutation could hide among a stack of `Set X` steps.
+- **Plain-language branch conditions.** Conditions are humanized instead of showing raw skillscript: `${UNITS} == "metric"` → "If UNITS is metric", `${RAW|contains:"current_condition"}` → "If RAW contains current_condition", `not …|contains:"github.com"` → "… does not contain github.com".
+- **Truncated rows are recoverable.** A row cut with `…` now carries a hover tooltip with the full text (and the `→ VAR` it produces), so the approval-relevant tail isn't lost.
+
 ## 0.31.1 — 2026-07-14 — descriptions show on custom SkillStores
 
 **Upgrade impact:** none (additive). A robustness fix + doc clarification; no breaking change.

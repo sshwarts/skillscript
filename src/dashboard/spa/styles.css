@@ -311,7 +311,13 @@ pre.skill-source { white-space: pre-wrap; word-break: break-word; }
 .flow-row { fill: var(--text); font-size: 12.5px; }
 .flow-row-branch { fill: var(--text-dim); font-style: italic; }
 .flow-produces { fill: #2a9d8f; font-family: ui-monospace, SFMono-Regular, monospace; font-size: 11px; }
-.flow-dot-mutation, .flow-dot-shell { fill: #e8590c; font-size: 12px; }
+/* Risk-first weighting — mutations & shell pop (bold + colored band); external
+ * effects sit at normal weight; plumbing ($set / parse / emit) is recessed so
+ * the eye lands on the blast radius, not the var-shuffling. */
+.flow-row-mutation, .flow-row-shell { font-weight: 700; }
+.flow-row-plumbing { fill: var(--text-muted); font-size: 11.5px; }
+.flow-band-mutation { fill: rgba(233, 100, 40, 0.22); }
+.flow-band-shell { fill: rgba(233, 100, 40, 0.14); }
 .flow-arrow { stroke: var(--border-strong); stroke-width: 1.5; }
 .flow-arrowhead-path { fill: var(--border-strong); }
 .flow-row-link { cursor: pointer; }

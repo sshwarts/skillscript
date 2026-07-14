@@ -829,25 +829,32 @@ function flowSvg(flow) {
       ${tip}<rect x="${p.x}" y="${p.y}" width="${BOX_W}" height="${b.h}" rx="8"/>
       <line class="flow-box-rule" x1="${p.x}" y1="${p.y + TITLE_H}" x2="${p.x + BOX_W}" y2="${p.y + TITLE_H}"/>
       <text class="flow-box-title" x="${p.x + 12}" y="${p.y + 20}">${esc(lane.id)}${badge}</text>`;
-    (b.rows.length ? b.rows : [{ label: "Nothing to do.", tone: "normal", depth: 0 }]).forEach((r, ri) => {
+    (b.rows.length ? b.rows : [{ label: "Nothing to do.", tone: "plumbing", depth: 0 }]).forEach((r, ri) => {
       const rowY = p.y + TITLE_H + ri * ROW_H + 16;
-      const dot = (r.tone === "mutation" || r.tone === "shell")
-        ? `<tspan class="flow-dot flow-dot-${r.tone}">● </tspan>` : "";
       const rowX = p.x + 14 + r.depth * INDENT;
       const producesTxt = r.produces ? ` → ${r.produces}` : "";
-      // Budget the main text in PIXELS, reserving room for the ● marker and the
-      // monospace "→ VAR" so nothing overruns the box's right border. CHAR_W is
-      // deliberately generous (chars render narrower) so we under-fill rather
-      // than let the border bisect the text.
-      const reservedPx = 18 + (dot ? 13 : 0) + producesTxt.length * 6.8;
+      // Budget the main text in PIXELS, reserving room for the monospace "→ VAR"
+      // so nothing overruns the box's right border. CHAR_W is deliberately
+      // generous (chars render narrower) so we under-fill.
+      const reservedPx = 18 + producesTxt.length * 6.8;
       const budget = Math.max(6, Math.floor((BOX_W - (rowX - p.x) - reservedPx) / CHAR_W));
-      const text = truncate(r.label + (r.detail ? " — " + r.detail : ""), budget);
-      const cls = "flow-row" + (r.isBranch ? " flow-row-branch" : "");
+      const fullText = r.label + (r.detail ? " — " + r.detail : "");
+      const text = truncate(fullText, budget);
+      // Risk-first weighting (approval legibility): mutations / shell get a
+      // colored band + bold so the blast radius is where the eye lands; plumbing
+      // ($set / emit / parse) is recessed; external effects (reads, model,
+      // connector) sit at normal weight in between.
+      const band = (r.tone === "mutation" || r.tone === "shell")
+        ? `<rect class="flow-band flow-band-${r.tone}" x="${p.x + 6}" y="${rowY - 12}" width="${BOX_W - 12}" height="18" rx="3"/>` : "";
+      const cls = "flow-row flow-row-" + r.tone + (r.isBranch ? " flow-row-branch" : "");
       const produces = r.produces ? `<tspan class="flow-produces">${esc(producesTxt)}</tspan>` : "";
-      const rowSvg = `<text class="${cls}" x="${rowX}" y="${rowY}">${dot}${esc(text)}${produces}</text>`;
-      g += r.ref && r.ref.skill
-        ? `<a href="#skill/${encodeURIComponent(r.ref.skill)}" class="flow-row-link">${rowSvg}</a>`
-        : rowSvg;
+      // Full text on hover whenever we truncated — the tail is often the
+      // approval-relevant part (exactly what it writes / the full condition).
+      const tip = text !== fullText ? `<title>${esc(fullText)}${esc(producesTxt)}</title>` : "";
+      const rowText = `<text class="${cls}" x="${rowX}" y="${rowY}">${tip}${esc(text)}${produces}</text>`;
+      g += band + (r.ref && r.ref.skill
+        ? `<a href="#skill/${encodeURIComponent(r.ref.skill)}" class="flow-row-link">${rowText}</a>`
+        : rowText);
     });
     return g + `</g>`;
   });

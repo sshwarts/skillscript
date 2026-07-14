@@ -157,9 +157,32 @@ default: run
     expect(loop.children?.[0].tone).toBe("mutation");
 
     const branch = steps.find((s) => Array.isArray(s.branches))!;
-    expect(branch.branches?.[0].label).toMatch(/^If/);
+    // Condition humanized: `$(MODE) == "go"` → readable plain language.
+    expect(branch.branches?.[0].label).toBe("If MODE is go");
     expect(branch.branches?.[branch.branches.length - 1].label).toBe("Otherwise");
     expect(branch.branches?.[0].steps[0].label).toBe("Produce output");
+    // Risk tiers: a data_write is a mutation; emit is recessed plumbing.
+    expect(loop.children?.[0].tone).toBe("mutation");
+    expect(branch.branches?.[0].steps[0].tone).toBe("plumbing");
+  });
+
+  it("humanizes branch conditions and classifies steps by effect tier", () => {
+    const flow = buildSkillFlow(parse(`# Skill: tiers
+# Status: Approved
+run:
+    $ data_read query="x" -> R
+    if \${R|contains:"github.com"}:
+        $ data_write content="y"
+    else:
+        emit(text="skip")
+default: run
+`));
+    const steps = flow.lanes[0].steps;
+    expect(steps[0].tone).toBe("external"); // data_read = reaches out
+    const branch = steps.find((s) => Array.isArray(s.branches))!;
+    // `${R|contains:"github.com"}` → plain language (no raw ${…|…} syntax).
+    expect(branch.branches?.[0].label).toBe("If R contains github.com");
+    expect(branch.branches?.[0].steps[0].tone).toBe("mutation"); // data_write = blast radius
   });
 
   it("body-only skill → no lanes; big skills truncate + flag", () => {

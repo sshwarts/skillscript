@@ -517,8 +517,9 @@ describe("control-flow walkthrough — plain-language flow in the review view", 
     const flow = {
       lanes: [
         { id: "fetch", isEntry: false, deps: [], steps: [
-          { label: "Read from the data store", detail: "recent activity", tone: "normal" },
-          { label: "Run the greeting-helper skill", tone: "normal", ref: { skill: "greeting-helper" } },
+          { label: "Read from the data store", detail: "recent activity", tone: "external" },
+          { label: "Run the greeting-helper skill", tone: "external", ref: { skill: "greeting-helper" } },
+          { label: "Set a value", tone: "plumbing" },
         ] },
         { id: "publish", isEntry: true, deps: ["fetch"], steps: [{ label: "Write to the data store", tone: "mutation" }] },
       ],
@@ -540,9 +541,12 @@ describe("control-flow walkthrough — plain-language flow in the review view", 
     expect(html).toContain("flow-box");
     expect(html).toContain("flow-box-entry");
     expect(html).toContain("result");
-    // Dependencies are shown as real arrows; mutation steps get the ● marker.
+    // Dependencies are shown as real arrows. Risk-first weighting: the mutation
+    // gets a highlight band + bold, plumbing is recessed.
     expect(html).toContain("flow-arrow");
-    expect(html).toContain("flow-dot-mutation");
+    expect(html).toContain("flow-band-mutation");
+    expect(html).toContain("flow-row-mutation");
+    expect(html).toContain("flow-row-plumbing");
     // A composed-skill step names it and links through to its review view.
     expect(html).toContain("Run the greeting-helper skill");
     expect(html).toContain('href="#skill/greeting-helper"');

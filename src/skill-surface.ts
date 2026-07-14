@@ -132,7 +132,11 @@ export function extractEffectfulFootprint(parsed: ParsedSkill): EffectfulFootpri
 export interface FlowStep {
   label: string;
   detail?: string;
-  tone: "normal" | "mutation" | "shell";
+  /** Effect tier, for risk-first visual weighting: `mutation` (writes to the
+   * operator's systems — the blast radius), `shell` (runs a command), `external`
+   * (reaches out / reads — connectors, model, data/file reads), `plumbing`
+   * (internal var-shuffling with no external effect — recessed). */
+  tone: "mutation" | "shell" | "external" | "plumbing";
   /** The variable this step saves its result into (`-> VAR`), if any — lets a
    * reader trace where a value is produced vs. where it's consumed. */
   produces?: string;
@@ -162,13 +166,13 @@ const MAX_FLOW_LANES = 40;
 
 /** Built-in `$` ops → plain language. Unlisted builtins fall back to their name. */
 const BUILTIN_STEP: Record<string, { label: string; tone: FlowStep["tone"] }> = {
-  data_read: { label: "Read from the data store", tone: "normal" },
+  data_read: { label: "Read from the data store", tone: "external" },
   data_write: { label: "Write to the data store", tone: "mutation" },
-  llm: { label: "Ask the local model", tone: "normal" },
-  json_parse: { label: "Parse JSON", tone: "normal" },
-  execute_skill: { label: "Run another skill", tone: "normal" },
-  skill_read: { label: "Read a skill", tone: "normal" },
-  skill_list: { label: "List skills", tone: "normal" },
+  llm: { label: "Ask the local model", tone: "external" },
+  json_parse: { label: "Parse JSON", tone: "plumbing" },
+  execute_skill: { label: "Run another skill", tone: "external" },
+  skill_read: { label: "Read a skill", tone: "external" },
+  skill_list: { label: "List skills", tone: "external" },
   skill_write: { label: "Write a skill", tone: "mutation" },
 };
 
@@ -229,21 +233,37 @@ function describeStep(op: SkillOp): FlowStep {
   return step;
 }
 
+/** Best-effort plain-language rewrite of a branch condition, so a non-coder can
+ * read it: strip `${…}`, turn `|contains:"x"` into "contains x", operators into
+ * words. Heuristic — not a full expression parser — but it clears the raw
+ * skillscript syntax that otherwise breaks the plain-language promise mid-diagram. */
+function humanizeCondition(cond: string): string {
+  let c = cond.trim();
+  c = c.replace(/\bnot\s+\$\{([^}|]+)\|contains:\s*("[^"]*"|'[^']*')\}/g, (_m, v, x) => `${v.trim()} does not contain ${x.slice(1, -1)}`);
+  c = c.replace(/\$\{([^}|]+)\|contains:\s*("[^"]*"|'[^']*')\}/g, (_m, v, x) => `${v.trim()} contains ${x.slice(1, -1)}`);
+  c = c.replace(/\$\{([^}|]+)\|[^}]*\}/g, (_m, v) => v.trim()); // drop other filters
+  c = c.replace(/\$\{([^}]+)\}/g, (_m, v) => v.trim());          // ${VAR} -> VAR
+  c = c.replace(/\$\(([^)]+)\)/g, (_m, v) => v.trim());          // $(VAR) -> VAR (legacy)
+  c = c.replace(/\s*==\s*/g, " is ").replace(/\s*!=\s*/g, " is not ");
+  c = c.replace(/\s*&&\s*/g, " and ").replace(/\s*\|\|\s*/g, " or ");
+  return c.replace(/"/g, "").trim();
+}
+
 function describeStepBody(op: SkillOp): FlowStep {
   switch (op.kind) {
     case "foreach":
       return {
         label: `For each ${op.foreachIter ?? "item"} in ${op.foreachList ?? "the list"}`,
-        tone: "normal",
+        tone: "plumbing",
         children: (op.foreachBody ?? []).map(describeStep),
       };
     case "if": {
       const branches = (op.ifBranches ?? []).map((b, i) => ({
-        label: `${i === 0 ? "If" : "Otherwise, if"} ${clip(b.cond, 60)}`,
+        label: `${i === 0 ? "If" : "Otherwise, if"} ${humanizeCondition(b.cond)}`,
         steps: b.body.map(describeStep),
       }));
       if (op.ifElseBody) branches.push({ label: "Otherwise", steps: op.ifElseBody.map(describeStep) });
-      return { label: "Depending on the result", tone: "normal", branches };
+      return { label: "Depending on the result", tone: "plumbing", branches };
     }
     case "shell": {
       const { binary, snippet } = shellCommand(op);
@@ -253,46 +273,46 @@ function describeStepBody(op: SkillOp): FlowStep {
       return { label: binary ? `Run ${binary}` : "Run a shell command", detail: clip(snippet, 70), tone: "shell" };
     }
     case "file_read":
-      return { label: "Read a file", detail: clip(op.fileParams?.path, 60), tone: "normal" };
+      return { label: "Read a file", detail: clip(op.fileParams?.path, 60), tone: "external" };
     case "file_write":
       return { label: "Write a file", detail: clip(op.fileParams?.path, 60), tone: "mutation" };
     case "notify":
       return { label: "Send a notification", tone: "mutation" };
     case "emit":
-      return { label: "Produce output", tone: "normal" };
+      return { label: "Produce output", tone: "plumbing" };
     case "inline": {
       const name = op.ampParams?.skillName;
-      const step: FlowStep = { label: name ? `Include the ${name} skill` : "Include a skill", tone: "normal" };
+      const step: FlowStep = { label: name ? `Include the ${name} skill` : "Include a skill", tone: "external" };
       if (name) step.ref = { skill: name };
       return step;
     }
     case "$set":
-      return { label: `Set ${op.setName ?? "a value"}`, detail: literalSetValue(op.setValue), tone: "normal" };
+      return { label: `Set ${op.setName ?? "a value"}`, detail: literalSetValue(op.setValue), tone: "plumbing" };
     case "$append":
-      return { label: `Add to ${op.setName ?? "a value"}`, detail: literalSetValue(op.setValue), tone: "normal" };
+      return { label: `Add to ${op.setName ?? "a value"}`, detail: literalSetValue(op.setValue), tone: "plumbing" };
     case "?":
-      return { label: "Check a condition", tone: "normal" };
+      return { label: "Check a condition", tone: "plumbing" };
     case "$": {
       const tool = firstToken(op.body);
       // A composed skill: name it, and carry a ref so the UI can link through.
       if (op.mcpConnector === undefined && tool === "execute_skill") {
         const child = argValue(op.body, "skill_name") ?? argValue(op.body, "skill");
-        const step: FlowStep = { label: child ? `Run the ${child} skill` : "Run another skill", tone: "normal" };
+        const step: FlowStep = { label: child ? `Run the ${child} skill` : "Run another skill", tone: "external" };
         if (child) step.ref = { skill: child };
         return step;
       }
       const detail = clip(primaryArg(op.body), 60);
       if (op.mcpConnector !== undefined) {
-        return { label: humanizeToolName(tool), detail: detail ?? `via ${op.mcpConnector}`, tone: "normal" };
+        return { label: humanizeToolName(tool), detail: detail ?? `via ${op.mcpConnector}`, tone: "external" };
       }
       const known = BUILTIN_STEP[tool];
       if (known !== undefined) {
         return { label: known.label, detail, tone: known.tone };
       }
-      return { label: tool === "" ? "Run an operation" : humanizeToolName(tool), detail, tone: "normal" };
+      return { label: tool === "" ? "Run an operation" : humanizeToolName(tool), detail, tone: "external" };
     }
     default:
-      return { label: String(op.kind), tone: "normal" };
+      return { label: String(op.kind), tone: "plumbing" };
   }
 }
 
