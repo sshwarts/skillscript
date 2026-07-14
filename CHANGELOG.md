@@ -2,6 +2,13 @@
 
 Each release carries an **Upgrade impact:** line (first in its section) so a bump's requirements are visible at a glance. Tags (closed set): **BREAKING** (a manual change is needed to keep working) · **RE-APPROVE** (secured-mode signature invalidation — skills must be re-approved before they run) · **CONFIG** (`connectors.json` / config edit needed) · **none (additive)** (no action; backward-compatible). Standard from 0.20.0 forward; the pre-0.20 transitions that need action are flagged inline below (0.14.0, 0.18.8, 0.19.0). Full walkthrough: [UPGRADING.md](UPGRADING.md).
 
+## 0.31.1 — 2026-07-14 — descriptions show on custom SkillStores
+
+**Upgrade impact:** none (additive). A robustness fix + doc clarification; no breaking change.
+
+- **Fix: skill descriptions no longer go blank on a custom SkillStore.** The bundled stores extract `# Description:` from the body and populate `SkillMeta.description`; a custom store that doesn't (e.g. an AMP-backed connector) left the dashboard showing a blank description in the drill-down and the wrong first-prose line (the output template) in the list. The runtime now **derives `description` from the skill's frontmatter itself** — it already has the source — whenever a store returns none. Applied in both `skill_preflight` (detail) and `buildSkillCatalog` / `skill_list` (list): description precedence is store-metadata → parsed `# Description:` → first-prose heuristic. Any custom SkillStore now shows correct descriptions without having to replicate the extraction.
+- **Docs: the SkillStore contract now spells out which `SkillMeta` fields are runtime-derivable.** `connector-contract-reference.md` gains a convention note — body-projection metadata (`description`, `vars`) the runtime derives; substrate-only metadata (`author`, `version`, timestamps, status) your impl must return. Previously only `author` was documented, so the `description` expectation was implicit — the gap that let a connector miss it.
+
 ## 0.31.0 — 2026-07-13 — dashboard approval UX for the non-programmer approver
 
 **Upgrade impact:** none (additive). Dashboard + one additive `skill_preflight` field; no breaking change.

@@ -24,8 +24,8 @@ const REPO_ROOT = join(__dirname, "..");
 const PACKAGE_JSON = JSON.parse(readFileSync(join(REPO_ROOT, "package.json"), "utf8")) as Record<string, unknown>;
 
 describe("T7 — package.json polish", () => {
-  it("1. version is 0.31.0 (dashboard approval-UX arc for the non-programmer approver: dark mode + collapsible review sections + an SVG 'what it does' step-flowchart from skill_preflight's contract.flow, plus a poll scroll-preservation fix)", () => {
-    expect(PACKAGE_JSON["version"]).toBe("0.31.0");
+  it("1. version is 0.31.1 (SkillMeta.description is now runtime-derived from the # Description: frontmatter when a SkillStore omits it — fixes blank/wrong descriptions on custom stores e.g. an AMP-backed connector, in both skill_preflight and skill_list)", () => {
+    expect(PACKAGE_JSON["version"]).toBe("0.31.1");
   });
 
   it("2. main + types + bin + engines.node ≥ 22.5 declared", () => {

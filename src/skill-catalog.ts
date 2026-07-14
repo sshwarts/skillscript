@@ -97,7 +97,11 @@ export async function buildSkillCatalog(
       continue;
     }
 
-    const entry = buildEntry(meta.name, meta.description ?? extractFirstProse(source), meta.status, parsed, meta.author);
+    // Description precedence: what the store populated → the parsed `# Description:`
+    // frontmatter (the runtime already has it, so any SkillStore that doesn't
+    // surface description — e.g. a custom AMP-backed store — still shows the real
+    // one) → the first-prose heuristic as a last resort.
+    const entry = buildEntry(meta.name, meta.description ?? parsed.description ?? extractFirstProse(source), meta.status, parsed, meta.author);
     // v0.20.1 — approval-gate result (source already in hand, so this is free).
     entry.gate_ok = evaluateApprovalGate(source).ok;
 

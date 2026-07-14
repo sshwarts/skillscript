@@ -328,3 +328,26 @@ describe("v0.9.8 — Q2 footnote: invocation is independent of grouping", () => 
     }
   });
 });
+
+describe("description fallback — custom-store parity (v0.31.1)", () => {
+  // A SkillStore that, like a custom AMP-backed store, does NOT surface a
+  // description in its metadata. The runtime already has the source, so the
+  // catalog must derive the real `# Description:` from it rather than falling
+  // through to the first-prose heuristic (which would grab the output template).
+  const mockStore = (name: string, source: string) => ({
+    async query() { return [{ name, status: "Approved" }]; },
+    async load() { return { source }; },
+  }) as unknown as FilesystemSkillStore;
+
+  it("uses the parsed `# Description:` when the store's metadata omits it", async () => {
+    const source = "# Skill: weatherish\n# Status: Approved\n# Description: Fetch the weather and summarize it\n\n${SUMMARY} today.\n\nt:\n    emit(text=\"hi\")\ndefault: t\n";
+    const catalog = await buildSkillCatalog(mockStore("weatherish", source));
+    expect(catalog.skills?.[0]?.description).toBe("Fetch the weather and summarize it");
+  });
+
+  it("still falls back to first-prose only when there is no `# Description:` at all", async () => {
+    const source = "# Skill: bare\n# Status: Approved\n\nThe summary line.\n\nt:\n    emit(text=\"hi\")\ndefault: t\n";
+    const catalog = await buildSkillCatalog(mockStore("bare", source));
+    expect(catalog.skills?.[0]?.description).toBe("The summary line.");
+  });
+});

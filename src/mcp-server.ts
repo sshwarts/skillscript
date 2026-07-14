@@ -430,6 +430,17 @@ export class McpServer {
           const g = evaluateApprovalGate(loaded.source);
           approval = g.ok ? { gate_ok: true } : { gate_ok: false, reason: g.reason };
           const parsed = parseSkill(loaded.source);
+          // Backfill the description from the parsed `# Description:` frontmatter
+          // when the SkillStore didn't surface one (e.g. a custom AMP-backed
+          // store). The runtime already has the source, so every store shows the
+          // real description without each impl having to replicate the extraction.
+          if (
+            metadata !== null && metadata !== undefined &&
+            (metadata.description === undefined || metadata.description === null || metadata.description === "") &&
+            parsed.description !== null
+          ) {
+            metadata.description = parsed.description;
+          }
           contract = {
             vars: parsed.vars.map((v) => v.name),
             returns: parsed.returns,
