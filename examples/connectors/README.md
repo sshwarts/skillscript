@@ -9,12 +9,12 @@ Worked examples + fork-me templates for adopter-written connectors. The bundled 
 | `SkillStore` | `FilesystemSkillStore`, `SqliteSkillStore` (in `src/connectors/`) | — | **[SkillStoreTemplate/](./SkillStoreTemplate/)** |
 | `DataStore` | `SqliteDataStore` (in `src/connectors/`) | — | **[DataStoreTemplate/](./DataStoreTemplate/)** |
 | `LocalModel` | `OllamaLocalModel` (in `src/connectors/`; opt-in via substrate config) | — | **[LocalModelTemplate/](./LocalModelTemplate/)** |
-| `McpConnector` | `RemoteMcpConnector`, `CallbackMcpConnector`, `LocalModelMcpConnector`, `DataStoreMcpConnector`, `SkillStoreMcpConnector` (in `src/connectors/`) | — | **[McpConnectorTemplate/](./McpConnectorTemplate/)** |
+| `McpConnector` | `HttpMcpConnector`, `RemoteMcpConnector`, `CallbackMcpConnector`, `LocalModelMcpConnector`, `DataStoreMcpConnector`, `SkillStoreMcpConnector` (in `src/connectors/`) | **[RestConnector/](./RestConnector/)** | **[McpConnectorTemplate/](./McpConnectorTemplate/)** |
 | `AgentConnector` | `NoOpAgentConnector` (in `src/connectors/`) | **[HttpWebhookAgentConnector/](./HttpWebhookAgentConnector/)** | — |
 
 **Bundled defaults** are runnable out of the box — wired through `connectors.json` substrate config or programmatic bootstrap.
 
-**Worked examples** are real implementations for substrates that aren't bundled — copy + customize for your specific deployment. HttpWebhookAgentConnector demonstrates the AgentConnector contract against a generic HTTP-webhook substrate.
+**Worked examples** are real implementations for substrates that aren't bundled — copy + customize for your specific deployment. HttpWebhookAgentConnector demonstrates the AgentConnector contract against a generic HTTP-webhook substrate. RestConnector demonstrates that the McpConnector contract is wire-protocol-agnostic — it fronts a plain REST/HTTP API (no MCP wire protocol), and coexists in the same registry with actual MCP connectors.
 
 **Fork templates** are skeletons (every method throws TODO). Useful when you want the bare contract surface without any specific substrate assumptions. SkillStoreTemplate is the starting point for Postgres-, MongoDB-, AMP-, or vector-DB-backed SkillStore impls.
 

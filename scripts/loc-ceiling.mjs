@@ -259,7 +259,12 @@ const CORE_PATHS = [
 // v0.26.4: nudged 12200 → 12300 for the `append-structured-to-string` tier-3
 // lint advisory (Perry `c052581b`) — a self-contained rule that reuses the
 // existing origin/static-init plumbing. Clear code; signal-not-budget.
-const NARROW_MAX_LOC = 12300;
+// v0.34.0: nudged 12300 → 12400 for the shell-child `SKILLSCRIPT_SECRET_*` env
+// scrub (Scott ruled scrub-not-document; Perry signoff `0ab37427`) — the
+// `scrubbedShellEnv` helper + its security-rationale doc-comment on the single
+// shell spawn. Most of the growth is the load-bearing rationale comment (why
+// secret vars are scrubbed but egress vars preserved). Signal-not-budget.
+const NARROW_MAX_LOC = 12400;
 const NARROW_MAX_FILES = 23;
 const BROAD_INFO_LOC = 9500;
 const BROAD_INFO_FILES = 28;

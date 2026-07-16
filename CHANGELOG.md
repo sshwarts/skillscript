@@ -2,6 +2,19 @@
 
 Each release carries an **Upgrade impact:** line (first in its section) so a bump's requirements are visible at a glance. Tags (closed set): **BREAKING** (a manual change is needed to keep working) · **RE-APPROVE** (secured-mode signature invalidation — skills must be re-approved before they run) · **CONFIG** (`connectors.json` / config edit needed) · **none (additive)** (no action; backward-compatible). Standard from 0.20.0 forward; the pre-0.20 transitions that need action are flagged inline below (0.14.0, 0.18.8, 0.19.0). Full walkthrough: [UPGRADING.md](UPGRADING.md).
 
+## 0.34.0 — 2026-07-16 — REST-backed connectors + shell secret-env scrub
+
+**Upgrade impact:** none (additive) — with one **security tightening** noted below. A `shell(...)` op no longer leaks `SKILLSCRIPT_SECRET_*` vars into its child process. No *supported* usage relied on that (a secret reaches a sink via the `{{secret.NAME}}` marker, never ambient env); the only thing affected is a skill that read an **undeclared** secret straight out of a shell child's environment — which must now declare it (`# Requires:`) and place a `{{secret.NAME}}` marker.
+
+Two threads land together: making it obvious that a plain REST/HTTP backend is a first-class connector (no MCP server required), and closing an ambient-secret exposure on the shell path.
+
+- **`RestConnector` worked example (`examples/connectors/RestConnector/`).** A complete, runnable `class RestConnector implements McpConnector` — not a throws-`TODO` skeleton — fronting a plain REST API: an `ENDPOINTS` table maps each tool to method + path, `call()` does path-templating + query-vs-body routing + auth-header injection + timeout, `staticTools()` gives lint a closed tool set, `describeTools()` surfaces the endpoints. Proves the **`McpConnector` contract is wire-protocol-agnostic** — "MCP" names the `$ connector.tool` dispatch verb, not a wire requirement (MCP JSON-RPC framing is `HttpMcpConnector`'s impl detail). MCP and REST connectors coexist in one registry; a skill body can mix `$ gmail.send` (MCP) and `$ tickets.create` (REST).
+- **`connector-contract-reference.md`: new McpConnector section.** The doc previously fully specced only `AgentConnector`; now covers the two-method `McpConnector` contract, the wire-agnostic point, heterogeneous coexistence, and identity-propagation opt-in. Points at the example.
+- **`McpToolDescriptor` re-exported** from `skillscript-runtime/connectors` — an adopter writing `describeTools()` needs the named type; was deep-`src/`-import-only.
+- **Security: `shell(...)` children spawn with `SKILLSCRIPT_SECRET_*` scrubbed** (both structured `command=`/`argv=` and the `unsafe=true` bash path). The runtime resolves `{{secret.NAME}}` and splices the value into the spawn argv at the sink, so a shell child never needs the raw secret in ambient env — scrubbing it makes `# Requires:` least-privilege *authoritative* rather than advisory. Egress vars (`HTTPS_PROXY`, `NODE_EXTRA_CA_CERTS`, `CURL_CA_BUNDLE`, `SSL_CERT_FILE`) are preserved, so the outbound-proxy egress pattern is unaffected.
+- **`adopter-playbook.md`: credential-free egress subsection** — the outbound-proxy deployment pattern (gateway injects auth; no token in the runtime), documenting the selective scrub.
+- **`language-reference.md` re-rendered from atoms** — the "Two execution paths" section reframed onto *who executes the ops* (runtime vs agent) not who invokes, with a which-call-gets-which-path table; the Connectors section gains the wire-agnostic "non-MCP connector" guidance; the `# Tags:` frontmatter section folded in.
+
 ## 0.33.0 — 2026-07-16 — `# Tags:` skill classification
 
 **Upgrade impact:** none (additive). New optional frontmatter field + one additive `SkillMeta`/`skill_list` field; no breaking change.

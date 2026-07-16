@@ -34,7 +34,7 @@ import {
 import { TraceBuilder, shouldTraceFire } from "./trace.js";
 import type { TraceConfig, TraceStore } from "./trace.js";
 import { describeValueShape, isShapeWorthRecording } from "./observed-shape.js";
-import { maskAuthorSecrets, spliceSecrets, unmaskSecretSentinels } from "./secrets.js";
+import { maskAuthorSecrets, spliceSecrets, unmaskSecretSentinels, EnvSecretProvider } from "./secrets.js";
 import type { SecretProvider, MaskedSecrets } from "./secrets.js";
 
 /**
@@ -1862,13 +1862,39 @@ function tokenizeShellArgs(body: string): string[] {
 }
 
 /**
+ * The child env for a `shell(...)` op: the runtime's `process.env` MINUS every
+ * `SKILLSCRIPT_SECRET_*` var. The runtime resolves `{{secret.NAME}}` itself and
+ * splices the value into the spawn argv at the sink (mask → substitute →
+ * splice), so a shell child NEVER legitimately needs the raw secret vars in its
+ * ambient env — the only thing that would read them there is an *undeclared*
+ * ambient read, the exact anti-pattern `# Requires` exists to gate. Scrubbing
+ * the prefix makes `# Requires` least-privilege AUTHORITATIVE rather than
+ * advisory. The scrub is secret-vars-only: egress vars (`HTTPS_PROXY`,
+ * `NODE_EXTRA_CA_CERTS`, `CURL_CA_BUNDLE`, `SSL_CERT_FILE`, …) do not carry the
+ * prefix, so they still inherit and the outbound-proxy egress pattern is
+ * unaffected. Scoped by `EnvSecretProvider.PREFIX` so scrub + resolution share
+ * one source of truth. (Scott ruled scrub-not-document; Perry signoff 0ab37427.)
+ */
+function scrubbedShellEnv(): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = {};
+  for (const key of Object.keys(process.env)) {
+    if (key.startsWith(EnvSecretProvider.PREFIX)) continue;
+    env[key] = process.env[key];
+  }
+  return env;
+}
+
+/**
  * Spawn a child process and capture stdout. SIGKILL on timeout via the
  * process group (kills child + descendants). Non-zero exit → op-error with
- * stderr preserved per ERD §6 dispatcher routing.
+ * stderr preserved per ERD §6 dispatcher routing. The child env is scrubbed of
+ * `SKILLSCRIPT_SECRET_*` (see {@link scrubbedShellEnv}) — this is the single
+ * spawn both the structured `command=`/`argv=` and the `unsafe=true` (`bash
+ * -c`) paths funnel through, so the scrub covers every shell egress.
  */
 async function execShellCommand(bin: string, args: string[], timeoutMs: number): Promise<string> {
   return new Promise<string>((resolve, reject) => {
-    const child = spawn(bin, args, { stdio: ["ignore", "pipe", "pipe"] });
+    const child = spawn(bin, args, { stdio: ["ignore", "pipe", "pipe"], env: scrubbedShellEnv() });
     let stdout = "";
     let stderr = "";
     let killed = false;

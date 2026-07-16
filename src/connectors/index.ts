@@ -29,6 +29,7 @@ export type {
   McpConnector,
   McpConnectorClass,
   McpDispatchCtx,
+  McpToolDescriptor,
   StaticCapabilities,
   ManifestInfo,
   ConnectorType,

@@ -250,6 +250,44 @@ These are the load-bearing semantic rules. Internalize before implementing.
 
 ---
 
+## McpConnector — the dispatch surface (wire-protocol-agnostic)
+
+`McpConnector` is the contract behind every `$ <connector>.<tool>` op. It is the narrowest of the five contracts — two required methods:
+
+```typescript
+interface McpConnector {
+  call(toolName: string, args: Record<string, unknown>, ctx?: McpDispatchCtx): Promise<unknown>;
+  manifest(): Promise<ManifestInfo>;
+  describeTools?(): Promise<McpToolDescriptor[]>;   // optional — author-time discovery + input lint
+}
+```
+
+**The name does not mean the backend must speak MCP.** "MCP" names the *skill-facing dispatch verb* (`$ connector.tool`), not a wire-protocol requirement. The MCP JSON-RPC framing is `HttpMcpConnector`'s implementation detail because it fronts MCP servers — it is not part of the contract. Any backend satisfies the contract as long as `call()` maps a tool name + args to a result and `manifest()` reports metadata:
+
+| Connector | Backend wire protocol |
+|---|---|
+| `HttpMcpConnector` (bundled) | JSON-RPC-over-HTTP (fronts MCP servers) |
+| `RemoteMcpConnector` (bundled) | stdio-bridged MCP (spawned child process) |
+| `RestConnector` ([worked example](../examples/connectors/RestConnector/)) | plain REST/HTTP — **no MCP wire protocol** |
+| your fork | WebSocket, gRPC, in-process, custom — anything |
+
+To wrap a REST/HTTP backend, you do **not** need an MCP server in front of it. Implement `call()` to issue the HTTP request directly. The [`examples/connectors/RestConnector/`](../examples/connectors/RestConnector/) worked example is a complete, typechecked reference: an `ENDPOINTS` table maps each tool to an HTTP method + path, `call()` templates the path + routes args to query-string or JSON body + injects the auth header, `staticTools()` returns the closed tool set so lint validates `$ name.tool` at authoring time, and `describeTools()` surfaces the endpoints for discovery.
+
+**Heterogeneous connectors coexist.** The registry holds a mixed set keyed by name; each `$ <name>.<tool>` op routes to whichever connector owns that name. A single skill body can freely mix an MCP connector and a REST one — a skill can't tell them apart:
+
+```
+$ gmail.send to="ops@acme.io" subject="Deploy done"    # HttpMcpConnector / RemoteMcpConnector
+-> _
+$ tickets.create title="Deploy 4.2" severity="info"     # RestConnector (plain REST)
+-> ticket
+```
+
+**What the descriptor does *not* carry.** `McpToolDescriptor` is `{ name, description?, inputSchema? }` — there is no `mutating` flag. Read-vs-write intent, when it matters, rides in the description text + the operation semantics, not a connector-descriptor field; a skill's declared effect footprint is the author-side surface for that concern.
+
+**Identity propagation** is opt-in via `staticCapabilities().features.supports_identity_propagation`. When false (the default, and what a plain REST wrapper does), `ctx.agentId` is ignored. Flipping it true is a structural claim that distinct `ctx.agentId` values reach the backend AND yield distinct observable substrate scopes — which obligates the Level 1 / Level 2 conformance probes (see `examples/connectors/McpConnectorTemplate/`).
+
+---
+
 ## Storage-layer conventions (SkillStore + DataStore)
 
 The following conventions live in the bundled reference impls but aren't first-class in the typed contracts. Adopters writing their own SkillStore/DataStore impls need to know about these, or skills/memories misbehave silently.

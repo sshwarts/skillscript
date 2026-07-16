@@ -670,6 +670,17 @@ SKILLSCRIPT_SECRET_AGENTMAIL_KEY=am_live_...
 
 (On the shell path the resolved value is also briefly visible in the host process list via `ps`; a future vault-backed `SecretProvider` closes that with sink-aware injection. The `SecretProvider` seam is already in place — an adopter can supply a vault-backed provider via `bootstrap({ secretProvider })` or `bootstrapFromEnv`'s `overrides` with no skill changes.)
 
+### Credential-free egress — the outbound-proxy pattern
+
+The strongest way to keep a credential out of a skill is to keep it out of the **runtime** entirely: front all outbound traffic with a proxy or gateway that injects auth, and give skillscript no token at all.
+
+- A `shell(...)` op spawns its child with the runtime's process environment, **minus every `SKILLSCRIPT_SECRET_*` var** (those are scrubbed — see below). Everything else the runtime holds — `HTTPS_PROXY`, `NO_PROXY`, a trusted-CA path like `NODE_EXTRA_CA_CERTS`, `CURL_CA_BUNDLE`, `AWS_*` for an IAM-authenticating sidecar — is inherited by `curl` and every other shell child. Set the proxy variables once on the runtime host and every shell egress routes through the gateway automatically.
+- A `$ connector.tool` egress does the same by pointing the connector's `baseUrl` at the gateway. The [`RestConnector` worked example](../examples/connectors/RestConnector/) shows this: leave the auth token unset and target the proxy — the gateway attaches the real credential on the way out.
+
+The gateway holds the credential and injects it per-request; the skill, the transcript, the trace, and the runtime env all stay clean, and rotation happens in one place instead of across every `.env`. This is the deployment-side complement to `{{secret.NAME}}` (which is the right tool when the runtime *must* hold the credential): prefer the proxy when your environment can inject auth at the egress boundary, and reach for a named secret when it can't.
+
+**Secret vars are scrubbed from shell children — the selective part of "no scrubbing."** The egress variables above inherit freely; the `SKILLSCRIPT_SECRET_*` namespace does **not**. The runtime resolves a `{{secret.NAME}}` marker itself and splices the value straight into the spawn argv at the sink, so a shell child never legitimately needs the raw secret var in its ambient env — the only thing that would read it there is an *undeclared* ambient read, the exact pattern `# Requires` exists to gate. Scrubbing the prefix (on both the structured and `unsafe=true` paths) makes `# Requires` least-privilege **authoritative** rather than advisory: a shell op sees a provisioned secret only by *declaring* it and placing a `{{secret.NAME}}` marker, never by reading `$SKILLSCRIPT_SECRET_NAME` out of the ambient environment. This is why the scrub is secret-vars-only and not a blanket env wipe — the proxy pattern depends on the egress vars still inheriting.
+
 ## Trigger model
 
 **The trigger surface is two primitives.**
