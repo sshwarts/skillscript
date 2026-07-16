@@ -3,20 +3,24 @@ name: release
 # Tag-triggered release pipeline.
 #
 # On `git push origin vX.Y.Z`, this workflow runs the full smoke test
-# (typecheck + LOC + vitest), then:
-#   1. Verifies package.json version matches the tag
-#   2. Builds + pushes a multi-arch (amd64+arm64) container to GHCR
-#      tagged `:vX.Y.Z` and `:latest`
-#   3. Creates a GitHub Release with the matching CHANGELOG.md section
-#      as the release body
-#   4. Publishes to npm
+# (typecheck + LOC + vitest), verifies package.json matches the tag, then
+# ships three artifacts IN THIS ORDER:
+#   1. Publishes to npm — the PRIMARY artifact, published FIRST so a slow or
+#      flaky multi-arch container build can never block it (v0.20.1 hung 30+
+#      min on the arm64 QEMU build and gated the npm publish).
+#   2. Creates a GitHub Release with the matching CHANGELOG.md section as body.
+#   3. Builds + pushes a multi-arch (amd64+arm64) container to GHCR tagged
+#      `:vX.Y.Z` and `:latest`.
 #
-# Ordering: container → release → npm is intentional — if npm fails
-# (e.g., token expired, registry outage) the GHCR image and GitHub
-# Release already shipped, and the operator can manually `pnpm publish`
-# after fixing the credential. The reverse order would leave a published
-# npm package without a corresponding GitHub Release if the release step
-# choked.
+# Steps 2 and 3 are BEST-EFFORT (continue-on-error): once npm has shipped, a
+# transient failure in one must not abort the job and orphan the other. If one
+# is missed (e.g. a GitHub API outage — v0.34.0 lost both when the Release step,
+# then lacking continue-on-error, choked on an HTML 503), create it manually:
+#   - Release:   gh release create vX.Y.Z --notes-file <this version's changelog>
+#   - Container: docker buildx build --platform linux/amd64,linux/arm64 --push …
+# Do NOT re-run the whole workflow to recover — the npm step is not
+# skip-if-exists, so it aborts on the already-published version before it ever
+# reaches the other two.
 #
 # Required repo secrets:
 #   NPM_TOKEN — granular access token with "Bypass two-factor
@@ -106,7 +110,13 @@ jobs:
         env:
           NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
 
+      # Best-effort, like the container push below: npm (the primary artifact)
+      # has already published by this point, so a transient GitHub API blip on
+      # the Release step must NOT abort the job and orphan the GHCR push that
+      # follows. (v0.34.0: an API outage returned an HTML 503 to this step; without
+      # continue-on-error it failed the job and the container step never ran.)
       - name: Create GitHub Release
+        continue-on-error: true
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ github.ref_name }}
