@@ -2,6 +2,18 @@
 
 Each release carries an **Upgrade impact:** line (first in its section) so a bump's requirements are visible at a glance. Tags (closed set): **BREAKING** (a manual change is needed to keep working) · **RE-APPROVE** (secured-mode signature invalidation — skills must be re-approved before they run) · **CONFIG** (`connectors.json` / config edit needed) · **none (additive)** (no action; backward-compatible). Standard from 0.20.0 forward; the pre-0.20 transitions that need action are flagged inline below (0.14.0, 0.18.8, 0.19.0). Full walkthrough: [UPGRADING.md](UPGRADING.md).
 
+## 0.33.0 — 2026-07-16 — `# Tags:` skill classification
+
+**Upgrade impact:** none (additive). New optional frontmatter field + one additive `SkillMeta`/`skill_list` field; no breaking change.
+
+An optional `# Tags:` frontmatter field for categorizing skills — a second, author-defined axis alongside the audience grouping.
+
+- **`# Tags: morning-brief, amp, ops`** — optional, comma-separated, normalized to lowercase de-duped slugs. Pure classification: **zero effect on execution, dispatch, approval, or runtime selection** — a display + agent-comprehension axis, never an authz input.
+- **Rides in the contract from day one.** `SkillEntry.tags` (on `skill_list`) is always present (empty array when untagged), and `SkillMeta.tags` / `skill_preflight` carry it too — so the agent can chunk a large skill menu into families without reading each description (a mitigation for selection degradation on big flat lists), not just a viewer nicety. Server-side tag *filtering* (`skill_list({ filter: { tags } })`) is deferred; the field enables it later.
+- **Runtime-derived.** Like `description`/`vars`, tags are a projection of the body, so the runtime derives them from the frontmatter — a custom SkillStore that doesn't track tags still gets them.
+- **Approval-neutral.** The `# Tags:` line is excluded from the approval signing hash (the same carve-out the `# Status:` line already has), so editing a tag does **not** invalidate an operator's signature or drop the skill to Draft — safe by construction, since a tag can't change what a skill does.
+- **Dashboard consumer (ships with the field).** The skills list is faceted by tag — filter chips (All / each tag / untagged) plus per-row tag pills.
+
 ## 0.32.0 — 2026-07-14 — risk-legible "what it does" diagram
 
 **Upgrade impact:** none (additive). Dashboard rendering only; no runtime or API change.

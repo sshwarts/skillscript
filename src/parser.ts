@@ -172,6 +172,12 @@ export interface ParsedSkill {
   name: string | null;
   description: string | null;
   /**
+   * `# Tags:` classification slugs (lowercase, de-duped). Empty when absent.
+   * Pure metadata — display + agent family-chunking; never affects execution,
+   * approval, or authz, and is excluded from the approval hash.
+   */
+  tags: string[];
+  /**
    * `# Type:` header value. Procedural is the default (op-bearing,
    * dispatched at runtime). `data` marks a content-only skill whose body
    * inlines at every `& <name>` reference site at compile time.
@@ -1092,6 +1098,7 @@ export function parse(source: string): ParsedSkill {
   const result: ParsedSkill = {
     name: null,
     description: null,
+    tags: [],
     type: "procedural",
     status: null,
     approvalToken: null,
@@ -1364,6 +1371,18 @@ export function parse(source: string): ParsedSkill {
         }
       } else if (key === "onerror") {
         result.onError = value === "" ? null : value;
+      } else if (key === "tags") {
+        // Optional classification tags — comma-separated, normalized to
+        // lowercase slugs, de-duped. Pure metadata (display + agent
+        // family-chunking); never an authz input, and excluded from the
+        // approval hash so a tag edit doesn't trip re-approval. `(none)` /
+        // empty → no tags.
+        if (value.toLowerCase() !== "(none)" && value !== "") {
+          for (const entry of value.split(",")) {
+            const t = entry.trim().toLowerCase();
+            if (t !== "" && !result.tags.includes(t)) result.tags.push(t);
+          }
+        }
       } else if (key === "triggers") {
         if (value.toLowerCase() === "(none)" || value === "") continue;
         for (const raw of splitTriggersLine(value)) {

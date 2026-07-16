@@ -83,6 +83,7 @@ export async function buildSkillCatalog(
         name: meta.name,
         category: "headless",
         description: meta.description ?? "",
+        tags: meta.tags ?? [],
         status: meta.status,
         gate_ok: evaluateApprovalGate(source).ok,
         vars: [],
@@ -132,6 +133,10 @@ export function buildEntry(
     name,
     category: deriveCategory(parsed.outputs, parsed.triggers),
     description,
+    // `# Tags:` straight off the frontmatter (parsed.tags is [] when untagged).
+    // Body-projection, so this is authoritative regardless of what the store
+    // tracks — same reasoning as vars/returns above.
+    tags: parsed.tags,
     status,
     // Status-based default; buildSkillCatalog overrides with the real
     // evaluateApprovalGate(source) result (it has the source in hand).

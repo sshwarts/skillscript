@@ -441,6 +441,11 @@ export class McpServer {
           ) {
             metadata.description = parsed.description;
           }
+          // Same for `# Tags:` — a body projection, so surface it from the
+          // frontmatter (empty array when untagged) whenever the store didn't.
+          if (metadata !== null && metadata !== undefined && (metadata.tags === undefined || metadata.tags.length === 0)) {
+            metadata.tags = parsed.tags;
+          }
           contract = {
             vars: parsed.vars.map((v) => v.name),
             returns: parsed.returns,

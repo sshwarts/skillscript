@@ -156,3 +156,19 @@ describe("canonicalization — structural whitespace only", () => {
     expect(withDraft).toBe(withApproved);
   });
 });
+
+describe("# Tags: is approval-neutral — excluded from the signing hash", () => {
+  it("a tag-only edit keeps the signature valid; a behavioral edit still breaks it", () => {
+    const { publicKeyPem, privateKeyPem } = generateApprovalKeypair();
+    setApprovalPublicKey(publicKeyPem);
+    const v1 = `# Skill: t\n# Status: Approved\n# Tags: ops, morning\n\nrun:\n    emit(text="hi")\ndefault: run\n`;
+    const token = `${ED25519_VERSION}:${signApprovalEd25519(v1, privateKeyPem).token}`;
+    // Adding / reordering tags canonicalizes identically → signature still valid.
+    const v2 = `# Skill: t\n# Status: Approved\n# Tags: morning, ops, amp\n\nrun:\n    emit(text="hi")\ndefault: run\n`;
+    expect(canonicalizeForSigning(v1)).toBe(canonicalizeForSigning(v2));
+    expect(verifyApprovalToken(v2, token).ok).toBe(true);
+    // A real (behavioral) edit still invalidates — tamper-evidence preserved.
+    const v3 = `# Skill: t\n# Status: Approved\n# Tags: ops, morning\n\nrun:\n    emit(text="changed")\ndefault: run\n`;
+    expect(verifyApprovalToken(v3, token).ok).toBe(false);
+  });
+});

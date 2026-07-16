@@ -350,4 +350,11 @@ describe("description fallback — custom-store parity (v0.31.1)", () => {
     const catalog = await buildSkillCatalog(mockStore("bare", source));
     expect(catalog.skills?.[0]?.description).toBe("The summary line.");
   });
+
+  it("surfaces `# Tags:` on the entry (derived from the frontmatter; [] when untagged)", async () => {
+    const tagged = await buildSkillCatalog(mockStore("tagged", "# Skill: tagged\n# Status: Approved\n# Tags: ops, amp\nt:\n    emit(text=\"hi\")\ndefault: t\n"));
+    expect(tagged.skills?.[0]?.tags).toEqual(["ops", "amp"]);
+    const untagged = await buildSkillCatalog(mockStore("bare2", "# Skill: bare2\n# Status: Approved\nt:\n    emit(text=\"hi\")\ndefault: t\n"));
+    expect(untagged.skills?.[0]?.tags).toEqual([]);
+  });
 });

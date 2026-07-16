@@ -399,23 +399,56 @@ function renderOverview() {
   `;
 }
 
+// Tag facet for the skills list — null = all, "__untagged__" = only untagged,
+// else a specific tag. Set from the filter chips; persists across re-renders so
+// the 30s poll doesn't reset the operator's chosen view.
+let skillTagFilter = null;
+function setSkillTagFilter(tag) {
+  skillTagFilter = tag;
+  renderCurrentView();
+}
+window.setSkillTagFilter = setSkillTagFilter;
+
 function renderSkills() {
   if (state.skills.length === 0) {
     return `<h2>Skills</h2><section><div class="empty">No skills in store. Use <code>skillfile init</code> + <code>skillfile run</code> to populate.</div></section>`;
   }
+
+  // Facet by `# Tags:` — the author-defined family axis (alongside status).
+  const allTags = [...new Set(state.skills.flatMap((s) => s.tags ?? []))].sort();
+  const hasUntagged = state.skills.some((s) => !(s.tags && s.tags.length));
+  // Drop a stale filter (e.g. the last skill with that tag was deleted).
+  if (skillTagFilter !== null && skillTagFilter !== "__untagged__" && !allTags.includes(skillTagFilter)) skillTagFilter = null;
+
+  const chip = (label, value) => {
+    const arg = value === null ? "null" : `'${esc(value).replace(/'/g, "\\'")}'`;
+    return `<button class="tag-chip${skillTagFilter === value ? " active" : ""}" onclick="event.stopPropagation(); setSkillTagFilter(${arg})">${esc(label)}</button>`;
+  };
+  const chips = (allTags.length || hasUntagged)
+    ? `<div class="tag-chips">${chip("All", null)}${allTags.map((t) => chip(t, t)).join("")}${hasUntagged ? chip("untagged", "__untagged__") : ""}</div>`
+    : "";
+
+  const shown = state.skills.filter((s) => {
+    if (skillTagFilter === null) return true;
+    const tags = s.tags ?? [];
+    return skillTagFilter === "__untagged__" ? tags.length === 0 : tags.includes(skillTagFilter);
+  });
+
   return `
-    <h2>Skills (${state.skills.length})</h2>
+    <h2>Skills (${skillTagFilter === null ? state.skills.length : `${shown.length} of ${state.skills.length}`})</h2>
     <section>
+      ${chips}
       <table>
         <thead>
-          <tr><th>Name</th><th>Status</th><th>Description</th><th>Version</th></tr>
+          <tr><th>Name</th><th>Status</th><th>Description</th><th>Tags</th><th>Version</th></tr>
         </thead>
         <tbody>
-          ${state.skills.map((s) => `
+          ${shown.map((s) => `
             <tr onclick="window.location.hash='#skill/${encodeURIComponent(s.name)}'">
               <td><strong>${esc(s.name)}</strong></td>
               <td>${skillStatusBadge(s)}</td>
               <td>${esc(s.description ?? "—")}</td>
+              <td>${(s.tags && s.tags.length) ? s.tags.map((t) => `<span class="tag-pill">${esc(t)}</span>`).join(" ") : `<span style="color:var(--text-muted)">—</span>`}</td>
               <td><code>${esc(s.version?.slice(0, 8) ?? "—")}</code></td>
             </tr>
           `).join("")}

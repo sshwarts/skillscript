@@ -24,8 +24,8 @@ const REPO_ROOT = join(__dirname, "..");
 const PACKAGE_JSON = JSON.parse(readFileSync(join(REPO_ROOT, "package.json"), "utf8")) as Record<string, unknown>;
 
 describe("T7 — package.json polish", () => {
-  it("1. version is 0.32.0 (risk-legible 'what it does' diagram: effect-tier weighting — mutations/shell pop, plumbing recessed — plain-language branch conditions, and hover-to-expand truncated rows)", () => {
-    expect(PACKAGE_JSON["version"]).toBe("0.32.0");
+  it("1. version is 0.33.0 (optional # Tags: frontmatter — classification slugs on SkillMeta/skill_list from day one, approval-neutral (excluded from the signing hash), runtime-derived from the body, with the dashboard skills list faceted by tag)", () => {
+    expect(PACKAGE_JSON["version"]).toBe("0.33.0");
   });
 
   it("2. main + types + bin + engines.node ≥ 22.5 declared", () => {

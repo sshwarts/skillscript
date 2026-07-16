@@ -82,6 +82,7 @@ The \`$\` prefix marks **state-affecting ops** (mutation OR external dispatch). 
 # Description: What this skill does    ← optional but recommended
 # Status: Approved                     ← required: Draft | Approved | Disabled
 # Vars: NAME=default-value, OTHER      ← optional: declared variables
+# Tags: morning-brief, ops            ← optional: classification (grouping only; approval-neutral)
 # Triggers: cron: 0 9 * * *            ← optional: autonomous-dispatch sources
 
 \${SUMMARY}                             ← body-text-as-output template (optional)

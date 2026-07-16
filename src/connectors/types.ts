@@ -236,6 +236,14 @@ export interface SkillMeta {
   content_hash: string;
   status: SkillStatus;
   description?: string;
+  /**
+   * `# Tags:` classification slugs. Optional on the store contract — like
+   * `description`/`vars`, it's a projection of the body, so the runtime derives
+   * it from the parsed frontmatter when a store omits it (a store MAY populate
+   * it to save a source parse). Pure metadata: display + agent family-chunking,
+   * never an authz input.
+   */
+  tags?: string[];
   vars?: string[];
   /**
    * v0.18.0 — declared export surface from `# Returns: X, Y, Z` header.
@@ -337,6 +345,14 @@ export interface SkillEntry {
   name: string;
   category: "augmenting" | "template" | "headless";
   description: string;
+  /**
+   * `# Tags:` classification slugs — always present (empty array when
+   * untagged). Rides in the `skill_list` payload from day one: the human viewer
+   * groups/facets by it, and the agent uses it to chunk a large menu into
+   * families (a second, author-defined axis alongside `category`). Server-side
+   * tag filtering is a later optimization; the field carries the value now.
+   */
+  tags: string[];
   status: SkillStatus;
   /**
    * v0.20.1 — approval-gate result under the runtime's current mode. `false`

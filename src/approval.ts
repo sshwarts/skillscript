@@ -85,7 +85,17 @@ export function stripStatusLineForHashing(body: string): string {
  */
 export function canonicalizeForSigning(body: string): string {
   const lf = body.replace(/\r\n?/g, "\n");
-  return stripStatusLineForHashing(lf);
+  const noStatus = stripStatusLineForHashing(lf);
+  // Also exclude the `# Tags:` line. Tags are pure classification metadata —
+  // they can't change what a skill DOES and are never an authz input — so a
+  // tag edit must be approval-neutral (the operator's signature stays valid,
+  // no drop-to-Draft). Same carve-out rationale as the `# Status:` line above.
+  // Both sign and verify run through here, so the exclusion is symmetric;
+  // every behavioral edit still invalidates the signature.
+  return noStatus
+    .split("\n")
+    .filter((line) => !/^\s*#\s*Tags\s*:/i.test(line))
+    .join("\n");
 }
 
 // ─── v3: Ed25519 asymmetric signature ─────────────────────────────────────────

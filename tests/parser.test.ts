@@ -188,3 +188,16 @@ describe("applyFilter", () => {
     expect(() => applyFilter("x", "bogus")).toThrow(/Unknown filter/);
   });
 });
+
+describe("# Tags: frontmatter", () => {
+  const tagsOf = (fm: string) => parse(`# Skill: t\n# Status: Draft\n${fm}\nrun:\n    emit(text="hi")\ndefault: run\n`).tags;
+
+  it("parses a comma list into lowercase, de-duped slugs", () => {
+    expect(tagsOf("# Tags: Morning-Brief, AMP, morning-brief, ops")).toEqual(["morning-brief", "amp", "ops"]);
+  });
+  it("is empty when absent or `(none)`", () => {
+    expect(tagsOf("")).toEqual([]);
+    expect(tagsOf("# Tags: (none)")).toEqual([]);
+    expect(tagsOf("# Tags:")).toEqual([]);
+  });
+});

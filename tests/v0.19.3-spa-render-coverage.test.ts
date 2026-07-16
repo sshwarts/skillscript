@@ -42,13 +42,13 @@ const SPA_DIR = join(REPO_ROOT, "src/dashboard/spa");
 
 const CANNED_CATALOG = {
   receives: [
-    { name: "morning-brief", category: "augmenting", description: "Brief", status: "Approved", vars: [], output: [{ kind: "agent", target: "scott" }], triggers: [{ kind: "cron", expression: "0 9 * * *" }] },
+    { name: "morning-brief", category: "augmenting", description: "Brief", status: "Approved", tags: ["ops", "brief"], vars: [], output: [{ kind: "agent", target: "scott" }], triggers: [{ kind: "cron", expression: "0 9 * * *" }] },
   ],
   skills: [
-    { name: "hello", category: "template", description: "Hello world", status: "Approved", vars: [], output: [], triggers: [] },
+    { name: "hello", category: "template", description: "Hello world", status: "Approved", tags: ["greeting"], vars: [], output: [], triggers: [] },
   ],
   headless: [
-    { name: "heartbeat", category: "headless", description: "Heartbeat", status: "Approved", vars: [], output: [{ kind: "text" }], triggers: [{ kind: "cron", expression: "*/5 * * * *" }] },
+    { name: "heartbeat", category: "headless", description: "Heartbeat", status: "Approved", tags: [], vars: [], output: [{ kind: "text" }], triggers: [{ kind: "cron", expression: "*/5 * * * *" }] },
   ],
 };
 
@@ -559,5 +559,27 @@ describe("control-flow walkthrough — plain-language flow in the review view", 
     const html = fixture.document.getElementById("main")!.innerHTML;
     expect(html).not.toContain("What it does, step by step");
     expect(html).not.toContain("flow-svg");
+  });
+});
+
+// ────────────────────────────────────────────────────────────────────────
+// # Tags: facet on the skills list — the load-bearing viewer consumer (the
+// field ships WITH its reader, per the parse-and-drop-is-a-bug invariant).
+// ────────────────────────────────────────────────────────────────────────
+
+describe("skills list — # Tags facet (the grouping consumer)", () => {
+  it("renders filter chips (All + each tag + untagged) and per-row tag pills", async () => {
+    const fixture = await loadSpa();
+    await fixture.triggerRefresh();
+    await fixture.navigateTo("#skills");
+    const html = fixture.document.getElementById("main")!.innerHTML;
+    // Filter chips: All + distinct tags + an untagged bucket (heartbeat has none).
+    expect(html).toContain("tag-chips");
+    expect(html).toContain(">All<");
+    expect(html).toContain(">ops<");
+    expect(html).toContain(">greeting<");
+    expect(html).toContain(">untagged<");
+    // Per-row tag pills carrying the tag values.
+    expect(html).toContain("tag-pill");
   });
 });
