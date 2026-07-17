@@ -637,6 +637,17 @@ export interface LocalModelClass {
 export interface McpDispatchCtx {
   agentId?: string;
   isAdmin?: boolean;
+  /**
+   * Cancellation signal for the deadline/cancellation contract (Perry spec
+   * de11dcc5). The runtime aborts it when a run deadline (or per-op timeout)
+   * cuts this dispatch. A **call-bounded** connector should forward it to its
+   * underlying `fetch`/RPC so the in-flight work truly stops instead of
+   * race-and-abandon (the effect ends when the call does). Optional — a
+   * connector that ignores it degrades to today's behavior (the runtime returns
+   * control promptly; the request may finish in the background, discarded). For
+   * **outlives-call** connectors the primary mechanism is `onAbort()`, not this.
+   */
+  signal?: AbortSignal;
 }
 
 /**

@@ -1709,7 +1709,7 @@ async function execOpInner(
             ? (budgetMs: number) => connector.onAbort!(budgetMs)
             : undefined;
           rawResult = await dispatchWithTimeout(
-            () => connector.call(toolName, dispatchArgs, ctx.agentId !== undefined ? { agentId: ctx.agentId } : undefined),
+            (signal) => connector.call(toolName, dispatchArgs, { ...(ctx.agentId !== undefined ? { agentId: ctx.agentId } : {}), signal }),
             timeoutMs,
             "$",
             ctx.deadlineMs,
@@ -1952,12 +1952,17 @@ function resolveOpTimeoutMs(
  * `onAbort`, reserve 0, and pay zero tax.
  */
 async function dispatchWithTimeout<T>(
-  fn: () => Promise<T>,
+  fn: (signal: AbortSignal) => Promise<T>,
   timeoutMs: number,
   opKind: string,
   deadlineMs?: number,
   onAbort?: (budgetMs: number) => Promise<void>,
 ): Promise<T> {
+  // Cancellation signal: aborted when the timer cuts this op (deadline OR per-op
+  // timeout). A call-bounded connector that forwards it to its fetch/RPC truly
+  // stops the work instead of race-and-abandon; one that ignores it degrades to
+  // today's behavior.
+  const controller = new AbortController();
   // Reserve a cleanup slice ONLY for outlives-call ops (onAbort present) — the
   // majority pays nothing. Floored against remaining-at-dispatch so it never
   // goes negative (Perry refinement). `cutInstant` is when THIS op must be cut
@@ -1975,6 +1980,9 @@ async function dispatchWithTimeout<T>(
   let timer: ReturnType<typeof setTimeout> | undefined;
   const timeoutPromise = new Promise<never>((_, reject) => {
     timer = setTimeout(async () => {
+      // Signal the connector to stop its in-flight work first (call-bounded
+      // true-cancel), then decide the error class + run any outlives-call cleanup.
+      controller.abort();
       // If we're at/past this op's cut instant, the timer IS the run deadline
       // (the clamp made `effectiveMs` land there); otherwise it's a per-op
       // timeout (`OpTimeoutError`, catchable).
@@ -1995,7 +2003,7 @@ async function dispatchWithTimeout<T>(
     }, effectiveMs);
   });
   try {
-    return await Promise.race([fn(), timeoutPromise]);
+    return await Promise.race([fn(controller.signal), timeoutPromise]);
   } finally {
     if (timer !== undefined) clearTimeout(timer);
   }

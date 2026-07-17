@@ -258,6 +258,35 @@ run:
     expect(r.uncertainEffects).toBeUndefined();
   });
 
+  it("AbortSignal: a call-bounded connector that honors ctx.signal truly cancels on the deadline cut", async () => {
+    let aborted = false;
+    const mock = {
+      effectBoundary: "call-bounded" as const,
+      // Honors the signal: rejects promptly when aborted (true cancel), instead
+      // of racing-and-abandoning a 5s hang.
+      async call(_tool: string, _args: any, ctx?: { signal?: AbortSignal }) {
+        return await new Promise((_res, rej) => {
+          const t = setTimeout(() => rej(new Error("should have aborted")), 5000);
+          ctx?.signal?.addEventListener("abort", () => { aborted = true; clearTimeout(t); rej(new Error("aborted")); });
+        });
+      },
+      async manifest() { return { capabilities_version: "1", manifest: { kind: "mock" } }; },
+    };
+    const registry = new Registry();
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    registry.registerMcpConnector("api", mock as any);
+    const parsed = parse(`# Skill: t
+default: run
+run:
+    $ api.get_status -> R (fallback: "fb")
+`);
+    const r = await execute(parsed, {}, ["run"], {
+      agentId: "test", registry, effectsAuthorized: true, deadlineMs: Date.now() + 60,
+    });
+    expect(r.deadlineExceeded).toBe(true);
+    expect(aborted).toBe(true); // the connector received the abort and stopped
+  });
+
   it("no `# Deadline:` and no injected deadline → today's behavior, unchanged", async () => {
     const parsed = parse(`# Skill: t
 default: run
