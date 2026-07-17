@@ -199,6 +199,17 @@ export interface ParsedSkill {
    * built-in 300s fallback).
    */
   timeout: number | string | null;
+  /**
+   * `# Deadline:` header value in SECONDS — the run-total wall-clock budget for
+   * this skill AND everything it composes via `execute_skill`. Number literal OR
+   * `$(VAR)` ref string (resolved at runtime). Null when omitted (opt-in; a skill
+   * with no `# Deadline:` keeps today's purely-per-op timeout behavior). Distinct
+   * from `# Timeout:`, which is a per-op bound; the deadline propagates by
+   * *remaining* into children and terminates the whole run when exceeded. In the
+   * signing hash (a deadline change alters the safety envelope, so it drops the
+   * skill to Draft) — unlike `# Tags:`/`# Status:`, which are stripped.
+   */
+  deadline: number | string | null;
   vars: SkillVar[];
   /**
    * v0.17.3 — `# Returns: X, Y, Z` declared export surface. The variables
@@ -1103,6 +1114,7 @@ export function parse(source: string): ParsedSkill {
     status: null,
     approvalToken: null,
     timeout: null,
+    deadline: null,
     vars: [],
     returns: [],
     requires: [],
@@ -1305,6 +1317,19 @@ export function parse(source: string): ParsedSkill {
             result.parseErrors.push(`\`# Timeout:\` must be a positive integer (seconds) or a \`$(VAR)\` ref (got '${value}').`);
           } else {
             result.timeout = n;
+          }
+        }
+      } else if (key === "deadline") {
+        // Run-total wall-clock budget (seconds). Same value grammar as
+        // `# Timeout:`: integer literal, or a `$(VAR)` ref deferred to runtime.
+        if (/\$[(\{]/.test(value)) {
+          result.deadline = value;
+        } else {
+          const n = parseInt(value, 10);
+          if (!Number.isFinite(n) || n <= 0) {
+            result.parseErrors.push(`\`# Deadline:\` must be a positive integer (seconds) or a \`$(VAR)\` ref (got '${value}').`);
+          } else {
+            result.deadline = n;
           }
         }
       } else if (key === "vars") {

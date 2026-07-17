@@ -119,6 +119,18 @@ export interface ExecuteContext {
    */
   absoluteTimeoutMs?: number;
   /**
+   * Absolute wall-clock deadline instant (ms since epoch) for the whole run —
+   * the propagating budget from a `# Deadline:` header. Set ONCE at the root
+   * `execute()` (`start + budgetMs`) and threaded UNCHANGED into `execute_skill`
+   * children via the context spread, so children draw from the parent's
+   * *remaining* (`deadlineMs - now`) rather than a fresh budget — this is what
+   * bounds a composition tree to the root's intent. Undefined when the root
+   * skill declared no `# Deadline:` (opt-in; preserves today's per-op behavior).
+   * Distinct from `absoluteTimeoutMs`, which is a per-op fallback duration, not a
+   * run-total instant. Internal — do not set from outside the runtime.
+   */
+  deadlineMs?: number;
+  /**
    * Enables `@ unsafe <command>` dispatch via full bash shell. Default
    * `false` — `@ unsafe` ops fail with `UnsafeShellDisabledError`. Per
    * Section 4 Security: operators opt in explicitly per deployment; lint
