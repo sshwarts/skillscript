@@ -1669,11 +1669,18 @@ async function execOpInner(
         }
         if (ctx.registry.hasMcpConnector(connectorName)) {
           const connector = ctx.registry.getMcpConnector(connectorName);
+          // Pass the connector's bounded cleanup hook so the deadline can invoke
+          // it on an in-flight cut (outlives-call connectors only; call-bounded
+          // ones have no onAbort → reserve 0, zero tax).
+          const onAbort = typeof connector.onAbort === "function"
+            ? (budgetMs: number) => connector.onAbort!(budgetMs)
+            : undefined;
           rawResult = await dispatchWithTimeout(
             () => connector.call(toolName, dispatchArgs, ctx.agentId !== undefined ? { agentId: ctx.agentId } : undefined),
             timeoutMs,
             "$",
             ctx.deadlineMs,
+            onAbort,
           );
           dispatched = true;
         } else if (op.mcpConnector === undefined && ctx.toolDispatch) {
@@ -1840,6 +1847,18 @@ function buildExecutionError(err: unknown, target: string, opKindOverride?: stri
 const DEFAULT_RUNTIME_ABSOLUTE_TIMEOUT_MS = 300_000;
 
 /**
+ * Cleanup slice reserved from the run budget for an `"outlives-call"` connector's
+ * `onAbort()` when the deadline cuts an in-flight call (Perry spec de11dcc5).
+ * Sized to realistic bounded cleanup (`stop_all_movements` / socket-close /
+ * SIGKILL are sub-second). Reserved PER-OP and only for outlives-call ops
+ * (`onAbort` present), so the call-bounded majority pays zero tax; floored
+ * against remaining-at-dispatch (`min(CLEANUP_CAP, remaining)`) so `effective`
+ * never goes negative and a late outlives-call op fails fast rather than starting
+ * an effect it can't clean in time. Keeps total wall-clock ≤ the deadline.
+ */
+const CLEANUP_CAP_MS = 1_000;
+
+/**
  * Per-op timeout resolution chain (ERD §6 decision 7) — top wins:
  *   1. Per-op override (`~ ... timeoutSeconds=30 ...`)
  *   2. Skill-level `# Timeout: N` header
@@ -1882,34 +1901,61 @@ function resolveOpTimeoutMs(
 }
 
 /**
- * Race the op against a timer. On timeout, throws `OpTimeoutError`-shaped
- * op-error so the existing else: / # OnError: machinery catches it.
+ * Race the op against a timer. On a per-op timeout, throws `OpTimeoutError`
+ * (catchable by `(fallback:)`/`else:`). On the run deadline, throws the
+ * uncatchable `RunDeadlineExceeded`.
  *
- * v1 caveat: timeout returns control to the executor promptly, but the
- * underlying request may still complete in the background — its result is
- * discarded. v2 should thread AbortSignal through connector contracts so
- * implementations can cancel cleanly.
+ * Cancellation (Perry spec de11dcc5): the timer IS the cut. For an
+ * `"outlives-call"` connector (an `onAbort` was passed), the op is cut a
+ * reserved slice EARLY — `reserve = min(CLEANUP_CAP, remaining)` — and
+ * `onAbort(reserve)` runs (bounded, can't hang) before the deadline rejection,
+ * so its cleanup fits INSIDE the run budget (total wall-clock ≤ deadline). A
+ * late-dispatched outlives-call op gets `effective ≈ 0` → it fails fast rather
+ * than starting an effect it can't clean in time. Call-bounded ops pass no
+ * `onAbort`, reserve 0, and pay zero tax.
  */
 async function dispatchWithTimeout<T>(
   fn: () => Promise<T>,
   timeoutMs: number,
   opKind: string,
   deadlineMs?: number,
+  onAbort?: (budgetMs: number) => Promise<void>,
 ): Promise<T> {
+  // Reserve a cleanup slice ONLY for outlives-call ops (onAbort present) — the
+  // majority pays nothing. Floored against remaining-at-dispatch so it never
+  // goes negative (Perry refinement). `cutInstant` is when THIS op must be cut
+  // to leave room for its own cleanup; call-bounded ops cut exactly at the
+  // deadline.
+  const remainingAtDispatch = deadlineMs !== undefined ? Math.max(0, deadlineMs - Date.now()) : 0;
+  const reserveMs = onAbort !== undefined && deadlineMs !== undefined
+    ? Math.min(CLEANUP_CAP_MS, remainingAtDispatch)
+    : 0;
+  const cutInstant = deadlineMs !== undefined ? deadlineMs - reserveMs : undefined;
+  const effectiveMs = cutInstant !== undefined
+    ? Math.min(timeoutMs, Math.max(0, cutInstant - Date.now()))
+    : timeoutMs;
+
   let timer: ReturnType<typeof setTimeout> | undefined;
   const timeoutPromise = new Promise<never>((_, reject) => {
-    timer = setTimeout(() => {
-      // Mid-flight expiry: `timeoutMs` was already clamped to the run's
-      // remaining (resolveOpTimeoutMs), so if we're at/past the deadline when
-      // the timer fires, this is the RUN deadline, not a mere per-op timeout —
-      // reject the uncatchable `RunDeadlineExceeded` so the op's `(fallback:)`
-      // can't swallow it (the op-catch sweep re-throws it up to the boundary).
-      if (deadlineMs !== undefined && Date.now() >= deadlineMs) {
-        reject(new RunDeadlineExceeded(deadlineMs));
+    timer = setTimeout(async () => {
+      // If we're at/past this op's cut instant, the timer IS the run deadline
+      // (the clamp made `effectiveMs` land there); otherwise it's a per-op
+      // timeout (`OpTimeoutError`, catchable).
+      if (cutInstant !== undefined && Date.now() >= cutInstant) {
+        if (onAbort !== undefined && reserveMs > 0) {
+          // Bounded cleanup: give onAbort up to `reserveMs`, never let it hang or
+          // throw past the budget. (A `< CLEANUP_CAP` window for a late op is the
+          // documented "cleanup incomplete" case.)
+          await Promise.race([
+            (async () => { try { await onAbort(reserveMs); } catch { /* connector cleanup best-effort */ } })(),
+            new Promise<void>((res) => setTimeout(res, reserveMs)),
+          ]);
+        }
+        reject(new RunDeadlineExceeded(deadlineMs!));
       } else {
         reject(new OpTimeoutError(timeoutMs, opKind));
       }
-    }, timeoutMs);
+    }, effectiveMs);
   });
   try {
     return await Promise.race([fn(), timeoutPromise]);

@@ -128,6 +128,44 @@ run:
     expect(r.finalVars["A"]).not.toBe("fa");
   });
 
+  it("onAbort (item 5): an outlives-call connector's bounded cleanup runs when the deadline cuts an in-flight call", async () => {
+    let onAbortCalled = false;
+    let onAbortBudget = -1;
+    const mock = {
+      effectBoundary: "outlives-call" as const,
+      // Hangs far longer than the deadline, so the run deadline cuts it in flight.
+      async call() { await new Promise((r) => setTimeout(r, 5000)); return "never"; },
+      async manifest() { return { capabilities_version: "1", manifest: { kind: "mock" } }; },
+      async onAbort(budgetMs: number) { onAbortCalled = true; onAbortBudget = budgetMs; },
+    };
+    const registry = new Registry();
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    registry.registerMcpConnector("robot", mock as any);
+
+    const parsed = parse(`# Skill: t
+# Autonomous: true
+default: run
+run:
+    $ robot.move approved="test" -> R (fallback: "fb")
+`);
+    const start = Date.now();
+    const r = await execute(parsed, {}, ["run"], {
+      agentId: "test",
+      registry,
+      effectsAuthorized: true,
+      deadlineMs: Date.now() + 150,
+    });
+    const elapsed = Date.now() - start;
+
+    expect(r.deadlineExceeded).toBe(true);
+    expect(onAbortCalled).toBe(true);           // the cleanup hook fired
+    expect(onAbortBudget).toBeGreaterThan(0);   // with a positive bounded budget
+    expect(onAbortBudget).toBeLessThanOrEqual(1000); // <= CLEANUP_CAP
+    expect(r.fallbacks).toEqual([]);            // deadline still uncatchable
+    // Bounded: cut + cleanup finish well inside the run budget, nowhere near the 5s hang.
+    expect(elapsed).toBeLessThan(1500);
+  });
+
   it("no `# Deadline:` and no injected deadline → today's behavior, unchanged", async () => {
     const parsed = parse(`# Skill: t
 default: run

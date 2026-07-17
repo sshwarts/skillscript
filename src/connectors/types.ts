@@ -668,6 +668,31 @@ export interface McpConnector {
    * treat that as "no schema available."
    */
   describeTools?(): Promise<McpToolDescriptor[]>;
+  /**
+   * Effect boundary for the deadline/cancellation contract (Perry spec
+   * de11dcc5). Declared, never inferred — the runtime can't know a connector's
+   * abort-safety.
+   *   - `"call-bounded"` (default when absent): the effect is fully bounded by
+   *     the `call()` promise (HTTP request/response, id-correlated RPC). Aborting
+   *     the client ends the effect; no cleanup needed. The safe majority.
+   *   - `"outlives-call"`: the effect can outlive the call (a physical actuator
+   *     already handed the motion, a spawned/async job, an open stream/session,
+   *     a held lease). Aborting the client does NOT stop it, so the runtime
+   *     reserves a bounded cleanup slice and invokes `onAbort()` when it cuts an
+   *     in-flight call at the deadline. A connector declaring `"outlives-call"`
+   *     MUST implement `onAbort` (compile-time leak-prevention).
+   */
+  readonly effectBoundary?: "call-bounded" | "outlives-call";
+  /**
+   * Bounded cleanup on cancellation, for `"outlives-call"` connectors. The
+   * runtime calls it after cutting an in-flight `call()` at the deadline,
+   * hard-capped to `budgetMs` (the reserved slice, `min(CLEANUP_CAP, remaining)`
+   * — a late-dispatched op may get `< CLEANUP_CAP`). It MUST return within
+   * `budgetMs`; the runtime hard-drops and logs "cleanup incomplete" if it
+   * overruns. Stop the motor / close the stream / release the lease here — never
+   * start new work (that would reintroduce the unbounded work the deadline kills).
+   */
+  onAbort?(budgetMs: number): Promise<void>;
 }
 
 export interface McpConnectorClass {
