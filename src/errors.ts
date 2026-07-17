@@ -258,6 +258,15 @@ const RESOLVE_BRIDGE_INFO: Record<string, { slot: string; defaultType: string; b
  * (Perry spec de11dcc5, plan 97ac3c5b).
  */
 export class RunDeadlineExceeded extends Error {
+  /**
+   * The op that was in flight when the deadline cut it, set at the deepest
+   * op-catch sweep site (`??=`, so the actual cut op wins as it unwinds). When
+   * `mutation` is true, the run boundary records it in `uncertainEffects[]`:
+   * an aborted mutation's outcome is unknown (the request may have reached the
+   * backend before we cut the client) — "issued, outcome uncertain, never
+   * auto-retried." Reads are excluded (nothing to be uncertain about).
+   */
+  cutOp?: { opKind: string; label: string; mutation: boolean };
   constructor(
     /** The run's `# Deadline:` budget in ms (for diagnostics). */
     public readonly deadlineMs: number,

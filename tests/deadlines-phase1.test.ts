@@ -225,6 +225,37 @@ run:
     expect(r.fallbacks).toEqual([]);            // deadline still uncatchable
     // Bounded: cut + cleanup finish well inside the run budget, nowhere near the 5s hang.
     expect(elapsed).toBeLessThan(1500);
+    // Uncertain-log: the cut mutation ($ robot.move) is recorded "outcome uncertain".
+    expect(r.uncertainEffects).toBeDefined();
+    expect(r.uncertainEffects).toHaveLength(1);
+    expect(r.uncertainEffects![0]).toMatchObject({
+      opKind: "$",
+      op: "robot.move",
+      reason: "issued, outcome uncertain",
+      retry: false,
+    });
+  });
+
+  it("uncertain-log: a cut READ is NOT recorded (reads have no uncertain outcome)", async () => {
+    const mock = {
+      effectBoundary: "call-bounded" as const,
+      async call() { await new Promise((r) => setTimeout(r, 5000)); return "never"; },
+      async manifest() { return { capabilities_version: "1", manifest: { kind: "mock" } }; },
+    };
+    const registry = new Registry();
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    registry.registerMcpConnector("api", mock as any);
+    const parsed = parse(`# Skill: t
+default: run
+run:
+    $ api.get_status -> R (fallback: "fb")
+`);
+    const r = await execute(parsed, {}, ["run"], {
+      agentId: "test", registry, effectsAuthorized: true, deadlineMs: Date.now() + 60,
+    });
+    expect(r.deadlineExceeded).toBe(true);
+    // get_status is a read (classifyMutation → null), so no uncertain effect logged.
+    expect(r.uncertainEffects).toBeUndefined();
   });
 
   it("no `# Deadline:` and no injected deadline → today's behavior, unchanged", async () => {

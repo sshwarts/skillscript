@@ -302,6 +302,26 @@ export interface ExecuteResult {
    * the deadlines feature (Perry spec de11dcc5).
    */
   deadlineExceeded?: boolean;
+  /**
+   * Mutations that were IN FLIGHT when the deadline cut them — "issued, outcome
+   * uncertain, never auto-retried." Aborting stops the client, but the request
+   * may already have reached the backend, so we can't say whether it landed
+   * (Perry spec de11dcc5, Part 4 floor). Phase 1 gates this on the mutation tier
+   * (`classifyMutation` for `$`; shell conservatively; reads excluded); the
+   * finer per-tool `effect_class` (idempotent/reconcilable) is Phase 2. Absent
+   * when nothing was cut mid-mutation.
+   */
+  uncertainEffects?: UncertainEffect[];
+}
+
+/** A mutation cut mid-flight by the deadline; its outcome is unknown. */
+export interface UncertainEffect {
+  target?: string;
+  opKind: string;
+  /** Human label — connector.tool for `$`, the binary for shell. */
+  op: string;
+  reason: "issued, outcome uncertain";
+  retry: false;
 }
 
 export interface AgentDeliveryReceiptRecord {
@@ -521,6 +541,7 @@ export async function execute(
   // here and the run returns whatever it accumulated so far + the effect log —
   // it is NEVER thrown to the caller. `deadlineExceeded` marks the outcome.
   let deadlineExceeded = false;
+  const uncertainEffects: UncertainEffect[] = [];
   try {
   for (const targetName of order) {
     const target = parsed.targets.get(targetName);
@@ -584,6 +605,17 @@ export async function execute(
       if ((ctx.recursionDepth ?? 0) > 0) throw err;
       deadlineExceeded = true;
       errors.push(buildExecutionError(err, err.target ?? "run"));
+      // A mutation cut mid-flight has an unknown outcome — record it (reads are
+      // excluded: cutOp.mutation is false for them). Never auto-retried.
+      if (err.cutOp?.mutation === true) {
+        uncertainEffects.push({
+          target: err.target,
+          opKind: err.cutOp.opKind,
+          op: err.cutOp.label,
+          reason: "issued, outcome uncertain",
+          retry: false,
+        });
+      }
     } else {
       throw err;
     }
@@ -756,6 +788,7 @@ export async function execute(
     agentDeliveryReceipts,
     agentWakeReceipts,
     ...(deadlineExceeded ? { deadlineExceeded: true } : {}),
+    ...(uncertainEffects.length > 0 ? { uncertainEffects } : {}),
   };
 }
 
@@ -1102,7 +1135,7 @@ async function execOpInner(
           const [bin, ...args] = finalArgv;
           stdoutArgv = await execShellCommand(bin!, args, shellTimeoutMs, ctx.deadlineMs);
         } catch (err) {
-          if (err instanceof RunDeadlineExceeded) throw err; // uncatchable-sweep
+          if (err instanceof RunDeadlineExceeded) { err.cutOp ??= { opKind: "shell", label: "shell", mutation: true }; throw err; }
           if (shellFallback !== undefined) {
             return recordShellFallback(shellFallback, redactSecrets(`shell argv failed: ${messageOf(err)}`));
           }
@@ -1192,7 +1225,7 @@ async function execOpInner(
           stdout = await execShellCommand(bin!, args, shellTimeoutMs, ctx.deadlineMs);
         }
       } catch (err) {
-        if (err instanceof RunDeadlineExceeded) throw err; // uncatchable-sweep
+        if (err instanceof RunDeadlineExceeded) { err.cutOp ??= { opKind: "shell", label: "shell", mutation: true }; throw err; }
         if (shellFallback !== undefined) {
           return recordShellFallback(shellFallback, redactSecrets(`shell failed: ${messageOf(err)}`));
         }
@@ -1706,8 +1739,12 @@ async function execOpInner(
         }
       } catch (err) {
         // Uncatchable-sweep: a mid-flight run-deadline expiry must NOT be
-        // recovered by this op's `(fallback:)` — re-throw it to the boundary.
-        if (err instanceof RunDeadlineExceeded) throw err;
+        // recovered by this op's `(fallback:)` — tag the cut op (for the
+        // uncertain-effect log; deepest op wins via `??=`) and re-throw.
+        if (err instanceof RunDeadlineExceeded) {
+          err.cutOp ??= { opKind: "$", label: `${connectorLabel}${toolName}`, mutation: classifyMutation(op) !== null };
+          throw err;
+        }
         if (dollarFallback !== undefined) {
           vars.set(flatKey, dollarFallback);
           if (op.outputVar !== undefined) vars.set(op.outputVar, dollarFallback);
