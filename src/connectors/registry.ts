@@ -72,6 +72,19 @@ export class Registry {
   }
 
   registerMcpConnector(name: string, instance: McpConnector, allowedTools?: string[]): void {
+    // Leak-prevention (deadline/cancellation contract, Perry spec de11dcc5): a
+    // connector whose effect can outlive the call MUST provide a bounded cleanup
+    // hook, or the deadline can't stop its effect. Refuse the wiring loudly at
+    // registration rather than let a skill's `# Deadline:` silently fail to
+    // bound a robot/actuator/job connector.
+    if (instance.effectBoundary === "outlives-call" && typeof instance.onAbort !== "function") {
+      throw new Error(
+        `Connector '${name}' declares effectBoundary "outlives-call" but implements no onAbort(budgetMs) ` +
+          `cleanup hook. An outlives-call effect (actuator / async job / open stream / lease) can't be stopped ` +
+          `by aborting the call, so a run deadline could not bound it. Implement onAbort() to stop the effect ` +
+          `within its budget, or declare effectBoundary "call-bounded" if the effect is fully bounded by call().`,
+      );
+    }
     this.mcpConnectors.set(name, {
       instance,
       ctor: ctorOf(instance) as McpConnectorClass,

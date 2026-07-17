@@ -11,6 +11,7 @@
 import { describe, it, expect } from "vitest";
 import { parse } from "../src/parser.js";
 import { execute } from "../src/runtime.js";
+import { lint } from "../src/lint.js";
 import { Registry } from "../src/connectors/registry.js";
 
 /** ctx that runs shell ops, with an already-expired run deadline injected. */
@@ -59,6 +60,66 @@ describe("Phase 1 — `# Deadline:` parsing (scope item 1)", () => {
     expect(p.parseErrors).toEqual([]);
     expect(p.timeout).toBe(5);
     expect(p.deadline).toBe(60);
+  });
+});
+
+describe("Phase 1 — guardrails (nudge lint + outlives-call registration guard)", () => {
+  it("nudge: a skill with an external dispatch and no `# Deadline:` gets a tier-3 advisory", async () => {
+    const r = await lint(`# Status: Approved
+# Skill: t
+default: run
+run:
+    shell(command="curl https://x") -> A
+`, { shellAllowlist: ["curl"] });
+    const f = r.findings.find((x) => x.rule === "unbounded-no-deadline");
+    expect(f).toBeDefined();
+    expect(f!.severity).toBe("info");
+  });
+
+  it("nudge: does NOT fire when `# Deadline:` is present", async () => {
+    const r = await lint(`# Status: Approved
+# Skill: t
+# Deadline: 30
+default: run
+run:
+    shell(command="curl https://x") -> A
+`, { shellAllowlist: ["curl"] });
+    expect(r.findings.find((x) => x.rule === "unbounded-no-deadline")).toBeUndefined();
+  });
+
+  it("nudge: does NOT fire for a pure-compute skill (no external dispatch)", async () => {
+    const r = await lint(`# Status: Approved
+# Skill: t
+default: run
+run:
+    $set X = "hi"
+    emit(text="\${X}")
+`);
+    expect(r.findings.find((x) => x.rule === "unbounded-no-deadline")).toBeUndefined();
+  });
+
+  it("test (j): registering an outlives-call connector with no onAbort throws (leak-prevention)", () => {
+    const registry = new Registry();
+    const bad = {
+      effectBoundary: "outlives-call" as const,
+      async call() { return "x"; },
+      async manifest() { return { capabilities_version: "1", manifest: { kind: "mock" } }; },
+      // no onAbort
+    };
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    expect(() => registry.registerMcpConnector("robot", bad as any)).toThrow(/outlives-call.*onAbort/s);
+  });
+
+  it("registering an outlives-call connector WITH onAbort is fine", () => {
+    const registry = new Registry();
+    const ok = {
+      effectBoundary: "outlives-call" as const,
+      async call() { return "x"; },
+      async manifest() { return { capabilities_version: "1", manifest: { kind: "mock" } }; },
+      async onAbort() { /* stop */ },
+    };
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    expect(() => registry.registerMcpConnector("robot", ok as any)).not.toThrow();
   });
 });
 

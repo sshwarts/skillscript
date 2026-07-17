@@ -3751,6 +3751,43 @@ const ADDRESS_ROUTED_WAKE_INFO: LintRule = {
   },
 };
 
+/**
+ * Adoption nudge for the deadlines feature (Perry spec de11dcc5). A skill that
+ * performs an external/effectful dispatch (`$` / `shell` / `notify`) but declares
+ * no `# Deadline:` has no total wall-clock bound — the run and everything it
+ * composes can hang unboundedly on one slow dispatch. Opt-in feature, so this is
+ * a tier-3 advisory (not op-count-based: a single `$ llm` is enough to be
+ * unbounded). Predicate: ≥1 unbounded dispatch AND no `# Deadline:`.
+ */
+const UNBOUNDED_NO_DEADLINE: LintRule = {
+  id: "unbounded-no-deadline",
+  severity: "info",
+  description:
+    "A skill with an external/effectful dispatch ($, shell, notify) but no `# Deadline:` has no total wall-clock bound; the run (and its execute_skill tree) can hang on a slow dispatch.",
+  remediation:
+    "Add a `# Deadline: N` header (seconds) to bound the whole run + everything it composes. Opt-in — without it the skill keeps per-op timeouts only, which don't bound the total.",
+  check: (ctx) => {
+    if (ctx.parsed.deadline !== null) return [];
+    let firstTarget: string | undefined;
+    for (const [targetName, target] of ctx.parsed.targets) {
+      const collect = (op: SkillOp): void => {
+        if (firstTarget === undefined && (op.kind === "$" || op.kind === "shell" || op.kind === "notify")) {
+          firstTarget = targetName;
+        }
+      };
+      walkOps(target.ops, collect);
+      if (target.elseBlock !== undefined) walkOps(target.elseBlock, collect);
+    }
+    if (firstTarget === undefined) return [];
+    return [{
+      rule: "unbounded-no-deadline",
+      severity: "info" as const,
+      message: `Skill performs an external/effectful dispatch (target '${firstTarget}') but declares no \`# Deadline:\` — the run has no total wall-clock bound.`,
+      block: firstTarget,
+    }];
+  },
+};
+
 const RULES: LintRule[] = [
   // Tier-1 (error)
   PARSE_ERROR,
@@ -3833,6 +3870,7 @@ const RULES: LintRule[] = [
   BODY_TEMPLATE_DETECTED,
   EMIT_WITH_TEMPLATE,
   REMOTE_RESULT_NEEDS_PARSE,
+  UNBOUNDED_NO_DEADLINE,
 ];
 
 /** Read-only view of the rule registry — for tooling that introspects v1 rules. */
