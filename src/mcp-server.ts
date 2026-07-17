@@ -950,6 +950,11 @@ export class McpServer {
         fallbacks: result.fallbacks,
         agent_delivery_receipts: result.agent_delivery_receipts,
         agent_wake_receipts: result.agent_wake_receipts,
+        // Deadline outcome (# Deadline:). Present only when the run hit its bound:
+        // `deadline_exceeded: true` = partial result, terminated early; and any
+        // mutations cut mid-flight surface in `uncertain_effects[]`.
+        ...(result.deadline_exceeded ? { deadline_exceeded: true } : {}),
+        ...(result.uncertain_effects !== undefined ? { uncertain_effects: result.uncertain_effects } : {}),
         mechanical,
       };
     } catch (err) {

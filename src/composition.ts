@@ -88,6 +88,10 @@ export interface ExecuteSkillResult {
    * empty when no `@session` addresses were dispatched.
    */
   agent_wake_receipts: ExecuteResult["agentWakeReceipts"];
+  /** True when the run's `# Deadline:` was exceeded (partial result). */
+  deadline_exceeded?: boolean;
+  /** Mutations cut mid-flight by the deadline — "issued, outcome uncertain". */
+  uncertain_effects?: ExecuteResult["uncertainEffects"];
 }
 
 /**
@@ -199,6 +203,8 @@ export async function executeSkillByName(
     fallbacks: result.fallbacks,
     agent_wake_receipts: result.agentWakeReceipts,
     agent_delivery_receipts: result.agentDeliveryReceipts,
+    ...(result.deadlineExceeded ? { deadline_exceeded: true } : {}),
+    ...(result.uncertainEffects !== undefined ? { uncertain_effects: result.uncertainEffects } : {}),
   };
 }
 
@@ -299,6 +305,8 @@ export async function executeSkillFromSource(
     fallbacks: result.fallbacks,
     agent_delivery_receipts: result.agentDeliveryReceipts,
     agent_wake_receipts: result.agentWakeReceipts,
+    ...(result.deadlineExceeded ? { deadline_exceeded: true } : {}),
+    ...(result.uncertainEffects !== undefined ? { uncertain_effects: result.uncertainEffects } : {}),
   };
 }
 

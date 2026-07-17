@@ -37,6 +37,7 @@ export const SKILLSCRIPT_USAGE_INSTRUCTIONS = `A Skillscript runtime is wired ov
 - \`help({topic})\` → the language (ops, frontmatter, composition, error-handling, connectors, lint-codes).
 - Draft → \`lint_skill({source})\` → \`compile_skill({source})\` → \`skill_write({name, source})\`.
 - **Robustness:** a failing fallible op aborts the target (in a fan-out, one failing leg sinks the rest) unless given \`(fallback: "…")\` — which as of v0.27.0 contains any failure shape, including an \`execute_skill\` child-throw and a \`$ json_parse\` off-shape. Use \`else:\` for target-level recovery logic. See \`help({topic: "error-handling"})\`.
+- **Bounding:** a skill with any external dispatch has no total time bound unless you add \`# Deadline: N\` (seconds) — it caps the whole run *and everything it composes*, terminates uncatchably on expiry (op \`(fallback:)\`/\`else:\` can't recover it), and SIGKILLs/cancels in-flight work. Lint nudges (\`unbounded-no-deadline\`) when it's missing. Distinct from \`# Timeout:\` (per-op). See \`help({topic: "frontmatter"})\`.
 - It lands **Draft** — you can't self-approve; a human does. Treat anything you authored as not-yet-runnable until approved.`;
 
 const QUICKSTART = `# Skillscript — quickstart
@@ -83,6 +84,7 @@ The \`$\` prefix marks **state-affecting ops** (mutation OR external dispatch). 
 # Status: Approved                     ← required: Draft | Approved | Disabled
 # Vars: NAME=default-value, OTHER      ← optional: declared variables
 # Tags: morning-brief, ops            ← optional: classification (grouping only; approval-neutral)
+# Deadline: 30                         ← optional: run-total wall-clock bound (seconds), propagates through execute_skill
 # Triggers: cron: 0 9 * * *            ← optional: autonomous-dispatch sources
 
 \${SUMMARY}                             ← body-text-as-output template (optional)
@@ -516,7 +518,8 @@ There is **no** invocation-context inheritance and **no** runtime \`default_agen
 
 ## Performance
 
-- \`# Timeout: <seconds>\` — skill-wide timeout. Falls back to per-op or runtime defaults.
+- \`# Timeout: <seconds>\` — **per-op** timeout (despite the name): each op gets its own budget. Falls back to per-op kwarg or runtime defaults. Does NOT bound the whole run — that's \`# Deadline:\`.
+- \`# Deadline: <seconds>\` — **run-total** wall-clock budget for this skill AND everything it composes via \`execute_skill\`. Opt-in (omit = today's per-op-only behavior). One absolute deadline propagates into child skills by *remaining* (a child can only tighten it, never loosen), so a deep gather can't outlive the root's bound. On expiry the run is **terminated** with a partial result — the deadline is **uncatchable**: op \`(fallback:)\` and target \`else:\` cannot recover it (so a fallback-laden skill can't silently run past its bound). Real cancellation: shell ops are SIGKILL'd; a connector that outlives its call cleans up via \`onAbort()\`; a mutation cut mid-flight is reported "issued, outcome uncertain" (never auto-retried). In the signing hash — editing it drops the skill to Draft (it changes the safety envelope an approver signed).
 
 ## Trigger declaration forms
 
@@ -997,6 +1000,7 @@ Three tiers per ERD §3:
 - \`unparsed-json-field-access\` — op text contains \`$(VAR|json_parse).field\`; the \`|json_parse\` filter is no longer supported. Use \`$ json_parse $(VAR) -> P\` then \`$(P.field)\`.
 - \`object-iteration-advisory\` — \`foreach IT in \${VAR}\` iterates a bound variable whose origin is a \`$\` MCP tool output, without a \`.field\` accessor. MCP tools commonly wrap arrays in an envelope object (\`.items\`, \`.results\`, \`.issuesPage\`, \`.data\`, \`.records\`). Check the tool's response shape; rewrite as \`foreach IT in \${VAR.items}\` (or the correct field).
 - \`append-structured-to-string\` — \`$append VAR \${REF}\` where VAR is a string accumulator and \${REF} is a bare \`$\` op output (possibly a structured list/object) with no \`.field\` accessor and no \`|json\` filter. Appending a structured value to a string stringifies + fragments it (an array-of-objects comma-splits into a mangled blob). Sibling of \`object-iteration-advisory\` — same statically-unknowable return shape, hence advisory not warning. Project a scalar field (\`\${REF.detail}\`) or serialize explicitly (\`\${REF|json}\`); both suppress the advisory.
+- \`unbounded-no-deadline\` — the skill has an external/effectful dispatch (\`$\` / \`shell\` / \`notify\`) but no \`# Deadline:\`, so the run (and everything it composes) has no total wall-clock bound and can hang on one slow dispatch. Add \`# Deadline: N\` (seconds) to bound the whole run + its \`execute_skill\` tree. Advisory only — per-op \`# Timeout:\` doesn't count (it bounds each op, not the total).
 - \`disallowed-tool\` (tier-1) — \`$ name.tool\` references a tool not in the connector's \`allowed_tools\` allowlist. Either rewrite the skill to use a permitted tool or update \`connectors.json\` to grant access. Runtime defense-in-depth refuses disallowed dispatch even if lint is bypassed.
 
 \`compile_skill({source})\` runs the full lint preflight and reports
