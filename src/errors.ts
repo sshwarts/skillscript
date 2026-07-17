@@ -247,6 +247,32 @@ const RESOLVE_BRIDGE_INFO: Record<string, { slot: string; defaultType: string; b
   data_write: { slot: "data_store", defaultType: "sqlite", bridgeName: "the default SQLite DataStore bridge", contract: "DataStore" },
 };
 
+/**
+ * The run-total `# Deadline:` was exceeded. Deliberately extends `Error`, NOT
+ * `OpError` — it is a **run-terminal, UNCATCHABLE** condition: op-level
+ * `(fallback:)` and target `else:` MUST re-throw it rather than recover, so a
+ * fallback-laden skill can't cascade past its own bound and return a
+ * looks-complete result. Only the run boundary in `execute()` catches it, to
+ * return partial results + the effect log. Distinct from `OpTimeoutError` (a
+ * per-op timeout, which IS catchable/recoverable). See the deadline design
+ * (Perry spec de11dcc5, plan 97ac3c5b).
+ */
+export class RunDeadlineExceeded extends Error {
+  constructor(
+    /** The run's `# Deadline:` budget in ms (for diagnostics). */
+    public readonly deadlineMs: number,
+    /** The target executing when the deadline fired. */
+    public readonly target?: string,
+  ) {
+    super(
+      `Run deadline exceeded (# Deadline: ${Math.round(deadlineMs / 1000)}s)` +
+        (target !== undefined ? ` while executing target '${target}'` : "") +
+        `. The run was terminated; partial results + the effect log are returned.`,
+    );
+    this.name = "RunDeadlineExceeded";
+  }
+}
+
 /** An op exceeded its resolved timeout (per-op > skill > built-in). */
 export class OpTimeoutError extends OpError {
   constructor(

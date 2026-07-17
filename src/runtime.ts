@@ -13,6 +13,7 @@ import {
   OpError,
   ConnectorNotFoundError,
   OpTimeoutError,
+  RunDeadlineExceeded,
   UnsafeShellDisabledError,
   ShellBinaryNotAllowedError,
   UnresolvedVariableError,
@@ -293,6 +294,14 @@ export interface ExecuteResult {
    * Parallel to `agentDeliveryReceipts` for the deliver-class path.
    */
   agentWakeReceipts: AgentWakeReceiptRecord[];
+  /**
+   * True when the run's `# Deadline:` was exceeded and the run was terminated
+   * early (uncatchable `RunDeadlineExceeded`). The result is PARTIAL — `errors`
+   * carries the deadline error, `emissions`/`finalVars`/`outputs` hold whatever
+   * completed before the bound. Absent/false on a normal completion. Phase 1 of
+   * the deadlines feature (Perry spec de11dcc5).
+   */
+  deadlineExceeded?: boolean;
 }
 
 export interface AgentDeliveryReceiptRecord {
@@ -492,11 +501,27 @@ export async function execute(
   // v0.9.6 — stash skill identity onto ctx so deep-stack op handlers
   // (notify()) can read for DeliveryMeta without threading `parsed`
   // through every call hop. Internal convention; do not set from outside.
-  ctx = { ...ctx, _currentSkillName: skillName, _currentSkillEventType: parsed.eventType, _currentSkillSecretRequires: parsed.secretRequires };
+  // Run-total deadline (# Deadline:). Resolve ONCE at the root (`ctx.deadlineMs`
+  // undefined) into an absolute wall-clock instant; a child inherits the parent's
+  // instant via this same spread and can only TIGHTEN it with its own
+  // # Deadline: (`min`), never loosen the root bound (Perry decision #2). Opt-in:
+  // no # Deadline: and nothing inherited => undefined => today's per-op behavior.
+  let deadlineMs = ctx.deadlineMs;
+  if (parsed.deadline !== null) {
+    const candidate = nowMs + resolveIntParam(parsed.deadline, vars, "# Deadline:") * 1000;
+    deadlineMs = deadlineMs === undefined ? candidate : Math.min(deadlineMs, candidate);
+  }
+  ctx = { ...ctx, _currentSkillName: skillName, _currentSkillEventType: parsed.eventType, _currentSkillSecretRequires: parsed.secretRequires, ...(deadlineMs !== undefined ? { deadlineMs } : {}) };
   const traceBuilder = shouldTraceFire(ctx.trace, triggerId, skillName)
     ? new TraceBuilder(skillName, ctx.skillVersion ?? "unknown", triggerCtx, { agent_id: ctx.agentId }, ctx.preMintedTraceId)
     : null;
 
+  // Run boundary for the deadline. `RunDeadlineExceeded` is uncatchable by any
+  // op/target machinery (each catch re-throws it); it terminates the target loop
+  // here and the run returns whatever it accumulated so far + the effect log —
+  // it is NEVER thrown to the caller. `deadlineExceeded` marks the outcome.
+  let deadlineExceeded = false;
+  try {
   for (const targetName of order) {
     const target = parsed.targets.get(targetName);
     if (!target) continue;
@@ -515,6 +540,9 @@ export async function execute(
       targetLastBound = r.lastBoundVar;
       targetLastValue = r.lastBoundVar !== null ? vars.get(r.lastBoundVar) : r.lastValue;
     } catch (err) {
+      // Uncatchable-sweep: the run deadline is run-terminal — it must NOT be
+      // recovered by a target `else:`. Re-throw so it reaches the run boundary.
+      if (err instanceof RunDeadlineExceeded) throw err;
       errors.push(buildExecutionError(err, targetName));
       if (target.elseBlock !== undefined) {
         try {
@@ -522,6 +550,7 @@ export async function execute(
           targetLastBound = r.lastBoundVar;
           targetLastValue = r.lastBoundVar !== null ? vars.get(r.lastBoundVar) : r.lastValue;
         } catch (innerErr) {
+          if (innerErr instanceof RunDeadlineExceeded) throw innerErr;
           errors.push(buildExecutionError(innerErr, targetName, "else"));
         }
       } else if (parsed.onError !== null && ctx.fallbackSkillExecutor) {
@@ -543,6 +572,17 @@ export async function execute(
 
     vars.set(`${targetName}.output`, targetLastValue);
     if (targetLastBound !== null) lastBoundVar = targetLastBound;
+  }
+  } catch (err) {
+    // Only the run deadline reaches here (targets catch their own op errors).
+    // Record it and fall through to build the PARTIAL result; never re-throw to
+    // the caller — a deadline is a bounded outcome, not a crash.
+    if (err instanceof RunDeadlineExceeded) {
+      deadlineExceeded = true;
+      errors.push(buildExecutionError(err, err.target ?? "run"));
+    } else {
+      throw err;
+    }
   }
 
   // Outputs map per `# Output:` declarations. Per-kind value semantics:
@@ -624,7 +664,9 @@ export async function execute(
   // capability as the op-level choke. In secured mode an unapproved body cannot
   // deliver to an agent/template, even though its emit-to-transcript ran.
   const deliveryAuthorized = !(isSecuredMode() && ctx.effectsAuthorized !== true);
-  if (ctx.mechanical !== true && deliveryAuthorized) {
+  // Past the deadline is past the deadline: a terminated run does NOT then
+  // dispatch its `# Output: agent:` delivery (that's an effect past the bound).
+  if (ctx.mechanical !== true && deliveryAuthorized && !deadlineExceeded) {
     for (const decl of outputDecls) {
       if (decl.target === undefined) continue;
       // Agent-bound output kinds: literal `===` so TS narrows decl.kind
@@ -709,6 +751,7 @@ export async function execute(
     targetOrder: order,
     agentDeliveryReceipts,
     agentWakeReceipts,
+    ...(deadlineExceeded ? { deadlineExceeded: true } : {}),
   };
 }
 
@@ -1023,7 +1066,7 @@ async function execOpInner(
       // Closes Perry's `adc87d52` cold-author-safety finding.
       if (op.argv !== undefined) {
         const substArgv = op.argv.map((el) => substituteRuntime(el, vars));
-        const shellTimeoutMs = resolveOpTimeoutMs(undefined, skillTimeoutSec, absoluteTimeoutMs, vars);
+        const shellTimeoutMs = resolveOpTimeoutMs(undefined, skillTimeoutSec, absoluteTimeoutMs, vars, ctx.deadlineMs, targetName);
         if (ctx.mechanical === true) {
           const preview = substArgv.join(" ");
           emissions.push(`Would run shell argv: ${preview} (mechanical: true preview).`);
@@ -1075,7 +1118,7 @@ async function execOpInner(
       const body = op.policy === "unsafe"
         ? substituteRuntimeUnsafe(op.body, vars)
         : substituteRuntime(op.body, vars);
-      const shellTimeoutMs = resolveOpTimeoutMs(undefined, skillTimeoutSec, absoluteTimeoutMs, vars);
+      const shellTimeoutMs = resolveOpTimeoutMs(undefined, skillTimeoutSec, absoluteTimeoutMs, vars, ctx.deadlineMs, targetName);
       if (ctx.mechanical === true) {
         const label = op.policy === "unsafe" ? "Would run unsafe shell" : "Would run shell";
         emissions.push(`${label}: ${body} (mechanical: true preview).`);
@@ -1589,7 +1632,7 @@ async function execOpInner(
 
       let rawResult: unknown;
       let dispatched = false;
-      const timeoutMs = resolveOpTimeoutMs(perOpTimeoutSec, skillTimeoutSec, absoluteTimeoutMs, vars);
+      const timeoutMs = resolveOpTimeoutMs(perOpTimeoutSec, skillTimeoutSec, absoluteTimeoutMs, vars, ctx.deadlineMs, targetName);
       // Op-level fallback (per language reference §9, extended to `$` for
       // cold-agent corpus consistency). On dispatch throw, bind the
       // fallback value to the output var; on missing connector with
@@ -1794,14 +1837,30 @@ function resolveOpTimeoutMs(
   skillTimeoutSec: number | string | null,
   absoluteTimeoutMs: number,
   vars: Map<string, unknown>,
+  deadlineMs?: number,
+  targetName?: string,
 ): number {
+  let base: number;
   if (perOpTimeoutSec !== undefined) {
-    return resolveIntParam(perOpTimeoutSec, vars, "timeoutSeconds") * 1000;
+    base = resolveIntParam(perOpTimeoutSec, vars, "timeoutSeconds") * 1000;
+  } else if (skillTimeoutSec !== null) {
+    base = resolveIntParam(skillTimeoutSec, vars, "# Timeout:") * 1000;
+  } else {
+    base = absoluteTimeoutMs;
   }
-  if (skillTimeoutSec !== null) {
-    return resolveIntParam(skillTimeoutSec, vars, "# Timeout:") * 1000;
+  // Run-total deadline (# Deadline:). This is the PRE-DISPATCH fail-fast + clamp,
+  // and it gates EVERY dispatch path (called for `$` and `shell` alike, in the
+  // main body AND inside `(fallback:)`/`else:` bodies). If the deadline has
+  // already passed, throw the uncatchable `RunDeadlineExceeded` before the op
+  // runs — this is the backstop that makes a *missed* catch-site swallow bounded
+  // to "≤1 more op then re-thrown here" rather than unbounded. Otherwise clamp
+  // the op's own timeout down to what's left of the run.
+  if (deadlineMs !== undefined) {
+    const remaining = deadlineMs - Date.now();
+    if (remaining <= 0) throw new RunDeadlineExceeded(deadlineMs, targetName);
+    return Math.min(base, remaining);
   }
-  return absoluteTimeoutMs;
+  return base;
 }
 
 /**

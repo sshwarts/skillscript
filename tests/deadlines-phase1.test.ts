@@ -10,6 +10,17 @@
  */
 import { describe, it, expect } from "vitest";
 import { parse } from "../src/parser.js";
+import { execute } from "../src/runtime.js";
+import { Registry } from "../src/connectors/registry.js";
+
+/** ctx that runs shell ops, with an already-expired run deadline injected. */
+const expiredDeadlineCtx = () => ({
+  agentId: "test",
+  registry: new Registry(),
+  effectsAuthorized: true,
+  shellAllowlist: ["true"],
+  deadlineMs: Date.now() - 1000, // already past
+});
 
 const SKILL = (frontmatter: string) =>
   `# Skill: d\n${frontmatter}\n\ndefault: run\nrun:\n    emit(text="hi")\n`;
@@ -48,5 +59,68 @@ describe("Phase 1 — `# Deadline:` parsing (scope item 1)", () => {
     expect(p.parseErrors).toEqual([]);
     expect(p.timeout).toBe(5);
     expect(p.deadline).toBe(60);
+  });
+});
+
+describe("Phase 1 — deadline enforcement + uncatchable termination (2a: pre-dispatch)", () => {
+  it("an expired deadline fail-fasts the first dispatch op and terminates the run", async () => {
+    const parsed = parse(`# Skill: t
+default: run
+run:
+    shell(command="true") -> A
+    shell(command="true") -> B
+`);
+    const r = await execute(parsed, {}, ["run"], expiredDeadlineCtx());
+    expect(r.deadlineExceeded).toBe(true);
+    expect(r.errors.some((e) => /deadline/i.test(e.message))).toBe(true);
+    // B never ran — the run terminated at the first op.
+    expect(r.finalVars["B"]).toBeUndefined();
+  });
+
+  it("is UNCATCHABLE by op `(fallback:)` — no fallback cascade past the bound", async () => {
+    const parsed = parse(`# Skill: t
+default: run
+run:
+    shell(command="true") -> A (fallback: "fa")
+    shell(command="true") -> B (fallback: "fb")
+`);
+    const r = await execute(parsed, {}, ["run"], expiredDeadlineCtx());
+    expect(r.deadlineExceeded).toBe(true);
+    // The fallbacks did NOT fire — the deadline bypassed them (pre-dispatch),
+    // so the run doesn't return a looks-complete result.
+    expect(r.fallbacks).toEqual([]);
+    expect(r.finalVars["A"]).not.toBe("fa");
+    expect(r.finalVars["B"]).toBeUndefined();
+  });
+
+  it("is UNCATCHABLE by a target `else:` — the else block does NOT run", async () => {
+    const parsed = parse(`# Skill: t
+default: run
+run:
+    shell(command="true") -> A
+else:
+    shell(command="true") -> RECOVERED
+`);
+    const r = await execute(parsed, {}, ["run"], expiredDeadlineCtx());
+    expect(r.deadlineExceeded).toBe(true);
+    // else: is the throw-container for op errors, but a run deadline is NOT
+    // recoverable — the else block must not have executed.
+    expect(r.finalVars["RECOVERED"]).toBeUndefined();
+  });
+
+  it("no `# Deadline:` and no injected deadline → today's behavior, unchanged", async () => {
+    const parsed = parse(`# Skill: t
+default: run
+run:
+    shell(command="true") -> A
+`);
+    const r = await execute(parsed, {}, ["run"], {
+      agentId: "test",
+      registry: new Registry(),
+      effectsAuthorized: true,
+      shellAllowlist: ["true"],
+    });
+    expect(r.deadlineExceeded).toBeUndefined();
+    expect(r.errors).toEqual([]);
   });
 });
