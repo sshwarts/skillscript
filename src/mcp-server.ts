@@ -127,6 +127,14 @@ export interface McpServerDeps {
    * See `ExecuteContext.shellAllowlist` for full semantic.
    */
   shellAllowlist?: string[];
+  /**
+   * Operator maximum run duration (ms) — a hard ceiling on every agent-invoked
+   * `execute_skill`, threaded into each dispatch ctx. Bounds a run even when its
+   * skill declares no `# Deadline:`; a skill's own deadline can only tighten it.
+   * The guard against an untrusted (agent) author evading the bound. From
+   * `SKILLSCRIPT_MAX_DEADLINE_SECONDS`.
+   */
+  maxDeadlineMs?: number;
   /** v1.0 Gate #7 — filesystem path allowlist threaded into the execute_skill
    * dispatch ctx so the runtime enforces file_read/file_write path bounds. */
   fsAllowlist?: string[];
@@ -924,6 +932,9 @@ export class McpServer {
       ...(this.deps.secretProvider !== undefined ? { secretProvider: this.deps.secretProvider } : {}),
       ...(agentId !== undefined ? { agentId } : {}),
       ...(callerCtx?.callerIdentity !== undefined ? { callerAgentId: callerCtx.callerIdentity } : {}),
+      // Operator run-deadline ceiling — bounds every agent-invoked execute_skill,
+      // even one whose skill declares no # Deadline (the cheating-agent guard).
+      ...(this.deps.maxDeadlineMs !== undefined ? { maxDeadlineMs: this.deps.maxDeadlineMs } : {}),
     } satisfies import("./runtime.js").ExecuteContext;
 
     try {

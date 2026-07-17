@@ -132,6 +132,17 @@ export interface ExecuteContext {
    */
   deadlineMs?: number;
   /**
+   * Operator-set MAXIMUM run duration (ms) — a hard ceiling that bounds EVERY
+   * run, enforced at the root. Set from `SKILLSCRIPT_MAX_DEADLINE_SECONDS`. It's
+   * the guard against an untrusted skill author (an agent) evading the bound:
+   * a run with NO `# Deadline:` is still capped at this max, and a skill's own
+   * `# Deadline:` can only make its bound *tighter* (`min`), never exceed it.
+   * Undefined = no operator ceiling (a skill without `# Deadline:` is unbounded,
+   * today's default). Defense-in-depth alongside secured-mode approval — the
+   * approver may not notice a missing/inflated deadline; this is structural.
+   */
+  maxDeadlineMs?: number;
+  /**
    * Enables `@ unsafe <command>` dispatch via full bash shell. Default
    * `false` — `@ unsafe` ops fail with `UnsafeShellDisabledError`. Per
    * Section 4 Security: operators opt in explicitly per deployment; lint
@@ -527,6 +538,16 @@ export async function execute(
   // # Deadline: (`min`), never loosen the root bound (Perry decision #2). Opt-in:
   // no # Deadline: and nothing inherited => undefined => today's per-op behavior.
   let deadlineMs = ctx.deadlineMs;
+  // Operator ceiling FIRST: it bounds every run, even one with no `# Deadline:`,
+  // so an untrusted author can't evade the bound by omitting it. `min` with any
+  // inherited/injected deadline keeps the tighter. (Harmless to re-apply in a
+  // child — the inherited root bound is always ≤ a fresh child ceiling.)
+  if (ctx.maxDeadlineMs !== undefined) {
+    const opMaxInstant = nowMs + ctx.maxDeadlineMs;
+    deadlineMs = deadlineMs === undefined ? opMaxInstant : Math.min(deadlineMs, opMaxInstant);
+  }
+  // A skill's own `# Deadline:` can only TIGHTEN — never loosen past the operator
+  // ceiling or the inherited parent bound.
   if (parsed.deadline !== null) {
     const candidate = nowMs + resolveIntParam(parsed.deadline, vars, "# Deadline:") * 1000;
     deadlineMs = deadlineMs === undefined ? candidate : Math.min(deadlineMs, candidate);

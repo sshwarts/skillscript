@@ -104,6 +104,53 @@ describe("Phase 1 — execute_skill tree propagation (the confirmed original hol
   });
 });
 
+describe("Phase 1 — operator max-deadline ceiling (the cheating-agent guard)", () => {
+  const opMaxCtx = (extra) => ({
+    agentId: "test",
+    registry: new Registry(),
+    effectsAuthorized: true,
+    shellAllowlist: ["sleep"],
+    maxDeadlineMs: 150, // operator ceiling
+    ...extra,
+  });
+
+  it("bounds a skill that declares NO `# Deadline:` (an agent can't evade by omitting it)", async () => {
+    const parsed = parse(`# Skill: t
+default: run
+run:
+    shell(command="sleep 8") -> A
+`);
+    const start = Date.now();
+    const r = await execute(parsed, {}, ["run"], opMaxCtx());
+    expect(r.deadlineExceeded).toBe(true);          // bounded despite no # Deadline
+    expect(Date.now() - start).toBeLessThan(1200);  // ~150ms, not 8s
+  });
+
+  it("caps a skill declaring a HUGE `# Deadline:` — a skill can't loosen past the operator max", async () => {
+    const parsed = parse(`# Skill: t
+# Deadline: 99999
+default: run
+run:
+    shell(command="sleep 8") -> A
+`);
+    const start = Date.now();
+    const r = await execute(parsed, {}, ["run"], opMaxCtx());
+    expect(r.deadlineExceeded).toBe(true);          // the 99999s deadline is capped at the 150ms operator max
+    expect(Date.now() - start).toBeLessThan(1200);
+  });
+
+  it("a skill with no external dispatch + no deadline runs fine even under an operator ceiling", async () => {
+    const parsed = parse(`# Skill: t
+default: run
+run:
+    $set X = "hi"
+`);
+    const r = await execute(parsed, {}, ["run"], opMaxCtx());
+    expect(r.deadlineExceeded).toBeUndefined();     // fast op finishes well under the ceiling
+    expect(r.errors).toEqual([]);
+  });
+});
+
 describe("Phase 1 — guardrails (nudge lint + outlives-call registration guard)", () => {
   it("nudge: a skill with an external dispatch and no `# Deadline:` gets a tier-3 advisory", async () => {
     const r = await lint(`# Status: Approved

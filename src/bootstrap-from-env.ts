@@ -84,6 +84,7 @@ export async function bootstrapFromEnv(opts: BootstrapFromEnvOptions = {}): Prom
   const forceAlwaysDraft = boolEnv(process.env["SKILLSCRIPT_FORCE_ALWAYS_DRAFT"]) ?? fileConfig.forceAlwaysDraft;
   const pollIntervalSeconds = posIntEnv(process.env["SKILLSCRIPT_POLL_INTERVAL_SECONDS"]) ?? fileConfig.pollIntervalSeconds;
   const absoluteTimeoutMs = posIntEnv(process.env["SKILLSCRIPT_ABSOLUTE_TIMEOUT_MS"]) ?? fileConfig.absoluteTimeoutMs;
+  const maxDeadlineSeconds = posIntEnv(process.env["SKILLSCRIPT_MAX_DEADLINE_SECONDS"]) ?? fileConfig.maxDeadlineSeconds;
   const maxRecursionDepth = posIntEnv(process.env["SKILLSCRIPT_MAX_RECURSION_DEPTH"], 1) ?? fileConfig.maxRecursionDepth;
   const shellAllowlist = listEnv(process.env["SKILLSCRIPT_SHELL_ALLOWLIST"]) ?? fileConfig.shellAllowlist;
   const fsAllowlist = listEnv(process.env["SKILLSCRIPT_FS_ALLOWLIST"]) ?? fileConfig.fsAllowlist;
@@ -97,6 +98,7 @@ export async function bootstrapFromEnv(opts: BootstrapFromEnvOptions = {}): Prom
     mode,
     ...(pollIntervalSeconds !== undefined ? { pollIntervalSeconds } : {}),
     ...(absoluteTimeoutMs !== undefined ? { absoluteTimeoutMs } : {}),
+    ...(maxDeadlineSeconds !== undefined ? { maxDeadlineSeconds } : {}),
     ...(maxRecursionDepth !== undefined ? { maxRecursionDepth } : {}),
     ...(shellAllowlist !== undefined ? { shellAllowlist } : {}),
     ...(fsAllowlist !== undefined ? { fsAllowlist } : {}),

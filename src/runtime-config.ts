@@ -44,6 +44,14 @@ export interface SkillscriptConfig {
    */
   absoluteTimeoutMs?: number;
   /**
+   * Operator run-deadline ceiling in SECONDS — a hard maximum on every run,
+   * enforced even when a skill declares no `# Deadline:`; a skill's own deadline
+   * can only tighten it. The guard against an untrusted (agent) author evading
+   * the bound. Env-var override: `SKILLSCRIPT_MAX_DEADLINE_SECONDS=N` takes
+   * precedence. Undefined = no ceiling.
+   */
+  maxDeadlineSeconds?: number;
+  /**
    * v0.18.7 — composition recursion depth ceiling. Default 10
    * (DEFAULT_MAX_RECURSION_DEPTH). Adopters with deeply composing skill
    * suites bump this. Env-var override:
@@ -189,6 +197,13 @@ export function loadSkillscriptConfig(opts: LoadSkillscriptConfigOpts): LoadSkil
     }
   }
 
+  if (obj["maxDeadlineSeconds"] !== undefined) {
+    if (typeof obj["maxDeadlineSeconds"] !== "number" || !Number.isInteger(obj["maxDeadlineSeconds"]) || obj["maxDeadlineSeconds"] <= 0) {
+      errors.push(`skillscript.config.json: field 'maxDeadlineSeconds' must be a positive integer (seconds).`);
+    } else {
+      config.maxDeadlineSeconds = obj["maxDeadlineSeconds"];
+    }
+  }
   if (obj["absoluteTimeoutMs"] !== undefined) {
     if (typeof obj["absoluteTimeoutMs"] !== "number" || !Number.isInteger(obj["absoluteTimeoutMs"]) || obj["absoluteTimeoutMs"] <= 0) {
       errors.push(`skillscript.config.json: field 'absoluteTimeoutMs' must be a positive integer (milliseconds).`);

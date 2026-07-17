@@ -84,6 +84,15 @@ export interface BootstrapOpts {
    */
   absoluteTimeoutMs?: number;
   /**
+   * Operator run-deadline ceiling in SECONDS — a hard maximum on every run
+   * (MCP `execute_skill` + trigger-fired), enforced even when the skill declares
+   * no `# Deadline:`; a skill's own deadline can only tighten it. The guard
+   * against an untrusted (agent) author evading the bound. Cascade: bootstrap
+   * opt > `SKILLSCRIPT_MAX_DEADLINE_SECONDS` env >
+   * `skillscript.config.json#maxDeadlineSeconds`. Undefined = no ceiling.
+   */
+  maxDeadlineSeconds?: number;
+  /**
    * v0.18.7 — composition recursion depth ceiling. Default 10
    * (`DEFAULT_MAX_RECURSION_DEPTH`). Threaded into the Scheduler's
    * ctx so every trigger-fired dispatch inherits it. Adopter cascade
@@ -487,6 +496,8 @@ export function bootstrap(opts: BootstrapOpts): BootstrapResult {
   const resolvedPollIntervalSeconds = pickEnvOptionalOption(opts.pollIntervalSeconds, envCfg.pollIntervalSeconds);
   const resolvedAbsoluteTimeoutMs = pickEnvOptionalOption(opts.absoluteTimeoutMs, envCfg.absoluteTimeoutMs);
   const resolvedMaxRecursionDepth = pickEnvOptionalOption(opts.maxRecursionDepth, envCfg.maxRecursionDepth);
+  const resolvedMaxDeadlineSeconds = pickEnvOptionalOption(opts.maxDeadlineSeconds, envCfg.maxDeadlineSeconds);
+  const resolvedMaxDeadlineMs = resolvedMaxDeadlineSeconds !== undefined ? resolvedMaxDeadlineSeconds * 1000 : undefined;
   const mode = opts.mode ?? "dashboard";
 
   // v0.4.0 — register the MCP connectors from the pre-loaded connectors.json
@@ -541,6 +552,7 @@ export function bootstrap(opts: BootstrapOpts): BootstrapResult {
     secretProvider,
     ...(resolvedPollIntervalSeconds !== undefined ? { pollIntervalSeconds: resolvedPollIntervalSeconds } : {}),
     ...(resolvedAbsoluteTimeoutMs !== undefined ? { absoluteTimeoutMs: resolvedAbsoluteTimeoutMs } : {}),
+    ...(resolvedMaxDeadlineMs !== undefined ? { maxDeadlineMs: resolvedMaxDeadlineMs } : {}),
     ...(resolvedMaxRecursionDepth !== undefined ? { maxRecursionDepth: resolvedMaxRecursionDepth } : {}),
     ...(resolvedShellAllowlist !== undefined ? { shellAllowlist: resolvedShellAllowlist } : {}),
     ...(resolvedFsAllowlist !== undefined ? { fsAllowlist: resolvedFsAllowlist } : {}),
@@ -563,6 +575,7 @@ export function bootstrap(opts: BootstrapOpts): BootstrapResult {
     runtimeMode: mode,
     ...(resolvedShellAllowlist !== undefined ? { shellAllowlist: resolvedShellAllowlist } : {}),
     ...(resolvedFsAllowlist !== undefined ? { fsAllowlist: resolvedFsAllowlist } : {}),
+    ...(resolvedMaxDeadlineMs !== undefined ? { maxDeadlineMs: resolvedMaxDeadlineMs } : {}),
     ...(opts.triggersFilePath !== undefined ? { triggersFilePath: opts.triggersFilePath } : {}),
     ...(resolvedForceAlwaysDraft === true ? { forceAlwaysDraft: true } : {}),
   });

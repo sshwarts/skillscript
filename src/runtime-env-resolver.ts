@@ -42,6 +42,8 @@ export interface RuntimeEnvConfig {
   // Runtime tuning
   pollIntervalSeconds?: number;
   absoluteTimeoutMs?: number;
+  /** Operator run-deadline ceiling in SECONDS (SKILLSCRIPT_MAX_DEADLINE_SECONDS). */
+  maxDeadlineSeconds?: number;
   maxRecursionDepth?: number;
   // Shell allowlist
   shellAllowlist?: string[];
@@ -105,6 +107,14 @@ export function resolveRuntimeConfigFromEnv(env: NodeJS.ProcessEnv = process.env
   if (timeoutRaw !== undefined) {
     const n = Number(timeoutRaw);
     if (Number.isInteger(n) && n > 0) config.absoluteTimeoutMs = n;
+  }
+
+  // SKILLSCRIPT_MAX_DEADLINE_SECONDS — positive integer (operator run-deadline
+  // ceiling; bounds every run even one with no # Deadline). Stored as seconds.
+  const maxDeadlineRaw = env["SKILLSCRIPT_MAX_DEADLINE_SECONDS"];
+  if (maxDeadlineRaw !== undefined) {
+    const n = Number(maxDeadlineRaw);
+    if (Number.isInteger(n) && n > 0) config.maxDeadlineSeconds = n;
   }
 
   // SKILLSCRIPT_MAX_RECURSION_DEPTH — positive integer >= 1

@@ -83,6 +83,8 @@ export interface SchedulerConfig {
   /** v1.0 Gate #7 — filesystem path allowlist for file_read/file_write. */
   fsAllowlist?: string[];
   absoluteTimeoutMs?: number;
+  /** Operator run-deadline ceiling (ms) — bounds every trigger-fired run. */
+  maxDeadlineMs?: number;
   /**
    * v0.18.7 — composition recursion-depth ceiling (default 10). Threaded
    * into the per-dispatch ctx so trigger-fired skills inherit it.
@@ -127,6 +129,7 @@ export class Scheduler {
   private readonly shellAllowlist: string[] | undefined;
   private readonly fsAllowlist: string[] | undefined;
   private readonly absoluteTimeoutMs: number | undefined;
+  private readonly maxDeadlineMs: number | undefined;
   private readonly maxRecursionDepth: number | undefined;
   private readonly trace: TraceConfig | undefined;
   private readonly traceStore: TraceStore | undefined;
@@ -147,6 +150,7 @@ export class Scheduler {
     this.shellAllowlist = config.shellAllowlist;
     this.fsAllowlist = config.fsAllowlist;
     this.absoluteTimeoutMs = config.absoluteTimeoutMs;
+    this.maxDeadlineMs = config.maxDeadlineMs;
     this.maxRecursionDepth = config.maxRecursionDepth;
     this.trace = config.trace;
     this.traceStore = config.traceStore;
@@ -393,6 +397,7 @@ export class Scheduler {
       ...(this.shellAllowlist !== undefined ? { shellAllowlist: this.shellAllowlist } : {}),
       ...(this.fsAllowlist !== undefined ? { fsAllowlist: this.fsAllowlist } : {}),
       ...(this.absoluteTimeoutMs !== undefined ? { absoluteTimeoutMs: this.absoluteTimeoutMs } : {}),
+      ...(this.maxDeadlineMs !== undefined ? { maxDeadlineMs: this.maxDeadlineMs } : {}),
       ...(this.maxRecursionDepth !== undefined ? { maxRecursionDepth: this.maxRecursionDepth } : {}),
       ...(this.trace !== undefined ? { trace: this.trace } : {}),
       ...(this.traceStore !== undefined ? { traceStore: this.traceStore } : {}),
