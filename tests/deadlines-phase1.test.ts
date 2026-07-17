@@ -9,9 +9,13 @@
  * surface (scope item 1).
  */
 import { describe, it, expect } from "vitest";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { parse } from "../src/parser.js";
 import { execute } from "../src/runtime.js";
 import { lint } from "../src/lint.js";
+import { bootstrap } from "../src/bootstrap.js";
 import { Registry } from "../src/connectors/registry.js";
 
 /** ctx that runs shell ops, with an already-expired run deadline injected. */
@@ -60,6 +64,43 @@ describe("Phase 1 — `# Deadline:` parsing (scope item 1)", () => {
     expect(p.parseErrors).toEqual([]);
     expect(p.timeout).toBe(5);
     expect(p.deadline).toBe(60);
+  });
+});
+
+describe("Phase 1 — execute_skill tree propagation (the confirmed original hole)", () => {
+  it("a child's deadline propagates to the ROOT — a deep gather can't outlive the root's shared deadline", async () => {
+    const home = mkdtempSync(join(tmpdir(), "dl-tree-"));
+    try {
+      const wired = bootstrap({
+        skillsDir: join(home, "skills"),
+        traceDir: join(home, "traces"),
+        shellAllowlist: ["sleep"],
+      });
+      // Child sleeps far longer than the root deadline. If the child got a FRESH
+      // budget (the old hole), its sleep would run to its own per-op default; the
+      // shared-instant propagation must cut it at the root's remaining instead.
+      await wired.skillStore.store("child",
+        "# Skill: child\n# Status: Approved\n\ndefault: run\nrun:\n    shell(command=\"sleep 5\") -> C\n");
+      const parent = parse(
+        "# Skill: parent\n# Status: Approved\n\ndefault: run\nrun:\n    $ execute_skill name=\"child\" -> R\n");
+
+      const start = Date.now();
+      const r = await execute(parent, {}, ["run"], {
+        agentId: "test",
+        registry: wired.registry,
+        effectsAuthorized: true,
+        shellAllowlist: ["sleep"],
+        deadlineMs: Date.now() + 300,
+      });
+      const elapsed = Date.now() - start;
+
+      expect(r.deadlineExceeded).toBe(true);       // the whole tree aborted at the root
+      expect(elapsed).toBeLessThan(1500);          // cut at ~300ms, NOT the child's 5s sleep
+      // The cut shell op inside the CHILD propagated up to the root's uncertain-log.
+      expect(r.uncertainEffects?.[0]?.opKind).toBe("shell");
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
   });
 });
 
