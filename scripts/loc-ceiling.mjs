@@ -264,7 +264,13 @@ const CORE_PATHS = [
 // `scrubbedShellEnv` helper + its security-rationale doc-comment on the single
 // shell spawn. Most of the growth is the load-bearing rationale comment (why
 // secret vars are scrubbed but egress vars preserved). Signal-not-budget.
-const NARROW_MAX_LOC = 12400;
+// v0.35.0 (WIP): nudged 12400 → 12700 for the first-class deadlines &
+// cancellation feature (Perry spec de11dcc5, plan 97ac3c5b) — # Deadline: parse,
+// the ctx.deadlineMs propagation + min(base, remaining) clamp, RunDeadlineExceeded
+// + the uncatchable catch-site sweep, and the mid-flight expiry wiring across
+// dispatchWithTimeout/execShellCommand. Headroom reserved for the rest of Phase 1
+// (onAbort, uncertain-log, honors|abandons, nudge lint); finalized at ship.
+const NARROW_MAX_LOC = 12700;
 const NARROW_MAX_FILES = 23;
 const BROAD_INFO_LOC = 9500;
 const BROAD_INFO_FILES = 28;

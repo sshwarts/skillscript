@@ -575,9 +575,13 @@ export async function execute(
   }
   } catch (err) {
     // Only the run deadline reaches here (targets catch their own op errors).
-    // Record it and fall through to build the PARTIAL result; never re-throw to
-    // the caller — a deadline is a bounded outcome, not a crash.
     if (err instanceof RunDeadlineExceeded) {
+      // In a composition CHILD (recursionDepth > 0), PROPAGATE so the whole tree
+      // aborts as one unit — the parent's execute_skill intercept re-throws it up
+      // to the ROOT, which alone catches it and returns the partial result. This
+      // is why a deep gather can't outlive the root's deadline: the shared instant
+      // fires once and unwinds the entire stack.
+      if ((ctx.recursionDepth ?? 0) > 0) throw err;
       deadlineExceeded = true;
       errors.push(buildExecutionError(err, err.target ?? "run"));
     } else {
@@ -1096,8 +1100,9 @@ async function execOpInner(
           }
           const finalArgv = await Promise.all(realArgv.map((el, i) => spliceSecretsAtSink(el, maskedArgv[i]!.names)));
           const [bin, ...args] = finalArgv;
-          stdoutArgv = await execShellCommand(bin!, args, shellTimeoutMs);
+          stdoutArgv = await execShellCommand(bin!, args, shellTimeoutMs, ctx.deadlineMs);
         } catch (err) {
+          if (err instanceof RunDeadlineExceeded) throw err; // uncatchable-sweep
           if (shellFallback !== undefined) {
             return recordShellFallback(shellFallback, redactSecrets(`shell argv failed: ${messageOf(err)}`));
           }
@@ -1161,7 +1166,7 @@ async function execOpInner(
           // argv/`ps` leak window; vault-era sink-aware injection closes it).
           // Unsafe shell is operator-gated, so a secret here is deliberate.
           const finalBody = await spliceSecretsAtSink(realBody, names);
-          stdout = await execShellCommand("bash", ["-c", finalBody], shellTimeoutMs);
+          stdout = await execShellCommand("bash", ["-c", finalBody], shellTimeoutMs, ctx.deadlineMs);
         } else {
           const tokens = tokenizeShellArgs(realBody);
           if (tokens.length === 0) {
@@ -1184,9 +1189,10 @@ async function execOpInner(
           // spaces/quotes stays one argv element and never reaches a shell.
           const finalTokens = await Promise.all(tokens.map((t) => spliceSecretsAtSink(t, names)));
           const [bin, ...args] = finalTokens;
-          stdout = await execShellCommand(bin!, args, shellTimeoutMs);
+          stdout = await execShellCommand(bin!, args, shellTimeoutMs, ctx.deadlineMs);
         }
       } catch (err) {
+        if (err instanceof RunDeadlineExceeded) throw err; // uncatchable-sweep
         if (shellFallback !== undefined) {
           return recordShellFallback(shellFallback, redactSecrets(`shell failed: ${messageOf(err)}`));
         }
@@ -1507,6 +1513,10 @@ async function execOpInner(
           if (op.outputVar !== undefined) vars.set(op.outputVar, childResult);
           return { lastBoundVar: op.outputVar ?? flatKey, lastValue: childResult };
         } catch (err) {
+          // Uncatchable-sweep: a child that hit the (shared) run deadline
+          // propagates `RunDeadlineExceeded` up — the whole tree aborts; this
+          // intercept must NOT convert it to the parent's `(fallback:)`.
+          if (err instanceof RunDeadlineExceeded) throw err;
           // v0.27.0 — `(fallback:)` now contains a RAISED THROW from the
           // execute_skill intercept (a child whose execute() escapes a throw —
           // e.g. its output template references an unset var), not just a
@@ -1559,6 +1569,10 @@ async function execOpInner(
         try {
           parsed = JSON.parse(input);
         } catch (err) {
+          // Uncatchable-sweep invariant (defensive — json_parse is local/instant
+          // so it can't originate a deadline, but every op-catch re-throws fatal
+          // for the structural guard).
+          if (err instanceof RunDeadlineExceeded) throw err;
           // v0.27.0 — `(fallback:)` contains a json_parse off-shape throw too
           // (uniform trailer semantics; see the execute_skill intercept above).
           // The parse-error message is kept in `fallbacks[].reason`.
@@ -1659,10 +1673,11 @@ async function execOpInner(
             () => connector.call(toolName, dispatchArgs, ctx.agentId !== undefined ? { agentId: ctx.agentId } : undefined),
             timeoutMs,
             "$",
+            ctx.deadlineMs,
           );
           dispatched = true;
         } else if (op.mcpConnector === undefined && ctx.toolDispatch) {
-          rawResult = await dispatchWithTimeout(() => ctx.toolDispatch!(toolName, dispatchArgs), timeoutMs, "$");
+          rawResult = await dispatchWithTimeout(() => ctx.toolDispatch!(toolName, dispatchArgs), timeoutMs, "$", ctx.deadlineMs);
           dispatched = true;
         } else {
           // v0.5.0 item 5 — was a silent stub before (emitted "Would call
@@ -1683,6 +1698,9 @@ async function execOpInner(
           );
         }
       } catch (err) {
+        // Uncatchable-sweep: a mid-flight run-deadline expiry must NOT be
+        // recovered by this op's `(fallback:)` — re-throw it to the boundary.
+        if (err instanceof RunDeadlineExceeded) throw err;
         if (dollarFallback !== undefined) {
           vars.set(flatKey, dollarFallback);
           if (op.outputVar !== undefined) vars.set(op.outputVar, dollarFallback);
@@ -1876,11 +1894,21 @@ async function dispatchWithTimeout<T>(
   fn: () => Promise<T>,
   timeoutMs: number,
   opKind: string,
+  deadlineMs?: number,
 ): Promise<T> {
   let timer: ReturnType<typeof setTimeout> | undefined;
   const timeoutPromise = new Promise<never>((_, reject) => {
     timer = setTimeout(() => {
-      reject(new OpTimeoutError(timeoutMs, opKind));
+      // Mid-flight expiry: `timeoutMs` was already clamped to the run's
+      // remaining (resolveOpTimeoutMs), so if we're at/past the deadline when
+      // the timer fires, this is the RUN deadline, not a mere per-op timeout —
+      // reject the uncatchable `RunDeadlineExceeded` so the op's `(fallback:)`
+      // can't swallow it (the op-catch sweep re-throws it up to the boundary).
+      if (deadlineMs !== undefined && Date.now() >= deadlineMs) {
+        reject(new RunDeadlineExceeded(deadlineMs));
+      } else {
+        reject(new OpTimeoutError(timeoutMs, opKind));
+      }
     }, timeoutMs);
   });
   try {
@@ -1963,7 +1991,7 @@ function scrubbedShellEnv(): NodeJS.ProcessEnv {
  * spawn both the structured `command=`/`argv=` and the `unsafe=true` (`bash
  * -c`) paths funnel through, so the scrub covers every shell egress.
  */
-async function execShellCommand(bin: string, args: string[], timeoutMs: number): Promise<string> {
+async function execShellCommand(bin: string, args: string[], timeoutMs: number, deadlineMs?: number): Promise<string> {
   return new Promise<string>((resolve, reject) => {
     const child = spawn(bin, args, { stdio: ["ignore", "pipe", "pipe"], env: scrubbedShellEnv() });
     let stdout = "";
@@ -1993,7 +2021,14 @@ async function execShellCommand(bin: string, args: string[], timeoutMs: number):
     child.on("close", (code) => {
       clearTimeout(timer);
       if (killed) {
-        reject(new OpTimeoutError(timeoutMs, "shell"));
+        // The SIGKILL above IS real cancellation (the process group is dead —
+        // shell is the day-one `honors` cancellation exemplar). When the kill
+        // was the run deadline (timer clamped to remaining, now at/past it),
+        // reject the uncatchable RunDeadlineExceeded so the shell `(fallback:)`
+        // can't swallow it; otherwise it's a per-op timeout.
+        reject(deadlineMs !== undefined && Date.now() >= deadlineMs
+          ? new RunDeadlineExceeded(deadlineMs)
+          : new OpTimeoutError(timeoutMs, "shell"));
         return;
       }
       if (code !== 0) {

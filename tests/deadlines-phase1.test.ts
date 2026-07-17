@@ -108,6 +108,26 @@ else:
     expect(r.finalVars["RECOVERED"]).toBeUndefined();
   });
 
+  it("MID-FLIGHT expiry: an op in flight when the deadline passes throws the uncatchable deadline (not a swallowed per-op timeout)", async () => {
+    // deadline ~60ms out; the op sleeps longer, so its clamped timer fires AT
+    // the deadline mid-dispatch → RunDeadlineExceeded, bypassing the fallback.
+    const parsed = parse(`# Skill: t
+default: run
+run:
+    shell(command="sleep 1") -> A (fallback: "fa")
+`);
+    const r = await execute(parsed, {}, ["run"], {
+      agentId: "test",
+      registry: new Registry(),
+      effectsAuthorized: true,
+      shellAllowlist: ["sleep"],
+      deadlineMs: Date.now() + 60,
+    });
+    expect(r.deadlineExceeded).toBe(true);
+    expect(r.fallbacks).toEqual([]); // the (fallback:) did NOT catch the deadline
+    expect(r.finalVars["A"]).not.toBe("fa");
+  });
+
   it("no `# Deadline:` and no injected deadline → today's behavior, unchanged", async () => {
     const parsed = parse(`# Skill: t
 default: run
