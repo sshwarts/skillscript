@@ -776,21 +776,27 @@ export async function execute(
       if (decl.kind !== "agent" && decl.kind !== "template") continue;
       const key = `${decl.kind}:${decl.target}`;
       const body = String(outputs[key] ?? emissions.join("\n"));
+      // Resolve `${VAR}` in the delivery TARGET against the run's vars — the same
+      // substitution the body already gets (line ~721). Without it,
+      // `# Output: agent: ${SUPERVISOR_AGENT}` delivers to a phantom agent
+      // literally named "${SUPERVISOR_AGENT}" instead of the resolved id — silent
+      // non-delivery (Perry's supervisor bug; affects any `# Output: agent: ${VAR}`).
+      const resolvedTarget = substituteRuntime(decl.target, vars);
       const agent = ctx.registry.getAgentConnectorOrDefault();
       // v0.9.6 audit Q8 — build DeliveryMeta per the locked v1.0 shape.
       const meta = buildLifecycleMeta(parsed.name, parsed.eventType, ctx);
       // v0.9.2 — P1.1 flag the no-op dispatch case.
       const hasRealConnector = ctx.registry.hasAgentConnector();
-      const routesToWake = isWakeAddress(decl.target);
+      const routesToWake = isWakeAddress(resolvedTarget);
       try {
         if (routesToWake) {
           // v0.18.5 — wake-class dispatch. `body` becomes WakeOpts.context
           // (preamble for the wake message). `agent_id` includes the
           // `@session` suffix — substrate decomposes.
           const wakeOpts: WakeOpts = body.length > 0 ? { context: body } : {};
-          const wakeReceipt = await agent.wake(decl.target, wakeOpts);
+          const wakeReceipt = await agent.wake(resolvedTarget, wakeOpts);
           const enriched = addRoutingWarning(wakeReceipt, "lifecycle-hook routed to wake-class because agent_id contains '@session'");
-          const wakeRecord: AgentWakeReceiptRecord = { agent_id: decl.target, source_kind: decl.kind, receipt: enriched };
+          const wakeRecord: AgentWakeReceiptRecord = { agent_id: resolvedTarget, source_kind: decl.kind, receipt: enriched };
           if (!hasRealConnector) {
             wakeRecord.wake_skipped = true;
             wakeRecord.reason = `No AgentConnector wired for runtime; NoOpAgentConnector accepted but didn't wake. Wire an AgentConnector via registry.registerAgentConnector('primary', <YourImpl>) to enable real wake.`;
@@ -798,9 +804,9 @@ export async function execute(
           agentWakeReceipts.push(wakeRecord);
         } else {
           const receipt = decl.kind === "agent"
-            ? await agent.deliver(decl.target, { kind: "augment", content: body, meta })
-            : await agent.deliver(decl.target, { kind: "template", prompt: body, meta });
-          const record: AgentDeliveryReceiptRecord = { agent_id: decl.target, output_kind: decl.kind, receipt };
+            ? await agent.deliver(resolvedTarget, { kind: "augment", content: body, meta })
+            : await agent.deliver(resolvedTarget, { kind: "template", prompt: body, meta });
+          const record: AgentDeliveryReceiptRecord = { agent_id: resolvedTarget, output_kind: decl.kind, receipt };
           if (!hasRealConnector) {
             record.delivery_skipped = true;
             record.reason = `No AgentConnector wired for runtime; NoOpAgentConnector accepted but didn't deliver. Wire an AgentConnector via registry.registerAgentConnector('primary', <YourImpl>) to enable real delivery.`;
@@ -816,7 +822,7 @@ export async function execute(
         // the dashboard surfaces it, but don't propagate. Skill execution
         // already succeeded by this point.
         process.stderr.write(
-          `[agent-dispatch] ${decl.kind}:${decl.target} (${routesToWake ? "wake" : "deliver"}) failed: ${(err as Error).message}\n`,
+          `[agent-dispatch] ${decl.kind}:${resolvedTarget} (${routesToWake ? "wake" : "deliver"}) failed: ${(err as Error).message}\n`,
         );
       }
     }
