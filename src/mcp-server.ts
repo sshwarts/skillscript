@@ -135,6 +135,13 @@ export interface McpServerDeps {
    * `SKILLSCRIPT_MAX_DEADLINE_SECONDS`.
    */
   maxDeadlineMs?: number;
+  /**
+   * Autonomous-fire failure supervisor config, surfaced via `runtime_capabilities`
+   * so the dashboard can show the on/off state ("supervisor: X configured" /
+   * "none configured") — display-only, the sweep itself runs in the Scheduler.
+   */
+  supervisorSkill?: string;
+  supervisorAgent?: string;
   /** v1.0 Gate #7 — filesystem path allowlist threaded into the execute_skill
    * dispatch ctx so the runtime enforces file_read/file_write path bounds. */
   fsAllowlist?: string[];
@@ -742,7 +749,7 @@ export class McpServer {
             type: "array",
             items: {
               type: "string",
-              enum: ["localModels", "mcpConnectors", "mcpConnectorClasses", "dataStores", "skillStores", "agentConnectors", "shellExecution", "fsExecution", "securedApproval", "runtimeVersion", "runtimeMode", "triggersFilePath"],
+              enum: ["localModels", "mcpConnectors", "mcpConnectorClasses", "dataStores", "skillStores", "agentConnectors", "shellExecution", "fsExecution", "securedApproval", "runtimeVersion", "runtimeMode", "triggersFilePath", "supervisor"],
             },
             description: "Filter which categories to return. Omit for all.",
           },
@@ -1252,6 +1259,14 @@ export class McpServer {
     if (want("runtimeVersion")) out["runtimeVersion"] = this.version;
     if (want("runtimeMode")) out["runtimeMode"] = this.deps.runtimeMode ?? "dashboard";
     if (want("triggersFilePath")) out["triggersFilePath"] = this.deps.triggersFilePath ?? null;
+    if (want("supervisor")) {
+      // The honest on/off state of autonomous-fire failure supervision. null =
+      // none configured (the visible off-state — half of why the no-op preinstall
+      // was rejected). Present = the handler skill (+ optional agent) failures route to.
+      out["supervisor"] = this.deps.supervisorSkill !== undefined
+        ? { skill: this.deps.supervisorSkill, agent: this.deps.supervisorAgent ?? null }
+        : null;
+    }
     if (want("skillStores")) out["skillStores"] = reg ? await Promise.all(reg.listSkillStores().map((e) => describeEntry(e))) : [];
     if (want("dataStores")) out["dataStores"] = reg ? await Promise.all(reg.listDataStores().map((e) => describeEntry(e))) : [];
     if (want("localModels")) out["localModels"] = reg ? await Promise.all(reg.listLocalModels().map((e) => describeEntry(e))) : [];

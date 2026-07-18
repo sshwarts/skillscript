@@ -68,7 +68,7 @@ async function refresh() {
       callTool("skill_list", sl("Disabled")),
       callTool("list_triggers", {}),
       callTool("health_metrics", {}),
-      callTool("runtime_capabilities", { include: ["mcpConnectors", "mcpConnectorClasses", "localModels", "dataStores", "skillStores", "agentConnectors", "securedApproval", "runtimeVersion"] }),
+      callTool("runtime_capabilities", { include: ["mcpConnectors", "mcpConnectorClasses", "localModels", "dataStores", "skillStores", "agentConnectors", "securedApproval", "runtimeVersion", "supervisor"] }),
       // v0.18.9 — blocked shell attempts for the Security view's
       // observe→promote loop. Graceful: pre-v0.18.9 servers don't have
       // this tool; catch returns null and the Security view degrades.
@@ -340,6 +340,27 @@ function fallbackCopy(text, done) {
   document.body.removeChild(ta);
 }
 
+// The honest on/off state of autonomous-fire failure supervision — and it VALIDATES
+// the configured handler: a supervisor pointed at a skill that isn't in the store, or
+// isn't Approved, would only log failures to the stderr floor (never deliver). Catch
+// that here so a misconfigured supervisor is visible, not silently ineffective.
+function renderSupervisorStatus() {
+  const sup = state.capabilities?.supervisor;
+  if (!sup) {
+    return `<span class="badge" title="No SKILLSCRIPT_SUPERVISOR_SKILL set — autonomous failures stay in the trace (pull-only)">none configured</span>`;
+  }
+  const handler = state.skills.find((s) => s.name === sup.skill);
+  const agent = sup.agent ? ` → <code>${esc(sup.agent)}</code>` : "";
+  if (!handler) {
+    return `<span class="badge error" title="Configured, but the handler skill is not in the store — failures will only hit the stderr floor, never delivered">⚠ handler <code>${esc(sup.skill)}</code> NOT FOUND</span>`;
+  }
+  if (handler.status !== "Approved" || handler.gate_ok === false) {
+    const why = handler.gate_ok === false ? "unsigned — needs re-approval" : `${esc(handler.status)} — not approved`;
+    return `<span class="badge error" title="The handler exists but won't run (${why}) — failures will only hit the stderr floor">⚠ handler <code>${esc(sup.skill)}</code> won't run (${why})</span>`;
+  }
+  return `<span class="badge ok"><code>${esc(sup.skill)}</code></span> configured${agent}`;
+}
+
 function renderOverview() {
   const m = state.metrics;
   const totalFires = m?.totalFires ?? 0;
@@ -373,6 +394,7 @@ function renderOverview() {
         <div class="kpi"><div class="label">Triggers</div><div class="value">${triggerCount}</div></div>
         <div class="kpi"><div class="label">Runs (24h)</div><div class="value">${totalFires}</div></div>
       </div>
+      <div style="margin-top: 12px;">Failure supervisor: ${renderSupervisorStatus()}</div>
     </section>
 
     <section>

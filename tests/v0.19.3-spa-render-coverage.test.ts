@@ -427,7 +427,7 @@ describe("dark mode — theming machinery is wired across the SPA assets", () =>
 // Firm principle: the approval-decision surface is NEVER hidden behind a
 // click — Status, What this skill touches, Security signals, Source, and
 // Composes-when-present stay open <section>s. Only telemetry/reference
-// (Metrics, Recent fires, Version history, Triggers) collapses by default,
+// (Metrics, Recent runs, Version history, Triggers) collapses by default,
 // via native <details>. Composes hides entirely when the skill composes
 // nothing (no empty state to spend space on).
 // ────────────────────────────────────────────────────────────────────────
@@ -463,7 +463,7 @@ describe("collapsible review sections — telemetry collapses, decision surface 
 
     // The four reference/telemetry sections collapse.
     expect(summaries).toContain("Metrics (24h)");
-    expect(summaries.some((s) => s.startsWith("Recent fires"))).toBe(true);
+    expect(summaries.some((s) => s.startsWith("Recent runs"))).toBe(true);
     expect(summaries.some((s) => s.startsWith("Version history"))).toBe(true);
     expect(summaries.some((s) => s.startsWith("Triggers"))).toBe(true);
 

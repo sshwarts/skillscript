@@ -607,6 +607,8 @@ export function bootstrap(opts: BootstrapOpts): BootstrapResult {
     ...(resolvedShellAllowlist !== undefined ? { shellAllowlist: resolvedShellAllowlist } : {}),
     ...(resolvedFsAllowlist !== undefined ? { fsAllowlist: resolvedFsAllowlist } : {}),
     ...(resolvedMaxDeadlineMs !== undefined ? { maxDeadlineMs: resolvedMaxDeadlineMs } : {}),
+    ...(resolvedSupervisorAgent !== undefined ? { supervisorAgent: resolvedSupervisorAgent } : {}),
+    ...(resolvedSupervisorSkill !== undefined ? { supervisorSkill: resolvedSupervisorSkill } : {}),
     ...(opts.triggersFilePath !== undefined ? { triggersFilePath: opts.triggersFilePath } : {}),
     ...(resolvedForceAlwaysDraft === true ? { forceAlwaysDraft: true } : {}),
   });
