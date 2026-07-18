@@ -2,6 +2,14 @@
 
 Each release carries an **Upgrade impact:** line (first in its section) so a bump's requirements are visible at a glance. Tags (closed set): **BREAKING** (a manual change is needed to keep working) · **RE-APPROVE** (secured-mode signature invalidation — skills must be re-approved before they run) · **CONFIG** (`connectors.json` / config edit needed) · **none (additive)** (no action; backward-compatible). Standard from 0.20.0 forward; the pre-0.20 transitions that need action are flagged inline below (0.14.0, 0.18.8, 0.19.0). Full walkthrough: [UPGRADING.md](UPGRADING.md).
 
+## 0.36.1 — 2026-07-18 — fix: `# Output: agent:` target interpolation (silent non-delivery)
+
+**Upgrade impact:** none (additive fix) — just upgrade. If you ran a skill with `# Output: agent: ${VAR}` on 0.36.0 it was **silently delivering to nobody**; this fixes it.
+
+**0.36.0 shipped with a real delivery bug, and we own it.** A `# Output: agent: ${VAR}` declaration substituted the message *body* but **not the delivery target** — so it addressed a phantom agent literally named `"${VAR}"` and reached nobody. It affected **any** skill using the `${VAR}` target form; it surfaced through the 0.36.0 supervisor's own example (`# Output: agent: ${SUPERVISOR_AGENT}`), which, as shipped, notified nobody — the failures were detected and the handler *ran*, but its alert went to a nonexistent recipient. Only a live dispatch test could catch it (thanks Perry), since compile-time already resolved the target and every static check passed.
+
+- **Fix:** the runtime's `# Output:` dispatch now resolves the target with `substituteRuntime(target, vars)` — deliver-class, wake-class, the `@session` routing check, and the receipt `agent_id` — the same substitution the body always got. A literal (non-`${VAR}`) target is unchanged.
+
 ## 0.36.0 — 2026-07-18 — autonomous-fire failure supervision
 
 **Upgrade impact:** none (additive), fully opt-in. No supervisor configured (the default) → nothing changes; the trace stays the pull surface. Configuring one **requires scheduler tracing to be on** (the CLI `dashboard`/`serve` path already sets this) — the runtime hard-refuses at boot otherwise, because the supervisor can't see failures it can't read from the trace.

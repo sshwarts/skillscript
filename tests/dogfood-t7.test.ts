@@ -24,8 +24,8 @@ const REPO_ROOT = join(__dirname, "..");
 const PACKAGE_JSON = JSON.parse(readFileSync(join(REPO_ROOT, "package.json"), "utf8")) as Record<string, unknown>;
 
 describe("T7 — package.json polish", () => {
-  it("1. version is 0.36.0 (autonomous-fire failure supervision — scheduler-tick trace-sweeper routes non-clean cron/event runs to a governed handler skill; config source-of-truth SKILLSCRIPT_SUPERVISOR_SKILL/_AGENT; boot-refuse when configured-but-blind; per-fire dedup + by-name loop-guard to a local floor; dashboard Health column + uncertain-effect surfacing + supervisor status line)", () => {
-    expect(PACKAGE_JSON["version"]).toBe("0.36.0");
+  it("1. version is 0.36.1 (fix: `# Output: agent: ${VAR}` delivery target now interpolates against run vars — 0.36.0 substituted the body but not the target, silently delivering to a phantom agent; surfaced by the supervisor's own example pattern)", () => {
+    expect(PACKAGE_JSON["version"]).toBe("0.36.1");
   });
 
   it("2. main + types + bin + engines.node ≥ 22.5 declared", () => {
