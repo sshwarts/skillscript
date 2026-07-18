@@ -52,7 +52,11 @@ AgentConnector — substrate-neutral agent delivery
 
 McpConnector — external tool dispatch (substrate-neutral wire)
   call(toolName, args, ctx?)   "invoke this tool with these kwargs"
+  onAbort(budgetMs)?           "deadline cut an in-flight call — stop your effect within this budget"
+                               (only for effectBoundary: "outlives-call" connectors)
 ```
+
+`ctx.signal` on `call(...)` is an `AbortSignal` the runtime aborts when a deadline (or per-op timeout) cuts the call — forward it to your fetch/RPC to truly cancel. If your effect *outlives* the call (a robot keeps moving after `call()` returns), declare `effectBoundary: "outlives-call"` and implement `onAbort(budgetMs)` for a bounded safety-stop; the runtime refuses to register such a connector without it. Full behavior: [Bounding runs — deadlines & cancellation](#bounding-runs--deadlines--cancellation).
 
 What's NOT in the contracts (and is your concern as implementor):
 - Where the data lives (sqlite / your DB / hosted service / vector store)
@@ -214,6 +218,7 @@ Security knobs that adopters wiring real substrates should know about:
 
 - **The approval boundary (secured mode).** `SKILLSCRIPT_SECURED_MODE=true` enforces that only key-signed skills perform effects. Default-deny by design — leave it off only for trusted-author / single-operator setups. Full detail, the approve flow, and key custody: [Approval + secured mode](#approval--secured-mode).
 - **Filesystem path allowlist.** `SKILLSCRIPT_FS_ALLOWLIST` is default-deny — `file_read` / `file_write` refuse every path until you wire roots. See [Filesystem path allowlist](#filesystem-path-allowlist). (Keep your approval-key directory out of it.)
+- **Run deadline ceiling.** `SKILLSCRIPT_MAX_DEADLINE_SECONDS` caps the wall-clock time of *every* run — enforced even for a skill that declares no `# Deadline:`, so an agent author can't evade it by omission. Unset = no ceiling. See [Bounding runs — deadlines & cancellation](#bounding-runs--deadlines--cancellation). Set a small value on a robotic / latency-sensitive host.
 - **Per-connector tool allowlists** — `allowed_tools` on each `connectors.json` MCP connector entry restricts which tools that connector can dispatch. Three-state (`undefined` = allow all, `[]` = allow none, listed = exactly those). Tier-1 `disallowed-tool` lint + runtime defense-in-depth refuse out-of-list dispatch. **`allowed_tools` belongs at the entry top-level**, sibling to `class` and `config` — NOT inside the `config` block. The loader hard-errors on misplacement (placing it inside `config:` would silently allow-all every tool — the worst-case failure mode for a security control). See `docs/configuration.md` §"Named MCP connector instances" for the JSON shape.
 - **Shell-execution discipline** — `shell(command="...")` runs structured-spawn by default (binary on PATH, whitespace-tokenized argv, no bash). `shell(command="...", unsafe=true)` opts into bash interpretation (pipes, `$VAR`, command substitution) and refuses to fire unless the runtime is configured with `enable_unsafe_shell = true` in `config.toml`. Lint flags every `unsafe=true` op tier-2 to keep audit posture visible. See `scaffold/config.toml` for the documented default + `help({topic:"lint-codes"})` for the `unsafe-shell-disabled` rule.
 
@@ -630,6 +635,21 @@ SKILLSCRIPT_FS_ALLOWLIST=/srv/skillscript/workspace,/var/skillscript/events
 ```
 
 TOCTOU note: the check resolves the real path at call time; a symlink swapped between check and open is a residual closed by fd-based opens later. Checking the resolved real path is the standard mitigation shipped today.
+
+## Bounding runs — deadlines & cancellation
+
+**A skill can declare a `# Deadline: N` (seconds) — a wall-clock budget for the whole run — and the operator can impose a hard ceiling on every run.** This is the time-bounding boundary, alongside the shell / fs / secret boundaries above. It matters most for autonomous fires and for connectors whose effects touch the physical world (a robot, a long external job): "timeout" should mean both *bounded* and *actually stopped*, and here it does.
+
+| Operator switch | Controls |
+|---|---|
+| `SKILLSCRIPT_MAX_DEADLINE_SECONDS` | A hard maximum on **every** run, enforced even when a skill declares no `# Deadline:`. A skill's own `# Deadline:` may only make the bound *tighter*, never exceed it. Applies on both the server/MCP path and the `skillfile execute` CLI. Unset = no ceiling. |
+
+- **The deadline propagates and can only tighten.** Set once at the root and shared (by *remaining* time) with everything the run composes — a deep `$ execute_skill` gather cannot outlive the root's bound. A child's own `# Deadline:` tightens further; nothing loosens it.
+- **The ceiling is the guard against an untrusted author.** Skills are written by agents. A skill that simply *omits* `# Deadline:` would otherwise run unbounded — so the operator ceiling bounds it regardless. On a latency-sensitive or robotic host, set a small ceiling so no run (or motion) can hang.
+- **Exceeding the deadline is uncatchable.** It terminates the run via `RunDeadlineExceeded`, which op `(fallback:)` trailers and target `else:` blocks do **not** catch — a fallback-laden skill can't cascade to a looks-complete result past the bound. The run returns a **partial** result flagged `deadline_exceeded`.
+- **Cancellation is real, and connectors participate.** A `shell(...)` child is killed by process-group SIGKILL. A `$ connector.tool` dispatch receives an `AbortSignal` on its dispatch `ctx.signal` — forward it to your fetch/RPC and the work genuinely stops (ignore it and it degrades to a race-and-abandon, today's behavior). **If your connector's effect OUTLIVES the call** (a robot keeps moving after `call()` returns), declare `effectBoundary: "outlives-call"` and an `onAbort(budgetMs)` hook: on an in-flight cut the runtime aborts the call, then gives `onAbort` a bounded reserve slice to issue a real safety-stop (halt motion), and the run still returns within the deadline. The registry **refuses to register** an outlives-call connector without `onAbort` — a leak you'd otherwise only find in production.
+- **A cut mid-mutation is logged as uncertain, not failed.** Aborting stops the client, but the request may already have reached the backend — so the runtime records it as `uncertain_effects: [{ ..., reason: "issued, outcome uncertain" }]` rather than claiming success or failure. It surfaces on the `execute_skill` return **and** the durable trace record (`deadline_exceeded` + `uncertain_effects`) — so an autonomous cron/event fire, which has no live caller, still leaves the "a mutation may have landed" signal in the record for an operator to reconcile. Reads are excluded.
+- **Editing a `# Deadline:` re-approves.** The value is in the approval signing hash (unlike `# Tags:`), so changing it — even tightening — invalidates the signature and drops the skill to Draft. The deadline is the safety envelope the approver signed off on.
 
 ## Secrets
 
