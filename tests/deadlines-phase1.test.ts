@@ -141,13 +141,15 @@ describe("Phase 1 — adopter finding D (connector/model dispatch cuts record un
   // $ data_write via a bridge, etc). A `$` dispatch cut mid-flight now records by
   // SAFE DEFAULT; only provably-non-effecting local builtins are excluded.
 
-  it("predicate: connector/model dispatch is uncertain-when-cut; reads/pure/compose are not", () => {
+  it("predicate: connector dispatch is uncertain-when-cut; provably-non-effecting ops are not", () => {
     // Recorded (the previously-dropped classes + the obvious mutations):
-    for (const t of ["send_message", "llm", "anything", "amp_write_memory", "data_write", "publish", "charge"]) {
+    for (const t of ["send_message", "anything", "amp_write_memory", "data_write", "publish", "charge"]) {
       expect(dispatchUncertainWhenCut(t)).toBe(true);
     }
-    // Excluded — a read, a pure parse, composition (children self-record):
-    for (const t of ["data_read", "json_parse", "execute_skill"]) {
+    // Excluded — the runtime can provably rule out an external effect: a read, a
+    // pure parse, composition (children self-record), and a model completion
+    // (`llm` = prompt→text, per Perry's ruling — a cut one lands nothing external).
+    for (const t of ["data_read", "json_parse", "execute_skill", "llm"]) {
       expect(dispatchUncertainWhenCut(t)).toBe(false);
     }
   });

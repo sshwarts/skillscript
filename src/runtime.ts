@@ -1975,17 +1975,23 @@ const CLEANUP_CAP_MS = 1_000;
  * and converted to milliseconds here.
  */
 /**
- * Bare `$` builtins that DON'T dispatch to an external effect boundary — a read,
- * a pure parse, and composition (whose children record their own cut effects).
- * A cut of any of these leaves no uncertain external state.
+ * Bare `$` builtins the runtime can PROVABLY rule out an external effect for — a
+ * read, a pure parse, composition (whose children record their own cut effects),
+ * and a model completion (`$ llm` is prompt→text; a cut one is wasted compute,
+ * not a landed effect). A cut of any of these leaves no uncertain external state,
+ * so recording it would be a guaranteed false positive that pollutes the signal.
+ * (Per Perry's ruling — the boundary is "provably no external effect," which is
+ * why `$ llm` is excluded but a read-NAMED connector tool like `get_status` is
+ * NOT: a connector's effect can't be ruled out from its name; that downgrade is
+ * the explicit per-tool `effect_class` annotation, Phase 2.)
  */
-const DISPATCH_NON_EFFECTING: ReadonlySet<string> = new Set(["data_read", "json_parse", "execute_skill"]);
+const DISPATCH_NON_EFFECTING: ReadonlySet<string> = new Set(["data_read", "json_parse", "execute_skill", "llm"]);
 
 /**
  * Should a `$` dispatch cut mid-flight be logged as "issued, outcome uncertain"?
- * SAFE DEFAULT: yes — every `$ connector.tool`, model dispatch (`$ llm`), and
- * `data_write` may have effected external state we can't confirm once aborted.
- * Only the provably-non-effecting builtins above are excluded. Deliberately NOT
+ * SAFE DEFAULT: yes — every `$ connector.tool` and `data_write` may have effected
+ * external state we can't confirm once aborted. Only ops the runtime can PROVABLY
+ * rule out an external effect for (the set above) are excluded. Deliberately NOT
  * `classifyMutation` (a mutating-NAME heuristic): it misses `send_message` and
  * every un-verbed connector tool — exactly the production mutations — so keying
  * the uncertain-log on it silently dropped the highest-risk ops (adopter finding
