@@ -261,12 +261,16 @@ export class RunDeadlineExceeded extends Error {
   /**
    * The op that was in flight when the deadline cut it, set at the deepest
    * op-catch sweep site (`??=`, so the actual cut op wins as it unwinds). When
-   * `mutation` is true, the run boundary records it in `uncertainEffects[]`:
-   * an aborted mutation's outcome is unknown (the request may have reached the
-   * backend before we cut the client) — "issued, outcome uncertain, never
-   * auto-retried." Reads are excluded (nothing to be uncertain about).
+   * `uncertainWhenCut` is true, the run boundary records it in
+   * `uncertainEffects[]`: an aborted external dispatch's outcome is unknown (the
+   * request may have reached the backend before we cut the client) — "issued,
+   * outcome uncertain, never auto-retried." The SAFE DEFAULT is true for any
+   * op that dispatched to an external boundary (shell, `$ connector.tool`, model
+   * dispatch); only provably-non-effecting local ops (a `data_read`, a pure
+   * builtin) are excluded. Under-recording a cut mutation is dangerous;
+   * over-recording is merely noisy — so the default records.
    */
-  cutOp?: { opKind: string; label: string; mutation: boolean };
+  cutOp?: { opKind: string; label: string; uncertainWhenCut: boolean };
   constructor(
     /**
      * The run's deadline as an ABSOLUTE wall-clock instant (ms since epoch) —

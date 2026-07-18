@@ -670,9 +670,10 @@ export async function execute(
       if ((ctx.recursionDepth ?? 0) > 0 && ctx._runRoot !== true) throw err;
       deadlineExceeded = true;
       errors.push(buildExecutionError(err, err.target ?? "run"));
-      // A mutation cut mid-flight has an unknown outcome — record it (reads are
-      // excluded: cutOp.mutation is false for them). Never auto-retried.
-      if (err.cutOp?.mutation === true) {
+      // An external dispatch cut mid-flight has an unknown outcome — record it
+      // (only provably-non-effecting local ops are excluded, cutOp.uncertainWhenCut
+      // false for them). Never auto-retried.
+      if (err.cutOp?.uncertainWhenCut === true) {
         uncertainEffects.push({
           target: err.target,
           opKind: err.cutOp.opKind,
@@ -1200,7 +1201,7 @@ async function execOpInner(
           const [bin, ...args] = finalArgv;
           stdoutArgv = await execShellCommand(bin!, args, shellTimeoutMs, ctx.deadlineMs, ctx.deadlineBudgetMs, ctx.deadlineSource);
         } catch (err) {
-          if (err instanceof RunDeadlineExceeded) { err.cutOp ??= { opKind: "shell", label: "shell", mutation: true }; throw err; }
+          if (err instanceof RunDeadlineExceeded) { err.cutOp ??= { opKind: "shell", label: "shell", uncertainWhenCut: true }; throw err; }
           if (shellFallback !== undefined) {
             return recordShellFallback(shellFallback, redactSecrets(`shell argv failed: ${messageOf(err)}`));
           }
@@ -1290,7 +1291,7 @@ async function execOpInner(
           stdout = await execShellCommand(bin!, args, shellTimeoutMs, ctx.deadlineMs, ctx.deadlineBudgetMs, ctx.deadlineSource);
         }
       } catch (err) {
-        if (err instanceof RunDeadlineExceeded) { err.cutOp ??= { opKind: "shell", label: "shell", mutation: true }; throw err; }
+        if (err instanceof RunDeadlineExceeded) { err.cutOp ??= { opKind: "shell", label: "shell", uncertainWhenCut: true }; throw err; }
         if (shellFallback !== undefined) {
           return recordShellFallback(shellFallback, redactSecrets(`shell failed: ${messageOf(err)}`));
         }
@@ -1809,7 +1810,7 @@ async function execOpInner(
         // recovered by this op's `(fallback:)` — tag the cut op (for the
         // uncertain-effect log; deepest op wins via `??=`) and re-throw.
         if (err instanceof RunDeadlineExceeded) {
-          err.cutOp ??= { opKind: "$", label: `${connectorLabel}${toolName}`, mutation: classifyMutation(op) !== null };
+          err.cutOp ??= { opKind: "$", label: `${connectorLabel}${toolName}`, uncertainWhenCut: dispatchUncertainWhenCut(toolName) };
           throw err;
         }
         if (dollarFallback !== undefined) {
@@ -1973,6 +1974,27 @@ const CLEANUP_CAP_MS = 1_000;
  * Both per-op and skill-level values are in seconds (per author convention)
  * and converted to milliseconds here.
  */
+/**
+ * Bare `$` builtins that DON'T dispatch to an external effect boundary — a read,
+ * a pure parse, and composition (whose children record their own cut effects).
+ * A cut of any of these leaves no uncertain external state.
+ */
+const DISPATCH_NON_EFFECTING: ReadonlySet<string> = new Set(["data_read", "json_parse", "execute_skill"]);
+
+/**
+ * Should a `$` dispatch cut mid-flight be logged as "issued, outcome uncertain"?
+ * SAFE DEFAULT: yes — every `$ connector.tool`, model dispatch (`$ llm`), and
+ * `data_write` may have effected external state we can't confirm once aborted.
+ * Only the provably-non-effecting builtins above are excluded. Deliberately NOT
+ * `classifyMutation` (a mutating-NAME heuristic): it misses `send_message` and
+ * every un-verbed connector tool — exactly the production mutations — so keying
+ * the uncertain-log on it silently dropped the highest-risk ops (adopter finding
+ * D). Under-recording a cut mutation is dangerous; over-recording is just noise.
+ */
+export function dispatchUncertainWhenCut(toolName: string): boolean {
+  return !DISPATCH_NON_EFFECTING.has(toolName);
+}
+
 function resolveOpTimeoutMs(
   perOpTimeoutSec: number | string | undefined,
   skillTimeoutSec: number | string | null,

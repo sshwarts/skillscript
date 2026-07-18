@@ -15,7 +15,7 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { FilesystemSkillStore } from "../src/connectors/skill-store.js";
 import { parse } from "../src/parser.js";
-import { execute } from "../src/runtime.js";
+import { execute, dispatchUncertainWhenCut } from "../src/runtime.js";
 import { lint } from "../src/lint.js";
 import { bootstrap } from "../src/bootstrap.js";
 import { canonicalizeForSigning } from "../src/approval.js";
@@ -132,6 +132,70 @@ describe("Phase 1 — adopter finding B (operator ceiling covers the `skillfile 
       rmSync(home, { recursive: true, force: true });
     }
   }, 15000);
+});
+
+describe("Phase 1 — adopter finding D (connector/model dispatch cuts record uncertain effects)", () => {
+  // The uncertain-log used to key on classifyMutation — a mutating-NAME heuristic
+  // that misses `send_message` (no "send" verb) and every un-verbed connector
+  // tool, i.e. exactly the production mutations ($ agentmail.send_message,
+  // $ data_write via a bridge, etc). A `$` dispatch cut mid-flight now records by
+  // SAFE DEFAULT; only provably-non-effecting local builtins are excluded.
+
+  it("predicate: connector/model dispatch is uncertain-when-cut; reads/pure/compose are not", () => {
+    // Recorded (the previously-dropped classes + the obvious mutations):
+    for (const t of ["send_message", "llm", "anything", "amp_write_memory", "data_write", "publish", "charge"]) {
+      expect(dispatchUncertainWhenCut(t)).toBe(true);
+    }
+    // Excluded — a read, a pure parse, composition (children self-record):
+    for (const t of ["data_read", "json_parse", "execute_skill"]) {
+      expect(dispatchUncertainWhenCut(t)).toBe(false);
+    }
+  });
+
+  // A hanging connector whose tool name (`send_message`) classifyMutation would
+  // have MISSED — the exact production shape from the finding.
+  const hangRegistry = () => {
+    const r = new Registry();
+    r.registerMcpConnector("hang", {
+      async call() { await new Promise((res) => setTimeout(res, 5000)); return "never"; },
+      async manifest() { return { capabilities_version: "1", manifest: { kind: "mock" } }; },
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    } as any);
+    return r;
+  };
+  const HANG_SEND = `# Skill: p
+# Autonomous: true
+default: run
+run:
+    $ hang.send_message to="x" -> R (fallback: "FB")
+`;
+
+  it("a cut `$ connector.send_message` records an uncertain effect (was dropped)", async () => {
+    const r = await execute(parse(HANG_SEND), {}, ["run"], {
+      agentId: "p",
+      registry: hangRegistry(),
+      effectsAuthorized: true,
+      deadlineMs: Date.now() + 150, // fires mid-dispatch
+    });
+    expect(r.deadlineExceeded).toBe(true);
+    expect(r.uncertainEffects).toHaveLength(1);
+    expect(r.uncertainEffects?.[0]).toMatchObject({
+      opKind: "$", op: "hang.send_message", reason: "issued, outcome uncertain", retry: false,
+    });
+  });
+
+  it("it surfaces on the MCP execute_skill RETURN too (the adopter's harness)", async () => {
+    const result = await executeSkillFromSource(HANG_SEND, {}, {
+      ctx: {
+        agentId: "p",
+        registry: hangRegistry(),
+        effectsAuthorized: true,
+        deadlineMs: Date.now() + 150,
+      },
+    });
+    expect(result.deadline_exceeded).toBe(true);
+    expect(result.uncertain_effects?.[0]?.op).toBe("hang.send_message");
+  });
 });
 
 describe("Phase 1 — adopter findings A + C (message + MCP-entry return envelope)", () => {
@@ -517,7 +581,13 @@ run:
     });
   });
 
-  it("uncertain-log: a cut READ is NOT recorded (reads have no uncertain outcome)", async () => {
+  it("uncertain-log: a read-NAMED connector op is STILL recorded (safe default — name can't downgrade)", async () => {
+    // Per finding D: the runtime can't know a connector tool is a read from its
+    // name (`get_status` looks read-ish, `send_message` looks not-a-mutation but
+    // is). So every connector dispatch cut mid-flight is recorded conservatively;
+    // genuine read-exclusion for connector tools is the Phase-2 effect_class
+    // annotation, not a name guess. (Built-in local reads ARE excluded — see the
+    // dispatchUncertainWhenCut predicate test.)
     const mock = {
       effectBoundary: "call-bounded" as const,
       async call() { await new Promise((r) => setTimeout(r, 5000)); return "never"; },
@@ -535,8 +605,7 @@ run:
       agentId: "test", registry, effectsAuthorized: true, deadlineMs: Date.now() + 60,
     });
     expect(r.deadlineExceeded).toBe(true);
-    // get_status is a read (classifyMutation → null), so no uncertain effect logged.
-    expect(r.uncertainEffects).toBeUndefined();
+    expect(r.uncertainEffects?.[0]?.op).toBe("api.get_status");
   });
 
   it("AbortSignal: a call-bounded connector that honors ctx.signal truly cancels on the deadline cut", async () => {
