@@ -371,7 +371,7 @@ function renderOverview() {
         <div class="kpi"><div class="label">Skills</div><div class="value">${skillCount}</div></div>
         <div class="kpi"><div class="label">Approved</div><div class="value">${statusCounts.Approved ?? 0}</div></div>
         <div class="kpi"><div class="label">Triggers</div><div class="value">${triggerCount}</div></div>
-        <div class="kpi"><div class="label">Fires (24h)</div><div class="value">${totalFires}</div></div>
+        <div class="kpi"><div class="label">Runs (24h)</div><div class="value">${totalFires}</div></div>
       </div>
     </section>
 
@@ -482,9 +482,9 @@ function skillHealthBadge(name) {
   }
   if (m.errorCount > 0) {
     const dl = m.deadlineExceededCount > 0 ? ` · ${m.deadlineExceededCount} deadline` : "";
-    return `<span class="badge error" title="Fires that errored in the last 24h">⚠ ${m.errorCount} failed${dl}</span>`;
+    return `<span class="badge error" title="Runs that errored in the last 24h">⚠ ${m.errorCount} failed${dl}</span>`;
   }
-  return `<span class="badge ok" title="${m.fireCount} fire(s), all clean (24h)">ok</span>`;
+  return `<span class="badge ok" title="${m.fireCount} run(s), all clean (24h)">ok</span>`;
 }
 
 async function renderSkillDetail(name) {
@@ -562,7 +562,7 @@ async function renderSkillDetail(name) {
         <summary>Metrics (24h)</summary>
         ${metrics
           ? `<dl class="kv">
-              <dt>Fires</dt><dd>${metrics.fireCount}</dd>
+              <dt>Runs</dt><dd>${metrics.fireCount}</dd>
               <dt>Success</dt><dd>${metrics.successCount}</dd>
               <dt>Errors</dt><dd>${metrics.errorCount}</dd>
               <dt>Deadline-cut</dt><dd>${metrics.deadlineExceededCount ?? 0}</dd>
@@ -573,23 +573,23 @@ async function renderSkillDetail(name) {
       </details>
 
       <details class="section collapsible">
-        <summary>Recent fires (${recent_fires.length})</summary>
+        <summary>Recent runs (${recent_fires.length})</summary>
         ${recent_fires.length === 0
-          ? `<div class="empty">No fires recorded.</div>`
-          : recent_fires.map((fire) => {
-              const ts = new Date(fire.fired_at_ms).toLocaleString();
-              const status = fire.errors.length === 0
+          ? `<div class="empty">No runs recorded.</div>`
+          : recent_fires.map((run) => {
+              const ts = new Date(run.fired_at_ms).toLocaleString();
+              const status = run.errors.length === 0
                 ? `<span class="badge ok">ok</span>`
                 : `<span class="badge error">err</span>`;
               return `
                 <div style="border-bottom: 1px solid var(--border); padding: 12px 0;">
                   <div style="display: flex; align-items: center; gap: 12px;">
                     ${status}
-                    <code style="font-size: 11px; color: var(--text-muted);">${esc(fire.trace_id.slice(0, 8))}</code>
+                    <code style="font-size: 11px; color: var(--text-muted);">${esc(run.trace_id.slice(0, 8))}</code>
                     <span>${ts}</span>
-                    <span style="color: var(--text-muted); margin-left: auto;">${fire.duration_ms}ms · ${fire.ops.length} ops</span>
+                    <span style="color: var(--text-muted); margin-left: auto;">${run.duration_ms}ms · ${run.ops.length} ops</span>
                   </div>
-                  ${fire.errors.map((e) => `
+                  ${run.errors.map((e) => `
                     <div class="remediation">
                       <strong>${esc(e.class)}</strong> in ${esc(e.target)}/${esc(e.opKind)}: ${esc(e.message)}
                       ${e.remediation ? `<div style="margin-top: 4px; color: var(--text-dim);">→ ${esc(e.remediation)}</div>` : ""}
