@@ -160,6 +160,12 @@ export async function executeSkillByName(
   const childCtx: ExecuteContext = {
     ...ctx,
     recursionDepth: depth,
+    // The run root is a wrapper call made from OUTSIDE any execute frame
+    // (MCP/scheduler): `_insideExecute` is unset. A nested `$ execute_skill`
+    // reaches here from within an execute frame, so `_insideExecute` is set →
+    // not the root. This lets the root's run-boundary CONVERT a deadline into a
+    // partial result even though `recursionDepth` is 1 here (finding C).
+    _runRoot: ctx._insideExecute !== true,
     maxRecursionDepth: limit,
     entrySkillName: ctx.entrySkillName ?? ctx._currentSkillName,
     // v1.0 Gate #7 — the gate above passed (valid v3 signature in secured mode),
@@ -280,6 +286,8 @@ export async function executeSkillFromSource(
   const childCtx: ExecuteContext = {
     ...ctx,
     recursionDepth: depth,
+    // Root iff invoked from outside any execute frame — see executeSkillByName.
+    _runRoot: ctx._insideExecute !== true,
     maxRecursionDepth: limit,
     effectsAuthorized,
   };

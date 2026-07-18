@@ -9,15 +9,18 @@
  * surface (scope item 1).
  */
 import { describe, it, expect } from "vitest";
-import { mkdtempSync, rmSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import { mkdtempSync, rmSync, mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
+import { FilesystemSkillStore } from "../src/connectors/skill-store.js";
 import { parse } from "../src/parser.js";
 import { execute } from "../src/runtime.js";
 import { lint } from "../src/lint.js";
 import { bootstrap } from "../src/bootstrap.js";
 import { canonicalizeForSigning } from "../src/approval.js";
 import { FilesystemTraceStore } from "../src/trace.js";
+import { executeSkillFromSource } from "../src/composition.js";
 import { Registry } from "../src/connectors/registry.js";
 
 /** ctx that runs shell ops, with an already-expired run deadline injected. */
@@ -91,6 +94,108 @@ describe("Phase 1 — `# Deadline:` is IN the signing hash (safety-envelope re-a
     const a = SKILL("# Deadline: 5\n# Tags: robot");
     const b = SKILL("# Deadline: 5\n# Tags: robot, latency-sensitive");
     expect(canonicalizeForSigning(a)).toBe(canonicalizeForSigning(b));
+  });
+});
+
+describe("Phase 1 — adopter finding B (operator ceiling covers the `skillfile execute` CLI)", () => {
+  // Before the fix the ceiling was resolved only in the server/MCP path; a
+  // one-shot CLI run was bounded solely by its own `# Deadline:`. The ceiling is
+  // a hard operator guard — it must cover the CLI execution surface too. Spawns
+  // the real built CLI: a no-`# Deadline:` skill that sleeps 5s under a 1s ceiling
+  // must be cut (before the fix it ran the full 5s and exited clean).
+  it("SKILLSCRIPT_MAX_DEADLINE_SECONDS bounds a CLI run with no # Deadline", async () => {
+    const home = mkdtempSync(join(tmpdir(), "dl-cli-"));
+    try {
+      const skillsDir = join(home, "skills");
+      mkdirSync(skillsDir, { recursive: true });
+      await new FilesystemSkillStore(skillsDir).store(
+        "slow",
+        "# Skill: slow\n# Status: Approved\ndefault: run\nrun:\n    shell(command=\"sleep 5\") -> A\n",
+        { status: "Approved" },
+      );
+      const CLI = resolve(import.meta.dirname, "..", "dist", "cli.js");
+      const started = Date.now();
+      const r = spawnSync("node", [CLI, "execute", "slow"], {
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          SKILLSCRIPT_HOME: home,
+          SKILLSCRIPT_SHELL_ALLOWLIST: "sleep",
+          SKILLSCRIPT_MAX_DEADLINE_SECONDS: "1",
+        },
+      });
+      const elapsed = Date.now() - started;
+      const out = (r.stdout ?? "") + (r.stderr ?? "");
+      expect(out).toMatch(/deadline exceeded/i);
+      expect(elapsed).toBeLessThan(4000); // cut at ~1s, not the 5s sleep
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
+  }, 15000);
+});
+
+describe("Phase 1 — adopter findings A + C (message + MCP-entry return envelope)", () => {
+  // Finding A: the message reported the ABSOLUTE epoch instant ("# Deadline:
+  // 1784388381s") instead of the declared budget. It must now name the duration
+  // the author/operator set + where it came from, and never a bare epoch.
+  it("A: the message reports the declared budget + source (# Deadline), not an epoch", async () => {
+    const parsed = parse(`# Skill: t
+# Deadline: 1
+default: run
+run:
+    shell(command="sleep 8") -> A
+`);
+    const r = await execute(parsed, {}, ["run"], {
+      agentId: "test",
+      registry: new Registry(),
+      effectsAuthorized: true,
+      shellAllowlist: ["sleep"],
+    });
+    const msg = r.errors[0]!.message;
+    expect(msg).toContain("1s budget (# Deadline)");
+    expect(msg).not.toMatch(/\d{10}s/); // no epoch-seconds leak
+  });
+
+  it("A: an operator-ceiling cut names the ceiling as the source", async () => {
+    const parsed = parse("# Skill: t\ndefault: run\nrun:\n    shell(command=\"sleep 8\") -> A\n");
+    const r = await execute(parsed, {}, ["run"], {
+      agentId: "test",
+      registry: new Registry(),
+      effectsAuthorized: true,
+      shellAllowlist: ["sleep"],
+      maxDeadlineMs: 2000,
+    });
+    const msg = r.errors[0]!.message;
+    expect(msg).toContain("2s budget (operator ceiling)");
+    expect(msg).not.toMatch(/\d{10}s/);
+  });
+
+  // Finding C: an MCP-entered run reaches execute() via the composition wrapper,
+  // which increments recursionDepth to 1 — so the run-boundary used to RE-THROW
+  // (depth>0) instead of converting, and the deadline escaped into mcp-server's
+  // catch-all, dropping deadline_exceeded/uncertain_effects from the RETURN. The
+  // wrapper is the run root (`_runRoot`) and must CONVERT to a partial result.
+  it("C: executeSkillFromSource (MCP entry) RETURNS a partial, not a throw", async () => {
+    const source = `# Skill: t
+# Autonomous: true
+default: run
+run:
+    shell(command="sleep 5") -> A (fallback: "FB")
+`;
+    // mid-flight cut; ctx has NO _insideExecute → the wrapper is the run root.
+    const result = await executeSkillFromSource(source, {}, {
+      ctx: {
+        agentId: "test",
+        registry: new Registry(),
+        effectsAuthorized: true,
+        shellAllowlist: ["sleep"],
+        deadlineMs: Date.now() + 150,
+      },
+    });
+    // Did NOT throw — and the fields are on the returned envelope.
+    expect(result.deadline_exceeded).toBe(true);
+    expect(result.uncertain_effects?.[0]?.opKind).toBe("shell");
+    expect(result.errors.some((e) => e.class === "RunDeadlineExceeded")).toBe(true);
   });
 });
 

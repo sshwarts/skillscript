@@ -268,13 +268,31 @@ export class RunDeadlineExceeded extends Error {
    */
   cutOp?: { opKind: string; label: string; mutation: boolean };
   constructor(
-    /** The run's `# Deadline:` budget in ms (for diagnostics). */
+    /**
+     * The run's deadline as an ABSOLUTE wall-clock instant (ms since epoch) —
+     * diagnostics only. Do NOT interpolate this into a human message: it reads
+     * as a nonsense epoch number (adopter finding A). Use `budgetMs` for the
+     * declared duration.
+     */
     public readonly deadlineMs: number,
     /** The target executing when the deadline fired. */
     public readonly target?: string,
+    /**
+     * The DECLARED time budget in ms — what the author/operator actually set
+     * (e.g. `# Deadline: 1` → 1000), NOT the absolute instant. Drives the human
+     * message; when unknown the message falls back to a generic phrasing.
+     */
+    public readonly budgetMs?: number,
+    /** Where the bound originated: "# Deadline" or "operator ceiling". */
+    public readonly source?: string,
   ) {
+    const budget =
+      budgetMs === undefined
+        ? "its time budget"
+        : `its ${budgetMs >= 1000 ? `${Math.round(budgetMs / 1000)}s` : `${budgetMs}ms`} budget` +
+          (source !== undefined ? ` (${source})` : "");
     super(
-      `Run deadline exceeded (# Deadline: ${Math.round(deadlineMs / 1000)}s)` +
+      `Run deadline exceeded — ${budget} elapsed` +
         (target !== undefined ? ` while executing target '${target}'` : "") +
         `. The run was terminated; partial results + the effect log are returned.`,
     );

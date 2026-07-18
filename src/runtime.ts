@@ -143,6 +143,14 @@ export interface ExecuteContext {
    */
   maxDeadlineMs?: number;
   /**
+   * The DECLARED budget (ms) behind `deadlineMs`, propagated alongside it so the
+   * `RunDeadlineExceeded` message reports the duration the author/operator set
+   * (e.g. "1s budget") rather than the absolute epoch instant. Diagnostics only.
+   */
+  deadlineBudgetMs?: number;
+  /** Origin of the active deadline: "# Deadline" or "operator ceiling". For the message. */
+  deadlineSource?: string;
+  /**
    * Enables `@ unsafe <command>` dispatch via full bash shell. Default
    * `false` — `@ unsafe` ops fail with `UnsafeShellDisabledError`. Per
    * Section 4 Security: operators opt in explicitly per deployment; lint
@@ -209,6 +217,23 @@ export interface ExecuteContext {
    * resolved by substituteRuntime), which lint can't see statically. Internal.
    */
   _currentSkillSecretRequires?: string[];
+  /**
+   * Internal — set true on the child ctx execute() hands to its ops, so a nested
+   * `$ execute_skill` (which dispatches through the composition wrapper) can tell
+   * it is running INSIDE an execute frame. The wrapper uses this to compute
+   * `_runRoot`: absent ⇒ the wrapper is the run root (invoked by MCP/scheduler,
+   * no execute above it); present ⇒ nested. Never set by callers.
+   */
+  _insideExecute?: boolean;
+  /**
+   * Internal — true when this execute() IS the outermost run, even though the
+   * composition wrapper incremented `recursionDepth` to 1 for it. The run-boundary
+   * uses it to CONVERT `RunDeadlineExceeded` into a partial result here rather
+   * than re-throwing (which, for an MCP-entered run, escaped into the catch-all
+   * and dropped `deadline_exceeded`/`uncertain_effects` — adopter finding C).
+   * Set by the composition wrapper, never by callers.
+   */
+  _runRoot?: boolean;
   /** Skill identity for trace records. Optional — falls back to parsed.name + version inference. */
   skillVersion?: string;
   /**
@@ -538,21 +563,37 @@ export async function execute(
   // # Deadline: (`min`), never loosen the root bound (Perry decision #2). Opt-in:
   // no # Deadline: and nothing inherited => undefined => today's per-op behavior.
   let deadlineMs = ctx.deadlineMs;
+  // Budget (declared duration) + origin travel alongside the absolute instant so
+  // the RunDeadlineExceeded message reports what was set, not an epoch number.
+  // Inherited from the parent by default; overwritten only when a tighter local
+  // bound wins below (so the message names the bound that actually fired).
+  let deadlineBudgetMs = ctx.deadlineBudgetMs;
+  let deadlineSource = ctx.deadlineSource;
   // Operator ceiling FIRST: it bounds every run, even one with no `# Deadline:`,
-  // so an untrusted author can't evade the bound by omitting it. `min` with any
-  // inherited/injected deadline keeps the tighter. (Harmless to re-apply in a
-  // child — the inherited root bound is always ≤ a fresh child ceiling.)
+  // so an untrusted author can't evade the bound by omitting it. Keeps the
+  // tighter of it and any inherited/injected deadline. (Harmless to re-apply in a
+  // child — the inherited root bound is always ≤ a fresh child ceiling, so the
+  // `<` never fires there.)
   if (ctx.maxDeadlineMs !== undefined) {
     const opMaxInstant = nowMs + ctx.maxDeadlineMs;
-    deadlineMs = deadlineMs === undefined ? opMaxInstant : Math.min(deadlineMs, opMaxInstant);
+    if (deadlineMs === undefined || opMaxInstant < deadlineMs) {
+      deadlineMs = opMaxInstant;
+      deadlineBudgetMs = ctx.maxDeadlineMs;
+      deadlineSource = "operator ceiling";
+    }
   }
   // A skill's own `# Deadline:` can only TIGHTEN — never loosen past the operator
   // ceiling or the inherited parent bound.
   if (parsed.deadline !== null) {
-    const candidate = nowMs + resolveIntParam(parsed.deadline, vars, "# Deadline:") * 1000;
-    deadlineMs = deadlineMs === undefined ? candidate : Math.min(deadlineMs, candidate);
+    const budgetMs = resolveIntParam(parsed.deadline, vars, "# Deadline:") * 1000;
+    const candidate = nowMs + budgetMs;
+    if (deadlineMs === undefined || candidate < deadlineMs) {
+      deadlineMs = candidate;
+      deadlineBudgetMs = budgetMs;
+      deadlineSource = "# Deadline";
+    }
   }
-  ctx = { ...ctx, _currentSkillName: skillName, _currentSkillEventType: parsed.eventType, _currentSkillSecretRequires: parsed.secretRequires, ...(deadlineMs !== undefined ? { deadlineMs } : {}) };
+  ctx = { ...ctx, _currentSkillName: skillName, _currentSkillEventType: parsed.eventType, _currentSkillSecretRequires: parsed.secretRequires, _insideExecute: true, ...(deadlineMs !== undefined ? { deadlineMs } : {}), ...(deadlineBudgetMs !== undefined ? { deadlineBudgetMs } : {}), ...(deadlineSource !== undefined ? { deadlineSource } : {}) };
   const traceBuilder = shouldTraceFire(ctx.trace, triggerId, skillName)
     ? new TraceBuilder(skillName, ctx.skillVersion ?? "unknown", triggerCtx, { agent_id: ctx.agentId }, ctx.preMintedTraceId)
     : null;
@@ -618,12 +659,15 @@ export async function execute(
   } catch (err) {
     // Only the run deadline reaches here (targets catch their own op errors).
     if (err instanceof RunDeadlineExceeded) {
-      // In a composition CHILD (recursionDepth > 0), PROPAGATE so the whole tree
-      // aborts as one unit — the parent's execute_skill intercept re-throws it up
-      // to the ROOT, which alone catches it and returns the partial result. This
-      // is why a deep gather can't outlive the root's deadline: the shared instant
-      // fires once and unwinds the entire stack.
-      if ((ctx.recursionDepth ?? 0) > 0) throw err;
+      // In a composition CHILD, PROPAGATE so the whole tree aborts as one unit —
+      // the parent's execute_skill intercept re-throws it up to the ROOT, which
+      // alone catches it and returns the partial result. This is why a deep gather
+      // can't outlive the root's deadline: the shared instant fires once and
+      // unwinds the entire stack. A run entered via the composition wrapper
+      // (MCP/scheduler) has recursionDepth 1 but IS the root (`_runRoot`) — it must
+      // CONVERT here, not re-throw, else the deadline escaped into mcp-server's
+      // catch-all and dropped deadline_exceeded/uncertain_effects (finding C).
+      if ((ctx.recursionDepth ?? 0) > 0 && ctx._runRoot !== true) throw err;
       deadlineExceeded = true;
       errors.push(buildExecutionError(err, err.target ?? "run"));
       // A mutation cut mid-flight has an unknown outcome — record it (reads are
@@ -1124,7 +1168,7 @@ async function execOpInner(
       // Closes Perry's `adc87d52` cold-author-safety finding.
       if (op.argv !== undefined) {
         const substArgv = op.argv.map((el) => substituteRuntime(el, vars));
-        const shellTimeoutMs = resolveOpTimeoutMs(undefined, skillTimeoutSec, absoluteTimeoutMs, vars, ctx.deadlineMs, targetName);
+        const shellTimeoutMs = resolveOpTimeoutMs(undefined, skillTimeoutSec, absoluteTimeoutMs, vars, ctx.deadlineMs, targetName, ctx.deadlineBudgetMs, ctx.deadlineSource);
         if (ctx.mechanical === true) {
           const preview = substArgv.join(" ");
           emissions.push(`Would run shell argv: ${preview} (mechanical: true preview).`);
@@ -1154,7 +1198,7 @@ async function execOpInner(
           }
           const finalArgv = await Promise.all(realArgv.map((el, i) => spliceSecretsAtSink(el, maskedArgv[i]!.names)));
           const [bin, ...args] = finalArgv;
-          stdoutArgv = await execShellCommand(bin!, args, shellTimeoutMs, ctx.deadlineMs);
+          stdoutArgv = await execShellCommand(bin!, args, shellTimeoutMs, ctx.deadlineMs, ctx.deadlineBudgetMs, ctx.deadlineSource);
         } catch (err) {
           if (err instanceof RunDeadlineExceeded) { err.cutOp ??= { opKind: "shell", label: "shell", mutation: true }; throw err; }
           if (shellFallback !== undefined) {
@@ -1177,7 +1221,7 @@ async function execOpInner(
       const body = op.policy === "unsafe"
         ? substituteRuntimeUnsafe(op.body, vars)
         : substituteRuntime(op.body, vars);
-      const shellTimeoutMs = resolveOpTimeoutMs(undefined, skillTimeoutSec, absoluteTimeoutMs, vars, ctx.deadlineMs, targetName);
+      const shellTimeoutMs = resolveOpTimeoutMs(undefined, skillTimeoutSec, absoluteTimeoutMs, vars, ctx.deadlineMs, targetName, ctx.deadlineBudgetMs, ctx.deadlineSource);
       if (ctx.mechanical === true) {
         const label = op.policy === "unsafe" ? "Would run unsafe shell" : "Would run shell";
         emissions.push(`${label}: ${body} (mechanical: true preview).`);
@@ -1220,7 +1264,7 @@ async function execOpInner(
           // argv/`ps` leak window; vault-era sink-aware injection closes it).
           // Unsafe shell is operator-gated, so a secret here is deliberate.
           const finalBody = await spliceSecretsAtSink(realBody, names);
-          stdout = await execShellCommand("bash", ["-c", finalBody], shellTimeoutMs, ctx.deadlineMs);
+          stdout = await execShellCommand("bash", ["-c", finalBody], shellTimeoutMs, ctx.deadlineMs, ctx.deadlineBudgetMs, ctx.deadlineSource);
         } else {
           const tokens = tokenizeShellArgs(realBody);
           if (tokens.length === 0) {
@@ -1243,7 +1287,7 @@ async function execOpInner(
           // spaces/quotes stays one argv element and never reaches a shell.
           const finalTokens = await Promise.all(tokens.map((t) => spliceSecretsAtSink(t, names)));
           const [bin, ...args] = finalTokens;
-          stdout = await execShellCommand(bin!, args, shellTimeoutMs, ctx.deadlineMs);
+          stdout = await execShellCommand(bin!, args, shellTimeoutMs, ctx.deadlineMs, ctx.deadlineBudgetMs, ctx.deadlineSource);
         }
       } catch (err) {
         if (err instanceof RunDeadlineExceeded) { err.cutOp ??= { opKind: "shell", label: "shell", mutation: true }; throw err; }
@@ -1700,7 +1744,7 @@ async function execOpInner(
 
       let rawResult: unknown;
       let dispatched = false;
-      const timeoutMs = resolveOpTimeoutMs(perOpTimeoutSec, skillTimeoutSec, absoluteTimeoutMs, vars, ctx.deadlineMs, targetName);
+      const timeoutMs = resolveOpTimeoutMs(perOpTimeoutSec, skillTimeoutSec, absoluteTimeoutMs, vars, ctx.deadlineMs, targetName, ctx.deadlineBudgetMs, ctx.deadlineSource);
       // Op-level fallback (per language reference §9, extended to `$` for
       // cold-agent corpus consistency). On dispatch throw, bind the
       // fallback value to the output var; on missing connector with
@@ -1735,10 +1779,12 @@ async function execOpInner(
             "$",
             ctx.deadlineMs,
             onAbort,
+            ctx.deadlineBudgetMs,
+            ctx.deadlineSource,
           );
           dispatched = true;
         } else if (op.mcpConnector === undefined && ctx.toolDispatch) {
-          rawResult = await dispatchWithTimeout(() => ctx.toolDispatch!(toolName, dispatchArgs), timeoutMs, "$", ctx.deadlineMs);
+          rawResult = await dispatchWithTimeout(() => ctx.toolDispatch!(toolName, dispatchArgs), timeoutMs, "$", ctx.deadlineMs, undefined, ctx.deadlineBudgetMs, ctx.deadlineSource);
           dispatched = true;
         } else {
           // v0.5.0 item 5 — was a silent stub before (emitted "Would call
@@ -1934,6 +1980,8 @@ function resolveOpTimeoutMs(
   vars: Map<string, unknown>,
   deadlineMs?: number,
   targetName?: string,
+  deadlineBudgetMs?: number,
+  deadlineSource?: string,
 ): number {
   let base: number;
   if (perOpTimeoutSec !== undefined) {
@@ -1952,7 +2000,7 @@ function resolveOpTimeoutMs(
   // the op's own timeout down to what's left of the run.
   if (deadlineMs !== undefined) {
     const remaining = deadlineMs - Date.now();
-    if (remaining <= 0) throw new RunDeadlineExceeded(deadlineMs, targetName);
+    if (remaining <= 0) throw new RunDeadlineExceeded(deadlineMs, targetName, deadlineBudgetMs, deadlineSource);
     return Math.min(base, remaining);
   }
   return base;
@@ -1978,6 +2026,8 @@ async function dispatchWithTimeout<T>(
   opKind: string,
   deadlineMs?: number,
   onAbort?: (budgetMs: number) => Promise<void>,
+  deadlineBudgetMs?: number,
+  deadlineSource?: string,
 ): Promise<T> {
   // Cancellation signal: aborted when the timer cuts this op (deadline OR per-op
   // timeout). A call-bounded connector that forwards it to its fetch/RPC truly
@@ -2017,7 +2067,7 @@ async function dispatchWithTimeout<T>(
             new Promise<void>((res) => setTimeout(res, reserveMs)),
           ]);
         }
-        reject(new RunDeadlineExceeded(deadlineMs!));
+        reject(new RunDeadlineExceeded(deadlineMs!, undefined, deadlineBudgetMs, deadlineSource));
       } else {
         reject(new OpTimeoutError(timeoutMs, opKind));
       }
@@ -2103,7 +2153,7 @@ function scrubbedShellEnv(): NodeJS.ProcessEnv {
  * spawn both the structured `command=`/`argv=` and the `unsafe=true` (`bash
  * -c`) paths funnel through, so the scrub covers every shell egress.
  */
-async function execShellCommand(bin: string, args: string[], timeoutMs: number, deadlineMs?: number): Promise<string> {
+async function execShellCommand(bin: string, args: string[], timeoutMs: number, deadlineMs?: number, deadlineBudgetMs?: number, deadlineSource?: string): Promise<string> {
   return new Promise<string>((resolve, reject) => {
     const child = spawn(bin, args, { stdio: ["ignore", "pipe", "pipe"], env: scrubbedShellEnv() });
     let stdout = "";
@@ -2139,7 +2189,7 @@ async function execShellCommand(bin: string, args: string[], timeoutMs: number, 
         // reject the uncatchable RunDeadlineExceeded so the shell `(fallback:)`
         // can't swallow it; otherwise it's a per-op timeout.
         reject(deadlineMs !== undefined && Date.now() >= deadlineMs
-          ? new RunDeadlineExceeded(deadlineMs)
+          ? new RunDeadlineExceeded(deadlineMs, undefined, deadlineBudgetMs, deadlineSource)
           : new OpTimeoutError(timeoutMs, "shell"));
         return;
       }

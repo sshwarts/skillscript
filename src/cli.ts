@@ -540,6 +540,12 @@ async function cmdRun(args: string[]): Promise<number> {
       ...(envConfig.shellAllowlist !== undefined ? { shellAllowlist: envConfig.shellAllowlist } : {}),
       ...(envConfig.fsAllowlist !== undefined ? { fsAllowlist: envConfig.fsAllowlist } : {}),
       ...(envConfig.enableUnsafeShell !== undefined ? { enableUnsafeShell: envConfig.enableUnsafeShell } : {}),
+      // Operator run-deadline ceiling — the CLI is an execution surface too, so
+      // the ceiling must bound a `skillfile execute` run just as it bounds the
+      // server/MCP path. Without this, a skill run via the CLI is bounded only by
+      // its own `# Deadline:` and could evade the operator's hard cap (adopter
+      // finding B). Applied even when the skill declares no `# Deadline:`.
+      ...(envConfig.maxDeadlineSeconds !== undefined ? { maxDeadlineMs: envConfig.maxDeadlineSeconds * 1000 } : {}),
       // v0.25.0 — `skillfile run` resolves `{{secret.NAME}}` from the env
       // (SKILLSCRIPT_SECRET_<NAME>) at the sink, use-only.
       secretProvider: new EnvSecretProvider(),
