@@ -651,6 +651,29 @@ TOCTOU note: the check resolves the real path at call time; a symlink swapped be
 - **A cut mid-mutation is logged as uncertain, not failed.** Aborting stops the client, but the request may already have reached the backend — so the runtime records it as `uncertain_effects: [{ ..., reason: "issued, outcome uncertain" }]` rather than claiming success or failure. It surfaces on the `execute_skill` return **and** the durable trace record (`deadline_exceeded` + `uncertain_effects`) — so an autonomous cron/event fire, which has no live caller, still leaves the "a mutation may have landed" signal in the record for an operator to reconcile. Reads are excluded.
 - **Editing a `# Deadline:` re-approves.** The value is in the approval signing hash (unlike `# Tags:`), so changing it — even tightening — invalidates the signature and drops the skill to Draft. The deadline is the safety envelope the approver signed off on.
 
+## Autonomous-fire failure supervision
+
+**An interactive `execute_skill` hands its result back to a caller who can see it failed. A cron/event fire has no caller** — a 3 a.m. run that errored, or one cut mid-effect leaving a mutation "outcome uncertain," is invisible unless someone goes and queries the trace. Configure a **supervisor** and the runtime pushes those failures to you.
+
+| Operator switch | Controls |
+|---|---|
+| `SKILLSCRIPT_SUPERVISOR_SKILL` | The approved handler skill the trace-sweeper routes non-clean fires to. Setting this turns the feature ON. Unset = off. |
+| `SKILLSCRIPT_SUPERVISOR_AGENT` | *Optional.* An agent id passed to the handler as `${SUPERVISOR_AGENT}`. For a handler that routes to an agent; leave unset for an email- / webhook-only handler. |
+
+### How it works
+
+- **The sweeper is the scheduler, not a new daemon.** On each poll tick, after firing due triggers, the scheduler scans the durable trace for **non-clean fires** since the last sweep — `errors[]` non-empty, `deadline_exceeded`, or a non-empty `uncertain_effects` — and routes each to your handler skill. The watcher that catches silent failures can't itself be a skill that silently fails, so it rides the trusted platform loop: if the scheduler is alive to fire crons, it's alive to sweep.
+- **Detection is reliable; notification is a script (yours).** The sweeper only *detects* and *routes*. The **policy + delivery** live in a governed, approvable handler skill — copy `examples/skillscripts/supervisor-notify.skill.md`, adapt the delivery to your channel (agent, email, Slack, a webhook — it's your script), and approve it. It lands Draft; a human approves it, exactly like any effectful skill.
+- **The handler receives the failure as vars:** `${FAILED_SKILL}`, `${OUTCOME}` (`errored` / `deadline-exceeded` / `uncertain-effects`), `${TRACE_ID}`, `${TRIGGER}`, `${ERROR_SUMMARY}`, `${UNCERTAIN_EFFECTS}`, `${DEADLINE_EXCEEDED}`, and `${SUPERVISOR_AGENT}` (if set).
+- **At most one alert per failed fire.** A persistent notified-set dedups; a persistently-failing every-minute cron alerts once *per fire*, not once per sweep. Digest / severity / suppress-while-failing intelligence belongs in the handler skill, not the sweeper.
+
+### Two guarantees worth knowing
+
+- **A configured-but-blind supervisor hard-refuses at boot.** The sweeper reads the durable trace, so it can only see failures if autonomous fires are *traced*. If `SKILLSCRIPT_SUPERVISOR_SKILL` is set but scheduler tracing is off or sampled, the runtime **refuses to start** with a clear message — a safety net you've defeated is worse than none. (No supervisor configured → feature simply off, boot proceeds; absence is not a failure.)
+- **The handler can't loop.** The handler is itself a fire and writes its own trace. If it *fails*, the sweeper does **not** route that back through itself — it logs to the local stderr floor and stops. Keep the handler simple and its delivery reliable; its own failure won't page you (by design — there's nothing left to page through).
+
+Wire the supervisor in **config / `.env`** (source of truth — a boot-time safety control, present before the first fire, reachable on a headless host), not as a runtime toggle. The dashboard's role is to *display* ("supervisor: X configured" + recent alerts) and *test-fire*.
+
 ## Secrets
 
 **A skill can reference an operator-provisioned secret by name, use it at a sink, and never read it back.** This is how a credential (a bearer token, an API key) reaches a `shell(...)` or `$ connector.tool` call without living in the skill source, the transcript, or a trace.

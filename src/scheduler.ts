@@ -3,7 +3,8 @@ import { execute, type ExecuteContext, type ExecuteResult } from "./runtime.js";
 import type { Registry } from "./connectors/registry.js";
 import type { SkillStore } from "./connectors/types.js";
 import type { TriggerSource } from "./parser.js";
-import type { TraceConfig, TraceStore } from "./trace.js";
+import type { TraceConfig, TraceStore, TraceRecord } from "./trace.js";
+import { SweeperState, isNonCleanFire, classifyOutcome, SWEEP_LOOKBACK_MS } from "./supervisor.js";
 import { evaluateApprovalGate } from "./approval.js";
 import { EventNotFoundError, EventParamMismatchError } from "./errors.js";
 import type { SecretProvider } from "./secrets.js";
@@ -98,6 +99,8 @@ export interface SchedulerConfig {
    */
   supervisorAgent?: string;
   supervisorSkill?: string;
+  /** Where the trace-sweeper persists its cursor + notified-set. Undefined = in-memory only. */
+  supervisorStatePath?: string;
   /** Dispatch trace recording config. Forwarded to execute() ctx. */
   trace?: TraceConfig;
   /** Trace store backend. Forwarded to execute() ctx. */
@@ -141,6 +144,8 @@ export class Scheduler {
   private readonly maxRecursionDepth: number | undefined;
   private readonly supervisorAgent: string | undefined;
   private readonly supervisorSkill: string | undefined;
+  private readonly sweeperState: SweeperState | undefined;
+  private sweeperStateLoaded = false;
   private readonly trace: TraceConfig | undefined;
   private readonly traceStore: TraceStore | undefined;
   private readonly secretProvider: SecretProvider | undefined;
@@ -164,6 +169,10 @@ export class Scheduler {
     this.maxRecursionDepth = config.maxRecursionDepth;
     this.supervisorAgent = config.supervisorAgent;
     this.supervisorSkill = config.supervisorSkill;
+    // The trace-sweeper is armed only when a handler skill is configured.
+    this.sweeperState = config.supervisorSkill !== undefined
+      ? new SweeperState(config.supervisorStatePath)
+      : undefined;
     this.trace = config.trace;
     this.traceStore = config.traceStore;
     this.secretProvider = config.secretProvider;
@@ -342,6 +351,96 @@ export class Scheduler {
       fires.push(this.dispatchTrigger(trig, nowMs).then(() => undefined));
     }
     await Promise.all(fires);
+    // Failure supervision sweep — best-effort, AFTER this tick's fires so their
+    // traces are already written. A sweep failure must never break the tick.
+    try {
+      await this.sweepFailures(nowMs);
+    } catch (err) {
+      this.log(`supervisor sweep failed: ${(err as Error).message}`);
+    }
+  }
+
+  /**
+   * The trace-sweeper (Perry spec 967ed739). Reads the durable trace for
+   * non-clean fires since the last sweep and routes each un-notified one to the
+   * supervisor handler skill. No-op unless a handler is configured. Per-fire
+   * dedup via the persistent notified-set; the handler owns the notification
+   * POLICY (digest / severity / channel).
+   */
+  private async sweepFailures(nowMs: number): Promise<void> {
+    if (this.supervisorSkill === undefined || this.sweeperState === undefined || this.traceStore === undefined) return;
+    if (!this.sweeperStateLoaded) {
+      await this.sweeperState.load();
+      this.sweeperStateLoaded = true;
+    }
+    const state = this.sweeperState;
+    // Re-query a lookback window so a long run that completed after the last
+    // sweep isn't missed; the notified-set dedups the overlap.
+    const since = Math.max(0, state.cursor - SWEEP_LOOKBACK_MS);
+    const records = await this.traceStore.query({ since_ms: since });
+    let maxSeen = state.cursor;
+    for (const rec of records) {
+      if (rec.fired_at_ms > maxSeen) maxSeen = rec.fired_at_ms;
+      if (state.isNotified(rec.trace_id)) continue;
+      if (!isNonCleanFire(rec)) continue;
+      // LOOP GUARD: the handler skill writes its own trace; if IT fails, never
+      // route that back through itself (infinite "the notifier failed"). Its own
+      // failure goes only to the local floor. Match by name.
+      if (rec.skill_name === this.supervisorSkill) {
+        this.log(
+          `supervisor handler '${rec.skill_name}' itself failed (trace ${rec.trace_id}, ${classifyOutcome(rec)}) — ` +
+          `NOT re-routed (loop guard); ${this.summarizeFailure(rec)}`,
+        );
+        state.markNotified(rec.trace_id, rec.fired_at_ms);
+        continue;
+      }
+      await this.routeToSupervisor(rec, nowMs);
+      state.markNotified(rec.trace_id, rec.fired_at_ms);
+    }
+    state.advanceCursor(maxSeen);
+    state.prune(maxSeen - SWEEP_LOOKBACK_MS);
+    await state.persist();
+  }
+
+  /** Dispatch the handler skill with the failure record as vars. Failure → local floor. */
+  private async routeToSupervisor(rec: TraceRecord, nowMs: number): Promise<void> {
+    const vars: Record<string, unknown> = {
+      FAILED_SKILL: rec.skill_name,
+      TRACE_ID: rec.trace_id,
+      OUTCOME: classifyOutcome(rec),
+      FIRED_AT_MS: rec.fired_at_ms,
+      TRIGGER: `${rec.trigger.source}:${rec.trigger.name}`,
+      DEADLINE_EXCEEDED: rec.deadline_exceeded === true,
+      ERROR_SUMMARY: rec.errors.map((e) => `${e.class}: ${e.message}`).join(" | "),
+      UNCERTAIN_EFFECTS: (rec.uncertain_effects ?? []).map((u) => `${u.opKind} ${u.op}`).join(", "),
+      ...(this.supervisorAgent !== undefined ? { SUPERVISOR_AGENT: this.supervisorAgent } : {}),
+    };
+    try {
+      const result = await this.dispatchSkill(
+        this.supervisorSkill!,
+        vars,
+        { source: "supervisor", name: rec.skill_name, fired_at_ms: nowMs },
+      );
+      // The handler is itself a fire; its OWN failure must not silently vanish.
+      if (result === null || result.errors.length > 0) {
+        this.log(
+          `supervisor handler '${this.supervisorSkill}' failed to notify about ${rec.skill_name} ` +
+          `(trace ${rec.trace_id}): ${result === null ? "not runnable (unapproved / missing)" : result.errors.map((e) => e.message).join("; ")}`,
+        );
+      }
+    } catch (err) {
+      // Last-resort local floor — the most-local sink (stderr), never a network
+      // path that can itself be down (Perry's #3 hardening). Never re-invokes.
+      this.log(`supervisor handler dispatch threw for ${rec.skill_name} (trace ${rec.trace_id}): ${(err as Error).message}`);
+    }
+  }
+
+  private summarizeFailure(rec: TraceRecord): string {
+    const parts: string[] = [];
+    if (rec.errors.length > 0) parts.push(`errors=[${rec.errors.map((e) => e.class).join(",")}]`);
+    if (rec.deadline_exceeded === true) parts.push("deadline_exceeded");
+    if ((rec.uncertain_effects?.length ?? 0) > 0) parts.push(`uncertain=[${rec.uncertain_effects!.map((u) => u.op).join(",")}]`);
+    return parts.join(" ");
   }
 
   /**

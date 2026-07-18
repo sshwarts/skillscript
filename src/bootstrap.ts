@@ -586,7 +586,7 @@ export function bootstrap(opts: BootstrapOpts): BootstrapResult {
     ...(resolvedShellAllowlist !== undefined ? { shellAllowlist: resolvedShellAllowlist } : {}),
     ...(resolvedFsAllowlist !== undefined ? { fsAllowlist: resolvedFsAllowlist } : {}),
     ...(resolvedSupervisorAgent !== undefined ? { supervisorAgent: resolvedSupervisorAgent } : {}),
-    ...(resolvedSupervisorSkill !== undefined ? { supervisorSkill: resolvedSupervisorSkill } : {}),
+    ...(resolvedSupervisorSkill !== undefined ? { supervisorSkill: resolvedSupervisorSkill, supervisorStatePath: join(opts.traceDir, ".supervisor-state.json") } : {}),
     ...(opts.trace !== undefined ? { trace: opts.trace, traceStore } : {}),
     ...(onTriggersChanged !== undefined ? { onTriggersChanged } : {}),
     enableUnsafeShell,
