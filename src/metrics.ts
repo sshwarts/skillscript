@@ -25,8 +25,18 @@ export interface PerSkillMetrics {
   fireCount: number;
   successCount: number;
   errorCount: number;
+  /** Fires terminated by a run deadline (deadline_exceeded). Subset of the non-clean set. */
+  deadlineExceededCount: number;
+  /**
+   * Fires that left an uncertain external effect (a mutation issued, outcome
+   * unknown). The highest-severity signal — "something may have landed, reconcile
+   * it" — surfaced distinctly because it isn't a plain error class.
+   */
+  uncertainEffectCount: number;
   /** 0-1 inclusive. Zero fires → 1 (no failures observed). */
   successRate: number;
+  /** Most recent NON-CLEAN fire (errored / deadline / uncertain), ms epoch; undefined if all clean. */
+  lastFailure_ms?: number;
   /** opKind → errorClass → count. */
   errorCategories: Record<string, Record<string, number>>;
 }
@@ -82,6 +92,8 @@ export async function healthMetrics(
         fireCount: 0,
         successCount: 0,
         errorCount: 0,
+        deadlineExceededCount: 0,
+        uncertainEffectCount: 0,
         successRate: 1,
         errorCategories: {},
       };
@@ -100,6 +112,12 @@ export async function healthMetrics(
         }
         byOp[err.class] = (byOp[err.class] ?? 0) + 1;
       }
+    }
+    // Deadline + uncertain-effect signals (distinct from plain error class).
+    if (trace.deadline_exceeded === true) skillMetrics.deadlineExceededCount++;
+    if ((trace.uncertain_effects?.length ?? 0) > 0) skillMetrics.uncertainEffectCount++;
+    if (trace.errors.length > 0 || trace.deadline_exceeded === true || (trace.uncertain_effects?.length ?? 0) > 0) {
+      skillMetrics.lastFailure_ms = Math.max(skillMetrics.lastFailure_ms ?? 0, trace.fired_at_ms);
     }
 
     // Per-connector aggregation

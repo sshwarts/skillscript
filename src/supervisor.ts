@@ -42,16 +42,19 @@ export function classifyOutcome(rec: TraceRecord): string {
 }
 
 /**
- * How far back each sweep re-queries, to catch a long run that STARTED before
- * the cursor but only COMPLETED (was written to the trace) after the last sweep.
- * The notified-set dedups the re-query, so a generous window is free correctness.
- * 15 min comfortably covers the 5-min absolute-timeout default plus headroom.
+ * Small margin the sweep subtracts from its completion-time cursor when
+ * re-querying — it covers only the write/read skew at the sweep boundary (a
+ * record completing right as the last sweep read the store), NOT run duration.
+ * The cursor keys on COMPLETION time (see SweeperState), so run length is
+ * irrelevant to correctness — a run of any length is caught when it completes
+ * (Perry finding #1). The notified-set dedups the small overlap.
  */
-export const SWEEP_LOOKBACK_MS = 15 * 60 * 1000;
+export const SWEEP_MARGIN_MS = 5 * 60 * 1000;
 
 interface SweeperStateData {
+  /** High-water COMPLETION time swept (ms). The sweep re-queries completed_since (cursor − margin). */
   cursor_ms: number;
-  /** traceId → firedAtMs, so we can prune ids that fall out of the lookback window. */
+  /** traceId → completedAtMs, so we can prune ids that fall below the margin floor. */
   notified: Record<string, number>;
 }
 

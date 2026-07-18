@@ -4,7 +4,7 @@ import type { Registry } from "./connectors/registry.js";
 import type { SkillStore } from "./connectors/types.js";
 import type { TriggerSource } from "./parser.js";
 import type { TraceConfig, TraceStore, TraceRecord } from "./trace.js";
-import { SweeperState, isNonCleanFire, classifyOutcome, SWEEP_LOOKBACK_MS } from "./supervisor.js";
+import { SweeperState, isNonCleanFire, classifyOutcome, SWEEP_MARGIN_MS } from "./supervisor.js";
 import { evaluateApprovalGate } from "./approval.js";
 import { EventNotFoundError, EventParamMismatchError } from "./errors.js";
 import type { SecretProvider } from "./secrets.js";
@@ -374,13 +374,16 @@ export class Scheduler {
       this.sweeperStateLoaded = true;
     }
     const state = this.sweeperState;
-    // Re-query a lookback window so a long run that completed after the last
-    // sweep isn't missed; the notified-set dedups the overlap.
-    const since = Math.max(0, state.cursor - SWEEP_LOOKBACK_MS);
-    const records = await this.traceStore.query({ since_ms: since });
+    // Key on COMPLETION time — a record is written at completion, so this catches
+    // a run of ANY length when it finishes (default deadlines are unbounded, so a
+    // fired_at window would miss a long run — Perry finding #1). The small margin
+    // covers only the write/read skew at the sweep boundary; the notified-set
+    // dedups the overlap.
+    const since = Math.max(0, state.cursor - SWEEP_MARGIN_MS);
+    const records = await this.traceStore.query({ completed_since_ms: since });
     let maxSeen = state.cursor;
     for (const rec of records) {
-      if (rec.fired_at_ms > maxSeen) maxSeen = rec.fired_at_ms;
+      if (rec.completed_at_ms > maxSeen) maxSeen = rec.completed_at_ms;
       if (state.isNotified(rec.trace_id)) continue;
       if (!isNonCleanFire(rec)) continue;
       // LOOP GUARD: the handler skill writes its own trace; if IT fails, never
@@ -391,14 +394,14 @@ export class Scheduler {
           `supervisor handler '${rec.skill_name}' itself failed (trace ${rec.trace_id}, ${classifyOutcome(rec)}) — ` +
           `NOT re-routed (loop guard); ${this.summarizeFailure(rec)}`,
         );
-        state.markNotified(rec.trace_id, rec.fired_at_ms);
+        state.markNotified(rec.trace_id, rec.completed_at_ms);
         continue;
       }
       await this.routeToSupervisor(rec, nowMs);
-      state.markNotified(rec.trace_id, rec.fired_at_ms);
+      state.markNotified(rec.trace_id, rec.completed_at_ms);
     }
     state.advanceCursor(maxSeen);
-    state.prune(maxSeen - SWEEP_LOOKBACK_MS);
+    state.prune(maxSeen - SWEEP_MARGIN_MS);
     await state.persist();
   }
 
@@ -409,10 +412,18 @@ export class Scheduler {
       TRACE_ID: rec.trace_id,
       OUTCOME: classifyOutcome(rec),
       FIRED_AT_MS: rec.fired_at_ms,
+      // Perry #3: when the sweep caught it (staleness / sweep-lag signal) + the
+      // identity the failed skill ran as (same skill, different identities).
+      DETECTED_AT_MS: nowMs,
+      RAN_AS: rec.identity.agent_id ?? "",
       TRIGGER: `${rec.trigger.source}:${rec.trigger.name}`,
       DEADLINE_EXCEEDED: rec.deadline_exceeded === true,
       ERROR_SUMMARY: rec.errors.map((e) => `${e.class}: ${e.message}`).join(" | "),
+      // Perry #5: flat string for the template PLUS the structured list, so a
+      // handler can branch severity on the actionable "a mutation may have landed"
+      // signal (op-kind + target preserved), not just read a sentence.
       UNCERTAIN_EFFECTS: (rec.uncertain_effects ?? []).map((u) => `${u.opKind} ${u.op}`).join(", "),
+      UNCERTAIN_EFFECTS_LIST: (rec.uncertain_effects ?? []).map((u) => ({ opKind: u.opKind, op: u.op, target: u.target })),
       ...(this.supervisorAgent !== undefined ? { SUPERVISOR_AGENT: this.supervisorAgent } : {}),
     };
     try {

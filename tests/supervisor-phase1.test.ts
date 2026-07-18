@@ -151,6 +151,61 @@ describe("Phase 1 — the sweep (route + vars + dedup + loop-guard)", () => {
     } finally { cleanup(); }
   });
 
+  it("[Perry #1] a long unbounded run that COMPLETES after the cursor is still caught (completion-time keying)", async () => {
+    const w = wire({ supervisorSkill: "test-handler" });
+    try {
+      await w.skillStore.store("test-handler", HANDLER);
+      const now = Date.now();
+      // First a normal recent failure → the first tick routes it and advances
+      // the cursor to ~now (its handler fire completes at real-now).
+      await w.traceStore.write(trace({ trace_id: "recent", skill_name: "recent-fail", fired_at_ms: now - 1000, completed_at_ms: now - 1000, errors: [anError] }));
+      await w.scheduler.tick();
+
+      // Now a LONG run: FIRED 30 min ago (long before the cursor) but only just
+      // COMPLETED. A fired_at window would miss it; completion-time keying can't.
+      await w.traceStore.write(trace({ trace_id: "longrun", skill_name: "slow-cron", fired_at_ms: now - 30 * 60 * 1000, completed_at_ms: now, errors: [anError] }));
+      await w.scheduler.tick();
+
+      const emitted = (await w.traceStore.query({ skill_name: "test-handler" })).map((t) => t.emissions.join("")).join("\n");
+      expect(emitted).toContain("handled: slow-cron"); // the long run's failure was notified
+      expect(emitted).toContain("handled: recent-fail");
+    } finally { cleanup(); }
+  });
+
+  it("routes MULTIPLE un-notified fires in one tick (not just the first)", async () => {
+    const w = wire({ supervisorSkill: "test-handler" });
+    try {
+      await w.skillStore.store("test-handler", HANDLER);
+      await w.traceStore.write(trace({ trace_id: "m1", skill_name: "cron-a", errors: [anError] }));
+      await w.traceStore.write(trace({ trace_id: "m2", skill_name: "cron-b", deadline_exceeded: true, errors: [{ ...anError, class: "RunDeadlineExceeded" }] }));
+      await w.traceStore.write(trace({ trace_id: "m3", skill_name: "cron-c", uncertain_effects: [{ opKind: "$", op: "x.send", reason: "issued, outcome uncertain", retry: false }] }));
+
+      await w.scheduler.tick();
+
+      const emitted = (await w.traceStore.query({ skill_name: "test-handler" })).map((t) => t.emissions.join("")).join("\n");
+      expect(emitted).toContain("handled: cron-a");
+      expect(emitted).toContain("handled: cron-b");
+      expect(emitted).toContain("handled: cron-c");
+    } finally { cleanup(); }
+  });
+
+  it("degrades gracefully on a corrupt sidecar (starts fresh, still routes)", async () => {
+    const w = wire({ supervisorSkill: "test-handler" });
+    try {
+      await w.skillStore.store("test-handler", HANDLER);
+      // Corrupt the sidecar at its known path before the first sweep loads it.
+      const { writeFileSync, mkdirSync } = await import("node:fs");
+      // The bootstrap derives <traceDir>/.supervisor-state.json; write garbage there.
+      const home = homes[homes.length - 1]!;
+      mkdirSync(join(home, "traces"), { recursive: true });
+      writeFileSync(join(home, "traces", ".supervisor-state.json"), "{ this is not json ]");
+
+      await w.traceStore.write(trace({ trace_id: "c1", skill_name: "cron-x", errors: [anError] }));
+      await expect(w.scheduler.tick()).resolves.toBeUndefined();
+      expect((await w.traceStore.query({ skill_name: "test-handler" })).length).toBe(1);
+    } finally { cleanup(); }
+  });
+
   it("absence: no supervisor configured → sweep is a no-op, non-clean fires ignored", async () => {
     const w = wire(); // no supervisorSkill
     try {

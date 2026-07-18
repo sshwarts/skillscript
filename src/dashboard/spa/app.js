@@ -440,13 +440,14 @@ function renderSkills() {
       ${chips}
       <table>
         <thead>
-          <tr><th>Name</th><th>Status</th><th>Description</th><th>Tags</th><th>Version</th></tr>
+          <tr><th>Name</th><th>Status</th><th>Health (24h)</th><th>Description</th><th>Tags</th><th>Version</th></tr>
         </thead>
         <tbody>
           ${shown.map((s) => `
             <tr onclick="window.location.hash='#skill/${encodeURIComponent(s.name)}'">
               <td><strong>${esc(s.name)}</strong></td>
               <td>${skillStatusBadge(s)}</td>
+              <td>${skillHealthBadge(s.name)}</td>
               <td>${esc(s.description ?? "—")}</td>
               <td>${(s.tags && s.tags.length) ? s.tags.map((t) => `<span class="tag-pill">${esc(t)}</span>`).join(" ") : `<span style="color:var(--text-muted)">—</span>`}</td>
               <td><code>${esc(s.version?.slice(0, 8) ?? "—")}</code></td>
@@ -468,6 +469,22 @@ function skillStatusBadge(s) {
     return `<span class="badge error" title="Approved status, but the body lacks a valid signature — won't run until re-approved">re-approval needed</span>`;
   }
   return `<span class="badge ${esc(s.status)}">${esc(s.status)}</span>`;
+}
+
+// Per-skill health from the 24h trace metrics. Uncertain-effect is the loudest
+// signal (a mutation may have landed); then errored (with a deadline count if
+// any); then clean; "—" when the skill hasn't fired in the window.
+function skillHealthBadge(name) {
+  const m = state.metrics?.perSkill?.[name];
+  if (!m || m.fireCount === 0) return `<span style="color:var(--text-muted)">—</span>`;
+  if (m.uncertainEffectCount > 0) {
+    return `<span class="badge error" title="A mutation was issued but its outcome is UNKNOWN — reconcile it by hand">⚠ ${m.uncertainEffectCount} uncertain effect${m.uncertainEffectCount === 1 ? "" : "s"}</span>`;
+  }
+  if (m.errorCount > 0) {
+    const dl = m.deadlineExceededCount > 0 ? ` · ${m.deadlineExceededCount} deadline` : "";
+    return `<span class="badge error" title="Fires that errored in the last 24h">⚠ ${m.errorCount} failed${dl}</span>`;
+  }
+  return `<span class="badge ok" title="${m.fireCount} fire(s), all clean (24h)">ok</span>`;
 }
 
 async function renderSkillDetail(name) {
@@ -548,6 +565,8 @@ async function renderSkillDetail(name) {
               <dt>Fires</dt><dd>${metrics.fireCount}</dd>
               <dt>Success</dt><dd>${metrics.successCount}</dd>
               <dt>Errors</dt><dd>${metrics.errorCount}</dd>
+              <dt>Deadline-cut</dt><dd>${metrics.deadlineExceededCount ?? 0}</dd>
+              <dt>Uncertain effects</dt><dd>${(metrics.uncertainEffectCount ?? 0) > 0 ? `<span class="badge error" title="a mutation may have landed — reconcile">${metrics.uncertainEffectCount}</span>` : "0"}</dd>
               <dt>Success rate</dt><dd>${(metrics.successRate * 100).toFixed(1)}%</dd>
             </dl>`
           : `<div class="empty">No traces recorded in window.</div>`}

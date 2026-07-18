@@ -105,6 +105,14 @@ export interface TraceQueryFilter {
   skill_name?: string;
   since_ms?: number;
   until_ms?: number;
+  /**
+   * Filter on COMPLETION time (`completed_at_ms >= this`), not fire time. The
+   * supervisor sweeper uses this: a record is written at completion, so keying
+   * "what's new since my last sweep" on completion catches a long-running fire
+   * whose `fired_at` is old but which only just finished — a fired_at window
+   * can't, because a run with no `# Deadline:` is unbounded (Perry finding #1).
+   */
+  completed_since_ms?: number;
   limit?: number;
 }
 
@@ -244,6 +252,7 @@ export class FilesystemTraceStore implements TraceStore {
           const rec = JSON.parse(text) as TraceRecord;
           if (filter.since_ms !== undefined && rec.fired_at_ms < filter.since_ms) continue;
           if (filter.until_ms !== undefined && rec.fired_at_ms > filter.until_ms) continue;
+          if (filter.completed_since_ms !== undefined && rec.completed_at_ms < filter.completed_since_ms) continue;
           results.push(rec);
         } catch {
           /* unreadable / unparseable — skip */
