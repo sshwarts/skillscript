@@ -2000,6 +2000,25 @@ Bad input skips the `if`, the default stands, the child never throws — so a pa
 
 **Rule 5 — Degrade LOUD, not silent.** A fallback value should be a visible marker ("unavailable", "—", "n/a") — never empty, never a plausible-but-wrong value. A degraded run must be diagnosable: the throw's reason is preserved in `result.fallbacks[].reason`, so a degraded leg stays traceable. Don't silently ship a blank or a fake reading. Clean-degrade beats both a hard abort and a silent lie.
 
+## Deadlines & cancellation — # Deadline: bound, uncatchable termination, effect-boundary onAbort, uncertain effects
+
+A skill can bound its entire run in wall-clock time with the `# Deadline: N` frontmatter header (N seconds; an integer or a `$(VAR)` reference). It is **opt-in** — a skill with no `# Deadline:` keeps ordinary per-op timeout behavior and carries no run-total bound. `# Deadline:` is part of the signing hash: editing it changes the safety envelope an approver signed, so it returns the skill to Draft for re-approval (the same treatment as any behavior-affecting header, and the opposite of approval-neutral headers like `# Status:` / `# Tags:`).
+
+**One propagating bound.** The deadline resolves once, at the root run, to an absolute wall-clock instant. It propagates unchanged into composed child skills (`execute_skill`): a child inherits the parent's *remaining* budget and may only **tighten** it — its own `# Deadline:` is clamped to `min(inherited remaining, child budget)`, never loosening the root bound. A deep composition tree is therefore bounded by the root deadline as a whole; the total cannot exceed it regardless of nesting depth.
+
+**Per-op interaction.** Each op's effective timeout is `min(per-op # Timeout:, remaining-to-deadline)`. A per-op `# Timeout:` survives as a tighter *local* bound; the deadline is the ceiling above it. An op that would dispatch with no time left fails fast before dispatching rather than starting work it cannot finish.
+
+**Uncatchable termination.** When the deadline is reached the run raises a fatal `RunDeadlineExceeded` that is **not catchable** by op-level `(fallback:)` or target `else:` — it bypasses both, terminates the run, and returns the partial results gathered so far (emissions and effects) alongside a `deadlineExceeded` marker and the uncertain-effects log. This is deliberate. A *catchable* deadline would let a fallback-laden skill cascade every remaining op into instant-fail-then-fallback and hand back a result that *looks* complete but ran past the bound. Uncatchable is what makes "bounded to T" literally true: at the deadline, the run stops.
+
+**Cancellation — keyed on the effect boundary.** When an op is cut at the deadline the runtime aborts the in-flight call. What that actually achieves is a property the connector declares — its **effect boundary**:
+
+- **Call-bounded** (HTTP request/response, id-correlated RPC — the common case): aborting the call ends the effect (the socket closes, or a late correlated reply is dropped). Self-cleaning; nothing else to do.
+- **Outlives-call** (a physical actuator, a spawned or async job, an open stream/session, a held lease): aborting the *client* call does not stop the underlying effect. Such a connector must supply a bounded `onAbort(budgetMs)` hook — a compensating action (for example, a safety-stop on a physical device) that the runtime invokes within a small reserved cleanup budget before dropping the op. The reserve is taken only for outlives-call ops, so call-bounded ops pay nothing for it. A connector that declares outlives-call effects but provides no `onAbort` is **refused at registration**: an out-of-band effect that cannot be cancelled must not be wired.
+
+`onAbort` is a **safety-stop, not a rollback**. It halts a runaway out-of-band effect; it does not undo what already happened. A *mutating* op cut mid-flight is therefore recorded in the run's **uncertain-effects** log as "issued, outcome uncertain" — never reported as cleanly cancelled. The caller (or, for an autonomous run, the durable trace) can see that the effect may have partially landed. Read-only ops carry no such uncertainty and are excluded.
+
+**Guidance.** A skill that dispatches any effectful op while declaring no `# Deadline:` is unbounded at the run level; a lint (`unbounded-no-deadline`) advises adding one. Give effectful skills an explicit deadline — especially anything that drives a physical device or a long-running external job. Be aware that a tight deadline combined with an outlives-call op means that op will not *start* inside the final cleanup-reserve window: it fails fast rather than begin an effect it could not guarantee cleaning up in time.
+
 ## Composition — skills calling skills
 
 Skillscript supports skill-to-skill composition via the runtime's public composition primitive. A parent skill invokes a child skill, optionally passes inputs, optionally binds the child's result. The runtime threads variable state, propagates errors, and enforces a recursion-depth guard.
@@ -2595,5 +2614,5 @@ When any of these primitives ship, the relevant grammar moves into its canonical
 
 ---
 
-*Rendered from `skillscript/skillscript-language-reference` — 2026-07-16 18:49 EDT*  
+*Rendered from `skillscript/skillscript-language-reference` — 2026-07-18 14:42 EDT*  
 *Source of truth: AMP (`amp_render_document("skillscript/skillscript-language-reference")`)*

@@ -24,8 +24,8 @@ const REPO_ROOT = join(__dirname, "..");
 const PACKAGE_JSON = JSON.parse(readFileSync(join(REPO_ROOT, "package.json"), "utf8")) as Record<string, unknown>;
 
 describe("T7 — package.json polish", () => {
-  it("1. version is 0.34.0 (REST-backed connectors + shell secret-env scrub — RestConnector runnable worked example, new McpConnector section in connector-contract-reference, McpToolDescriptor re-export, and SKILLSCRIPT_SECRET_* scrubbed from shell() children on both the structured and unsafe paths with egress vars preserved)", () => {
-    expect(PACKAGE_JSON["version"]).toBe("0.34.0");
+  it("1. version is 0.35.0 (deadlines & cancellation — # Deadline: propagating wall-clock bound + uncatchable termination, real cancellation via shell SIGKILL + AbortSignal + outlives-call onAbort, operator ceiling SKILLSCRIPT_MAX_DEADLINE_SECONDS on CLI + server, uncertain-effects safe-default on the execute_skill return + durable trace, unbounded-no-deadline lint)", () => {
+    expect(PACKAGE_JSON["version"]).toBe("0.35.0");
   });
 
   it("2. main + types + bin + engines.node ≥ 22.5 declared", () => {
@@ -75,7 +75,7 @@ describe("T7 — distributed code surface", () => {
     expect(out.trim(), `found AMP identifiers: ${out}`).toBe("");
   });
 
-  it("7. narrow-core LOC ceiling holds (< 11500 / 23 files; ..., v0.7.0 → 7150, v0.7.1 → 7250, v0.7.2 → 7550, v0.8.0 → 8200, v0.9.4 → 8300, v0.9.6 → 8550, v0.9.8 → 8650, v0.10 → 9300, v0.13 → 9550, v0.14.1 → 9700, v0.15.0 → 9900, v0.16.x → 10400, v0.17.4 → 10500, v0.18.2 → 10600, v0.18.5 → 10800, v0.18.8 → 11100, v0.19.4 → 11250, v0.19.10 → 11400, v0.19.12 → 11500, v1.0-gate7 → 11800, v0.23.x connector-discovery + remote-mcp respawn → 12000, v0.25.0 secret-references → 12200, v0.26.4 append-structured-to-string lint → 12300, v0.34.0 shell-secret-env-scrub → 12400, v0.35.0 deadlines-phase1 (WIP) → 12700)", () => {
+  it("7. narrow-core LOC ceiling holds (< 11500 / 23 files; ..., v0.7.0 → 7150, v0.7.1 → 7250, v0.7.2 → 7550, v0.8.0 → 8200, v0.9.4 → 8300, v0.9.6 → 8550, v0.9.8 → 8650, v0.10 → 9300, v0.13 → 9550, v0.14.1 → 9700, v0.15.0 → 9900, v0.16.x → 10400, v0.17.4 → 10500, v0.18.2 → 10600, v0.18.5 → 10800, v0.18.8 → 11100, v0.19.4 → 11250, v0.19.10 → 11400, v0.19.12 → 11500, v1.0-gate7 → 11800, v0.23.x connector-discovery + remote-mcp respawn → 12000, v0.25.0 secret-references → 12200, v0.26.4 append-structured-to-string lint → 12300, v0.34.0 shell-secret-env-scrub → 12400, v0.35.0 deadlines-phase1 → 12700)", () => {
     const out = execSync("node scripts/loc-ceiling.mjs", { cwd: REPO_ROOT, encoding: "utf8" });
     const match = /CORE\s+(\d+) LOC across (\d+) files/.exec(out);
     expect(match).not.toBeNull();
