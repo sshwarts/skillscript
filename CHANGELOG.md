@@ -2,6 +2,18 @@
 
 Each release carries an **Upgrade impact:** line (first in its section) so a bump's requirements are visible at a glance. Tags (closed set): **BREAKING** (a manual change is needed to keep working) · **RE-APPROVE** (secured-mode signature invalidation — skills must be re-approved before they run) · **CONFIG** (`connectors.json` / config edit needed) · **none (additive)** (no action; backward-compatible). Standard from 0.20.0 forward; the pre-0.20 transitions that need action are flagged inline below (0.14.0, 0.18.8, 0.19.0). Full walkthrough: [UPGRADING.md](UPGRADING.md).
 
+## 0.36.0 — 2026-07-18 — autonomous-fire failure supervision
+
+**Upgrade impact:** none (additive), fully opt-in. No supervisor configured (the default) → nothing changes; the trace stays the pull surface. Configuring one **requires scheduler tracing to be on** (the CLI `dashboard`/`serve` path already sets this) — the runtime hard-refuses at boot otherwise, because the supervisor can't see failures it can't read from the trace.
+
+An interactive `execute_skill` hands its result to a caller who can see it failed. A **cron/event fire has no caller** — a 3 a.m. run that errored, or one cut mid-effect leaving a mutation "outcome uncertain," was invisible unless someone went and queried the trace. This adds **push**: configure a supervisor and the runtime routes those failures to a handler skill you write.
+
+- **The trace-sweeper is the scheduler, not a new daemon.** On each poll tick, after firing due triggers, the scheduler scans the durable trace for **non-clean runs** — `errors[]` non-empty, `deadline_exceeded`, or a non-empty `uncertain_effects` — since the last sweep, and routes each to your handler skill. If the scheduler is alive to fire crons, it's alive to sweep. It keys on **completion time**, so a long unbounded run is caught whenever it finishes — no run-length assumption.
+- **Detection is reliable; notification is your script.** `SKILLSCRIPT_SUPERVISOR_SKILL` names an approved handler skill; the sweeper only detects + routes, the handler owns policy + delivery (agent, email, Slack, a webhook). Copy `examples/skillscripts/supervisor-notify.skill.md`, adapt, and approve it. The handler receives the failure as vars (`FAILED_SKILL`, `OUTCOME`, `TRACE_ID`, `TRIGGER`, `ERROR_SUMMARY`, `UNCERTAIN_EFFECTS`, `DETECTED_AT_MS`, `RAN_AS`, and `SUPERVISOR_AGENT` if set — the latter optional, for an agent-routed handler).
+- **Per-fire dedup + a loop-guard.** At most one alert per failed run (a persistent notified-set survives restart). The handler writes its own trace; if *it* fails, the sweeper does not route that back through itself — it logs to the local stderr floor and stops. No "the notifier failed" loop.
+- **Config source-of-truth.** `SKILLSCRIPT_SUPERVISOR_SKILL` / `SKILLSCRIPT_SUPERVISOR_AGENT` are boot-time config (present before the first fire, reachable on a headless host), not a runtime toggle — a safety control shouldn't be silently switchable from a web UI.
+- **Dashboard health surface.** The skills list gains a **Health (24h)** column flagging a skill errored / uncertain-effect (loudest) / deadline; the skill detail breaks out deadline-cut + uncertain-effect counts. The uncertain-effect signal — "a mutation may have landed, reconcile it" — was previously invisible in the UI.
+
 ## 0.35.0 — 2026-07-18 — first-class deadlines & cancellation
 
 **Upgrade impact:** none (additive). Everything here is opt-in: a skill without `# Deadline:` and a runtime without `SKILLSCRIPT_MAX_DEADLINE_SECONDS` behave exactly as before (per-op timeouts only). Editing a `# Deadline:` on an already-approved skill **does** drop it to Draft (the value is in the signing hash — see below), so a re-approve is needed after such an edit.

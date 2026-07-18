@@ -167,6 +167,7 @@ Important operator controls:
 | `SKILLSCRIPT_FS_ALLOWLIST`        | deny all paths       |
 | `SKILLSCRIPT_SECURED_MODE`        | off                  |
 | `SKILLSCRIPT_MAX_DEADLINE_SECONDS`| unset (no ceiling)   |
+| `SKILLSCRIPT_SUPERVISOR_SKILL`    | unset (off)          |
 | `SKILLSCRIPT_SECRET_<NAME>`       | unset                |
 
 Secrets are resolved by the runtime and passed only to approved sinks. Skills cannot print or inspect their raw values.
