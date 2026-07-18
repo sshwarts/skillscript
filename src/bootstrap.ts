@@ -93,6 +93,16 @@ export interface BootstrapOpts {
    */
   maxDeadlineSeconds?: number;
   /**
+   * Autonomous-fire failure supervisor. `supervisorAgent` = the agent id the
+   * handler runs as; `supervisorSkill` = the approved handler skill the trace-
+   * sweeper routes non-clean fires to. Both unset = feature off (absence is not
+   * a failure). Cascade: bootstrap opt > `SKILLSCRIPT_SUPERVISOR_*` env >
+   * `skillscript.config.json`. A safety control — config source-of-truth, not a
+   * dashboard toggle.
+   */
+  supervisorAgent?: string;
+  supervisorSkill?: string;
+  /**
    * v0.18.7 — composition recursion depth ceiling. Default 10
    * (`DEFAULT_MAX_RECURSION_DEPTH`). Threaded into the Scheduler's
    * ctx so every trigger-fired dispatch inherits it. Adopter cascade
@@ -498,6 +508,8 @@ export function bootstrap(opts: BootstrapOpts): BootstrapResult {
   const resolvedMaxRecursionDepth = pickEnvOptionalOption(opts.maxRecursionDepth, envCfg.maxRecursionDepth);
   const resolvedMaxDeadlineSeconds = pickEnvOptionalOption(opts.maxDeadlineSeconds, envCfg.maxDeadlineSeconds);
   const resolvedMaxDeadlineMs = resolvedMaxDeadlineSeconds !== undefined ? resolvedMaxDeadlineSeconds * 1000 : undefined;
+  const resolvedSupervisorAgent = pickEnvOptionalOption(opts.supervisorAgent, envCfg.supervisorAgent);
+  const resolvedSupervisorSkill = pickEnvOptionalOption(opts.supervisorSkill, envCfg.supervisorSkill);
   const mode = opts.mode ?? "dashboard";
 
   // v0.4.0 — register the MCP connectors from the pre-loaded connectors.json
@@ -545,6 +557,23 @@ export function bootstrap(opts: BootstrapOpts): BootstrapResult {
   // scheduler + MCP server so every dispatch path resolves the same way.
   const secretProvider = opts.secretProvider ?? new EnvSecretProvider();
 
+  // Supervisor boot invariant (absence is NOT a failure): no supervisor → feature
+  // simply off. But a CONFIGURED supervisor whose detection substrate is defeated
+  // is the exact silent hole the feature exists to close — the trace-sweeper reads
+  // the DURABLE TRACE to find failed autonomous fires, so it cannot function if
+  // scheduler-fire tracing is off or sampled. That contradiction hard-refuses at
+  // boot (same philosophy as the deadline registration guard — a structural
+  // invariant beats a skippable warning).
+  if (resolvedSupervisorSkill !== undefined && opts.trace?.mode !== "on") {
+    throw new Error(
+      `Supervisor configured (supervisorSkill="${resolvedSupervisorSkill}") but autonomous-fire tracing is ` +
+        `"${opts.trace?.mode ?? "off"}". The failure-supervisor's trace-sweeper reads the durable trace to detect ` +
+        `non-clean fires, so it CANNOT see failures unless every scheduler fire is traced. Set the scheduler trace ` +
+        `mode to "on" (the CLI dashboard/serve path does this by default), or unset the supervisor to disable ` +
+        `failure supervision.`,
+    );
+  }
+
   const scheduler = new Scheduler({
     registry,
     skillStore,
@@ -556,6 +585,8 @@ export function bootstrap(opts: BootstrapOpts): BootstrapResult {
     ...(resolvedMaxRecursionDepth !== undefined ? { maxRecursionDepth: resolvedMaxRecursionDepth } : {}),
     ...(resolvedShellAllowlist !== undefined ? { shellAllowlist: resolvedShellAllowlist } : {}),
     ...(resolvedFsAllowlist !== undefined ? { fsAllowlist: resolvedFsAllowlist } : {}),
+    ...(resolvedSupervisorAgent !== undefined ? { supervisorAgent: resolvedSupervisorAgent } : {}),
+    ...(resolvedSupervisorSkill !== undefined ? { supervisorSkill: resolvedSupervisorSkill } : {}),
     ...(opts.trace !== undefined ? { trace: opts.trace, traceStore } : {}),
     ...(onTriggersChanged !== undefined ? { onTriggersChanged } : {}),
     enableUnsafeShell,

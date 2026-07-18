@@ -52,6 +52,14 @@ export interface SkillscriptConfig {
    */
   maxDeadlineSeconds?: number;
   /**
+   * Autonomous-fire failure supervisor. `supervisorAgent` = the agent id the
+   * handler runs as; `supervisorSkill` = the approved handler skill the trace-
+   * sweeper routes non-clean fires to. Both unset = feature off. Env overrides:
+   * `SKILLSCRIPT_SUPERVISOR_AGENT` / `SKILLSCRIPT_SUPERVISOR_SKILL`.
+   */
+  supervisorAgent?: string;
+  supervisorSkill?: string;
+  /**
    * v0.18.7 — composition recursion depth ceiling. Default 10
    * (DEFAULT_MAX_RECURSION_DEPTH). Adopters with deeply composing skill
    * suites bump this. Env-var override:
@@ -202,6 +210,15 @@ export function loadSkillscriptConfig(opts: LoadSkillscriptConfigOpts): LoadSkil
       errors.push(`skillscript.config.json: field 'maxDeadlineSeconds' must be a positive integer (seconds).`);
     } else {
       config.maxDeadlineSeconds = obj["maxDeadlineSeconds"];
+    }
+  }
+  for (const key of ["supervisorAgent", "supervisorSkill"] as const) {
+    if (obj[key] !== undefined) {
+      if (typeof obj[key] !== "string" || (obj[key] as string).trim() === "") {
+        errors.push(`skillscript.config.json: field '${key}' must be a non-empty string.`);
+      } else {
+        config[key] = (obj[key] as string).trim();
+      }
     }
   }
   if (obj["absoluteTimeoutMs"] !== undefined) {

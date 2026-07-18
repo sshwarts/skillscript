@@ -85,6 +85,8 @@ export async function bootstrapFromEnv(opts: BootstrapFromEnvOptions = {}): Prom
   const pollIntervalSeconds = posIntEnv(process.env["SKILLSCRIPT_POLL_INTERVAL_SECONDS"]) ?? fileConfig.pollIntervalSeconds;
   const absoluteTimeoutMs = posIntEnv(process.env["SKILLSCRIPT_ABSOLUTE_TIMEOUT_MS"]) ?? fileConfig.absoluteTimeoutMs;
   const maxDeadlineSeconds = posIntEnv(process.env["SKILLSCRIPT_MAX_DEADLINE_SECONDS"]) ?? fileConfig.maxDeadlineSeconds;
+  const supervisorAgent = strEnv(process.env["SKILLSCRIPT_SUPERVISOR_AGENT"]) ?? fileConfig.supervisorAgent;
+  const supervisorSkill = strEnv(process.env["SKILLSCRIPT_SUPERVISOR_SKILL"]) ?? fileConfig.supervisorSkill;
   const maxRecursionDepth = posIntEnv(process.env["SKILLSCRIPT_MAX_RECURSION_DEPTH"], 1) ?? fileConfig.maxRecursionDepth;
   const shellAllowlist = listEnv(process.env["SKILLSCRIPT_SHELL_ALLOWLIST"]) ?? fileConfig.shellAllowlist;
   const fsAllowlist = listEnv(process.env["SKILLSCRIPT_FS_ALLOWLIST"]) ?? fileConfig.fsAllowlist;
@@ -99,6 +101,8 @@ export async function bootstrapFromEnv(opts: BootstrapFromEnvOptions = {}): Prom
     ...(pollIntervalSeconds !== undefined ? { pollIntervalSeconds } : {}),
     ...(absoluteTimeoutMs !== undefined ? { absoluteTimeoutMs } : {}),
     ...(maxDeadlineSeconds !== undefined ? { maxDeadlineSeconds } : {}),
+    ...(supervisorAgent !== undefined ? { supervisorAgent } : {}),
+    ...(supervisorSkill !== undefined ? { supervisorSkill } : {}),
     ...(maxRecursionDepth !== undefined ? { maxRecursionDepth } : {}),
     ...(shellAllowlist !== undefined ? { shellAllowlist } : {}),
     ...(fsAllowlist !== undefined ? { fsAllowlist } : {}),
@@ -168,4 +172,9 @@ function posIntEnv(raw: string | undefined, min = 0): number | undefined {
 }
 function listEnv(raw: string | undefined): string[] | undefined {
   return raw !== undefined ? raw.split(",").map((s) => s.trim()).filter((s) => s.length > 0) : undefined;
+}
+function strEnv(raw: string | undefined): string | undefined {
+  if (raw === undefined) return undefined;
+  const t = raw.trim();
+  return t.length > 0 ? t : undefined;
 }

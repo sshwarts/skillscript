@@ -45,6 +45,14 @@ export interface RuntimeEnvConfig {
   /** Operator run-deadline ceiling in SECONDS (SKILLSCRIPT_MAX_DEADLINE_SECONDS). */
   maxDeadlineSeconds?: number;
   maxRecursionDepth?: number;
+  // Autonomous-fire failure supervision (SKILLSCRIPT_SUPERVISOR_*). Both unset =
+  // feature off. When set, the scheduler's trace-sweeper routes non-clean fires
+  // to the supervisor's handler skill. Config source-of-truth (a safety control,
+  // not a dashboard toggle): must be present at boot, before the first fire.
+  /** Agent id the supervisor handler skill runs as / reports to (SKILLSCRIPT_SUPERVISOR_AGENT). */
+  supervisorAgent?: string;
+  /** Name of the approved handler skill the sweeper routes failures to (SKILLSCRIPT_SUPERVISOR_SKILL). */
+  supervisorSkill?: string;
   // Shell allowlist
   shellAllowlist?: string[];
   // Filesystem path allowlist (file_read/file_write)
@@ -115,6 +123,17 @@ export function resolveRuntimeConfigFromEnv(env: NodeJS.ProcessEnv = process.env
   if (maxDeadlineRaw !== undefined) {
     const n = Number(maxDeadlineRaw);
     if (Number.isInteger(n) && n > 0) config.maxDeadlineSeconds = n;
+  }
+
+  // SKILLSCRIPT_SUPERVISOR_AGENT / SKILLSCRIPT_SUPERVISOR_SKILL — non-empty
+  // strings. Wire the autonomous-fire failure supervisor (agent + handler skill).
+  const supervisorAgentRaw = env["SKILLSCRIPT_SUPERVISOR_AGENT"];
+  if (supervisorAgentRaw !== undefined && supervisorAgentRaw.trim() !== "") {
+    config.supervisorAgent = supervisorAgentRaw.trim();
+  }
+  const supervisorSkillRaw = env["SKILLSCRIPT_SUPERVISOR_SKILL"];
+  if (supervisorSkillRaw !== undefined && supervisorSkillRaw.trim() !== "") {
+    config.supervisorSkill = supervisorSkillRaw.trim();
   }
 
   // SKILLSCRIPT_MAX_RECURSION_DEPTH — positive integer >= 1

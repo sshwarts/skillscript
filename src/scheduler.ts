@@ -90,6 +90,14 @@ export interface SchedulerConfig {
    * into the per-dispatch ctx so trigger-fired skills inherit it.
    */
   maxRecursionDepth?: number;
+  /**
+   * Autonomous-fire failure supervisor. When `supervisorSkill` is set, the
+   * scheduler's trace-sweeper (runs on each tick) routes non-clean fires —
+   * errored, deadline-exceeded, or uncertain-effect — to it, running under
+   * `supervisorAgent`. Both unset = feature off. Wired boot-time only.
+   */
+  supervisorAgent?: string;
+  supervisorSkill?: string;
   /** Dispatch trace recording config. Forwarded to execute() ctx. */
   trace?: TraceConfig;
   /** Trace store backend. Forwarded to execute() ctx. */
@@ -131,6 +139,8 @@ export class Scheduler {
   private readonly absoluteTimeoutMs: number | undefined;
   private readonly maxDeadlineMs: number | undefined;
   private readonly maxRecursionDepth: number | undefined;
+  private readonly supervisorAgent: string | undefined;
+  private readonly supervisorSkill: string | undefined;
   private readonly trace: TraceConfig | undefined;
   private readonly traceStore: TraceStore | undefined;
   private readonly secretProvider: SecretProvider | undefined;
@@ -152,6 +162,8 @@ export class Scheduler {
     this.absoluteTimeoutMs = config.absoluteTimeoutMs;
     this.maxDeadlineMs = config.maxDeadlineMs;
     this.maxRecursionDepth = config.maxRecursionDepth;
+    this.supervisorAgent = config.supervisorAgent;
+    this.supervisorSkill = config.supervisorSkill;
     this.trace = config.trace;
     this.traceStore = config.traceStore;
     this.secretProvider = config.secretProvider;
