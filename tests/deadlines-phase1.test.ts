@@ -17,6 +17,7 @@ import { execute } from "../src/runtime.js";
 import { lint } from "../src/lint.js";
 import { bootstrap } from "../src/bootstrap.js";
 import { canonicalizeForSigning } from "../src/approval.js";
+import { FilesystemTraceStore } from "../src/trace.js";
 import { Registry } from "../src/connectors/registry.js";
 
 /** ctx that runs shell ops, with an already-expired run deadline injected. */
@@ -90,6 +91,67 @@ describe("Phase 1 — `# Deadline:` is IN the signing hash (safety-envelope re-a
     const a = SKILL("# Deadline: 5\n# Tags: robot");
     const b = SKILL("# Deadline: 5\n# Tags: robot, latency-sensitive");
     expect(canonicalizeForSigning(a)).toBe(canonicalizeForSigning(b));
+  });
+});
+
+describe("Phase 1 — deadline outcome is DURABLE in the trace (autonomous/cron fires)", () => {
+  // A cron/event fire is fire-and-forget: no live caller reads
+  // ExecuteResult.uncertainEffects. The trace is the only record, so the
+  // uncertain-effect log MUST survive there — else "the robot may still be
+  // moving" is lost for exactly the autonomous case that motivated the feature.
+  it("records deadline_exceeded + uncertain_effects on the persisted TraceRecord", async () => {
+    const home = mkdtempSync(join(tmpdir(), "dl-trace-"));
+    try {
+      const store = new FilesystemTraceStore(join(home, "traces"));
+      // MID-FLIGHT cut: the op dispatches, then the deadline fires while it's in
+      // flight — that's the only shape that yields an uncertain effect (a
+      // pre-expired deadline fail-fasts before dispatch, nothing in flight).
+      const parsed = parse(`# Skill: cronjob
+default: run
+run:
+    shell(command="sleep 1") -> A
+`);
+      const r = await execute(parsed, {}, ["run"], {
+        agentId: "test",
+        registry: new Registry(),
+        effectsAuthorized: true,
+        shellAllowlist: ["sleep"],
+        deadlineMs: Date.now() + 60, // fires mid-sleep
+        trace: { mode: "on" },
+        traceStore: store,
+      });
+      expect(r.deadlineExceeded).toBe(true);
+
+      // The durable record — what an operator/dashboard reads after the fact.
+      const records = await store.query({});
+      expect(records.length).toBe(1);
+      const rec = records[0]!;
+      expect(rec.deadline_exceeded).toBe(true);
+      expect(rec.uncertain_effects?.[0]?.opKind).toBe("shell");
+      // And it's machine-distinguishable via the error class, too.
+      expect(rec.errors.some((e) => e.class === "RunDeadlineExceeded")).toBe(true);
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  it("omits both fields on a normal (non-deadline) fire", async () => {
+    const home = mkdtempSync(join(tmpdir(), "dl-trace-ok-"));
+    try {
+      const store = new FilesystemTraceStore(join(home, "traces"));
+      const parsed = parse("# Skill: ok\ndefault: run\nrun:\n    emit(text=\"hi\")\n");
+      await execute(parsed, {}, ["run"], {
+        agentId: "test",
+        registry: new Registry(),
+        trace: { mode: "on" },
+        traceStore: store,
+      });
+      const rec = (await store.query({}))[0]!;
+      expect(rec.deadline_exceeded).toBeUndefined();
+      expect(rec.uncertain_effects).toBeUndefined();
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
   });
 });
 

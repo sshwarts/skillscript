@@ -783,7 +783,7 @@ export async function execute(
   // up as op errors; the trace store is an observability surface, not a
   // dispatch dependency).
   if (traceBuilder !== null && ctx.traceStore !== undefined) {
-    const record = traceBuilder.finalize(emissions, outputs, errors);
+    const record = traceBuilder.finalize(emissions, outputs, errors, { deadlineExceeded, uncertainEffects });
     try {
       await ctx.traceStore.write(record);
     } catch (err) {

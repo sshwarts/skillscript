@@ -3,7 +3,7 @@ import { mkdir, readdir, readFile, rename, stat, unlink, writeFile } from "node:
 import { join, basename, dirname } from "node:path";
 import { safePathJoin, validatePathComponent } from "./safe-path.js";
 import { InvalidPathError } from "./errors.js";
-import type { ExecutionError } from "./runtime.js";
+import type { ExecutionError, UncertainEffect } from "./runtime.js";
 import type { ObservedShapeRecord } from "./observed-shape.js";
 import { shapeKey } from "./observed-shape.js";
 
@@ -54,6 +54,23 @@ export interface TraceRecord {
   emissions: string[];
   outputs: Record<string, unknown>;
   errors: ExecutionError[];
+  /**
+   * True when the run's `# Deadline:` (or operator ceiling) was exceeded and the
+   * run was terminated early — the same flag as `ExecuteResult.deadlineExceeded`,
+   * made durable. Recoverable from `errors` (`class: "RunDeadlineExceeded"`) too,
+   * but carried explicitly so a trace reader needn't string-match. Absent on a
+   * normal completion. Phase 1 of the deadlines feature (Perry spec de11dcc5).
+   */
+  deadline_exceeded?: boolean;
+  /**
+   * Mutations that were IN FLIGHT when the deadline cut them — "issued, outcome
+   * uncertain, never auto-retried." This is the ONLY place the uncertain-effect
+   * log survives for an AUTONOMOUS (cron/event) fire: there's no live caller to
+   * read `ExecuteResult.uncertainEffects`, so without this the "the robot may
+   * still be moving" signal would be lost from the durable record. Absent when
+   * nothing was cut mid-mutation. Phase 1 (Perry spec de11dcc5, Part 4 floor).
+   */
+  uncertain_effects?: UncertainEffect[];
   fired_at_ms: number;
   completed_at_ms: number;
   duration_ms: number;
@@ -358,6 +375,7 @@ export class TraceBuilder {
     emissions: string[],
     outputs: Record<string, unknown>,
     errors: ExecutionError[],
+    deadline?: { deadlineExceeded: boolean; uncertainEffects: UncertainEffect[] },
   ): TraceRecord {
     const completedAtMs = Date.now();
     return {
@@ -371,6 +389,12 @@ export class TraceBuilder {
       emissions: [...emissions],
       outputs: { ...outputs },
       errors: [...errors],
+      // Deadline outcome — durable so an autonomous fire's uncertain-effect log
+      // isn't lost (no live caller reads ExecuteResult for cron/event fires).
+      ...(deadline?.deadlineExceeded ? { deadline_exceeded: true } : {}),
+      ...(deadline !== undefined && deadline.uncertainEffects.length > 0
+        ? { uncertain_effects: [...deadline.uncertainEffects] }
+        : {}),
       fired_at_ms: this.firedAtMs,
       completed_at_ms: completedAtMs,
       duration_ms: completedAtMs - this.firedAtMs,
