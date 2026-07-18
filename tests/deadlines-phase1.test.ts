@@ -16,6 +16,7 @@ import { parse } from "../src/parser.js";
 import { execute } from "../src/runtime.js";
 import { lint } from "../src/lint.js";
 import { bootstrap } from "../src/bootstrap.js";
+import { canonicalizeForSigning } from "../src/approval.js";
 import { Registry } from "../src/connectors/registry.js";
 
 /** ctx that runs shell ops, with an already-expired run deadline injected. */
@@ -64,6 +65,31 @@ describe("Phase 1 — `# Deadline:` parsing (scope item 1)", () => {
     expect(p.parseErrors).toEqual([]);
     expect(p.timeout).toBe(5);
     expect(p.deadline).toBe(60);
+  });
+});
+
+describe("Phase 1 — `# Deadline:` is IN the signing hash (safety-envelope re-approval)", () => {
+  // The deadline is the safety envelope the approver signed off on: it changes
+  // whether/when the skill completes. So — unlike `# Tags:`, pure classification
+  // metadata that's carved OUT of the hash — a `# Deadline:` edit MUST change the
+  // canonical form, invalidating the signature and reverting the skill to Draft.
+  // Even a tightening edit re-approves. This locks that carve-out asymmetry.
+  it("a `# Deadline:` edit changes the canonical form (→ signature invalid → Draft)", () => {
+    const five = SKILL("# Deadline: 5");
+    const ten = SKILL("# Deadline: 10");
+    expect(canonicalizeForSigning(five)).not.toBe(canonicalizeForSigning(ten));
+  });
+
+  it("even TIGHTENING the deadline re-approves (10 → 5 is not canonical-equal)", () => {
+    const loose = SKILL("# Deadline: 10");
+    const tight = SKILL("# Deadline: 5");
+    expect(canonicalizeForSigning(tight)).not.toBe(canonicalizeForSigning(loose));
+  });
+
+  it("contrast: a `# Tags:` edit is canonical-neutral (stays Approved) — the carve-out mirror", () => {
+    const a = SKILL("# Deadline: 5\n# Tags: robot");
+    const b = SKILL("# Deadline: 5\n# Tags: robot, latency-sensitive");
+    expect(canonicalizeForSigning(a)).toBe(canonicalizeForSigning(b));
   });
 });
 
