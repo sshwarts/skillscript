@@ -2017,7 +2017,14 @@ A skill can bound its entire run in wall-clock time with the `# Deadline: N` fro
 
 `onAbort` is a **safety-stop, not a rollback**. It halts a runaway out-of-band effect; it does not undo what already happened. A *mutating* op cut mid-flight is therefore recorded in the run's **uncertain-effects** log as "issued, outcome uncertain" — never reported as cleanly cancelled. The caller (or, for an autonomous run, the durable trace) can see that the effect may have partially landed. Read-only ops carry no such uncertainty and are excluded.
 
-**Guidance.** A skill that dispatches any effectful op while declaring no `# Deadline:` is unbounded at the run level; a lint (`unbounded-no-deadline`) advises adding one. Give effectful skills an explicit deadline — especially anything that drives a physical device or a long-running external job. Be aware that a tight deadline combined with an outlives-call op means that op will not *start* inside the final cleanup-reserve window: it fails fast rather than begin an effect it could not guarantee cleaning up in time.
+**Guidance — two levers, and the deadline is the last resort, not the default.** Bounding an effectful skill is a per-leg concern first and a whole-run concern only rarely.
+
+- **Per-op `timeout=` + `(fallback:)` is the graceful lever.** Put a `timeout=` on each external leg (`$ connector.tool ... timeout=N`, or the `# Timeout:` header for a skill-wide per-op default). It throws a *catchable* `OpTimeoutError`, so a hung leg times out, degrades through its `(fallback:)`, and the run continues with partial results. For a **gather / aggregate skill where partial output is acceptable, this is the whole answer** — bound each leg and the skill self-limits with *no* run-total deadline at all. A degraded leg should return a legible value ("unavailable"), not a bare failure.
+- **`# Deadline:` is a hard whole-run ceiling — reserve it for must-finish-or-abort.** Reach for it only when the skill has to complete-or-abort *as a unit*: a bounded transaction, a time-critical dispatch, or anything driving a physical device or a long-running external job that must not outlive a wall-clock window. Keep it at the smallest scope. Remember it is an **uncatchable total-kill**: when it fires it terminates the *whole* run, taking healthy legs down with the runaway one. That makes it the **wrong default for a partial-tolerant skill** — it converts graceful-partial-degradation into all-or-nothing.
+- **A child skill's `# Deadline:` is NOT a graceful per-leg bound.** It propagates uncatchably and aborts the *parent*; the `(fallback:)` on the `execute_skill` cannot catch it. So a "leaf deadline" is no more graceful than a run-level one — do not use one to bound a single composed leg. Use a per-op `timeout=` for that.
+- **The lint.** `unbounded-no-deadline` flags a run with no run-total bound, but the fix it should steer you toward is a per-op `timeout=` on each external leg — not a blanket `# Deadline:` on a skill where partial results are fine. Treat the advisory as "is every leg bounded?", not "add a `# Deadline:`".
+
+Interaction preserved from above: a tight deadline combined with an outlives-call op means that op will not *start* inside the final cleanup-reserve window — it fails fast rather than begin an effect it could not guarantee cleaning up in time.
 
 ## Composition — skills calling skills
 
@@ -2614,5 +2621,5 @@ When any of these primitives ship, the relevant grammar moves into its canonical
 
 ---
 
-*Rendered from `skillscript/skillscript-language-reference` — 2026-07-18 14:42 EDT*  
+*Rendered from `skillscript/skillscript-language-reference` — 2026-07-21 12:57 EDT*  
 *Source of truth: AMP (`amp_render_document("skillscript/skillscript-language-reference")`)*
