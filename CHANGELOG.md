@@ -2,6 +2,16 @@
 
 Each release carries an **Upgrade impact:** line (first in its section) so a bump's requirements are visible at a glance. Tags (closed set): **BREAKING** (a manual change is needed to keep working) · **RE-APPROVE** (secured-mode signature invalidation — skills must be re-approved before they run) · **CONFIG** (`connectors.json` / config edit needed) · **none (additive)** (no action; backward-compatible). Standard from 0.20.0 forward; the pre-0.20 transitions that need action are flagged inline below (0.14.0, 0.18.8, 0.19.0). Full walkthrough: [UPGRADING.md](UPGRADING.md).
 
+## 0.37.0 — 2026-07-21 — robustness: per-leg bounds over whole-run deadlines + remote true-cancel
+
+**Upgrade impact:** none (additive). No lint codes added/removed and no behavior change to existing skills — a lint advisory's *guidance* changed, and `RemoteMcpConnector` now honors the cancellation signal it previously ignored.
+
+Sharpens how you bound external work, after a real autonomous gather (`perry-brief-gather`) hung ~2 min on a slow remote leg. The levers were already there — this makes the framework point at the right one.
+
+- **The `unbounded-no-deadline` advisory was steering authors to the wrong lever.** It nudged toward `# Deadline:` — a whole-run, *uncatchable* cap that aborts **every** leg including healthy ones — even for a partial-tolerant gather, and even when a leg was already bounded. Reframed: a `$` leg carrying its own `timeout=N` (catchable, per-leg) or a skill with `# Timeout:` no longer trips it, and the message/remediation now lead with **per-op `timeout=N` + `(fallback:)`** as the everyday bound, framing `# Deadline:` as the separate hard-total-ceiling tool. `help({topic: "frontmatter"})` / lint-codes reworked to the two-levers distinction.
+- **`timeout=N` works on any `$` connector op** — it always has (the runtime enforces it regardless of whether the remote tool's own schema lists a timeout; the kwarg is consumed by the runtime, not forwarded), now documented so it's discoverable. A timed-out leg throws a **catchable** error, so `(fallback:)` degrades gracefully and the rest of the run continues — the right tool for a partial-tolerant gather.
+- **`RemoteMcpConnector` honors cancellation.** An aborted dispatch (per-op `timeout=` or run `# Deadline:`) now cancels the in-flight RPC promptly instead of leaving it pending on the subprocess until the connector's internal `callTimeoutMs` — matters for a serial-subprocess connector where a hung request could delay the next dispatch.
+
 ## 0.36.1 — 2026-07-18 — fix: `# Output: agent:` target interpolation (silent non-delivery)
 
 **Upgrade impact:** none (additive fix) — just upgrade. If you ran a skill with `# Output: agent: ${VAR}` on 0.36.0 it was **silently delivering to nobody**; this fixes it.

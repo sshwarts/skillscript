@@ -24,8 +24,8 @@ const REPO_ROOT = join(__dirname, "..");
 const PACKAGE_JSON = JSON.parse(readFileSync(join(REPO_ROOT, "package.json"), "utf8")) as Record<string, unknown>;
 
 describe("T7 — package.json polish", () => {
-  it("1. version is 0.36.1 (fix: `# Output: agent: ${VAR}` delivery target now interpolates against run vars — 0.36.0 substituted the body but not the target, silently delivering to a phantom agent; surfaced by the supervisor's own example pattern)", () => {
-    expect(PACKAGE_JSON["version"]).toBe("0.36.1");
+  it("1. version is 0.37.0 (robustness: unbounded-no-deadline lint reframed to per-leg timeout=/(fallback:) over whole-run # Deadline; timeout= documented as working on any $ connector op; RemoteMcpConnector honors ctx.signal for prompt true-cancel)", () => {
+    expect(PACKAGE_JSON["version"]).toBe("0.37.0");
   });
 
   it("2. main + types + bin + engines.node ≥ 22.5 declared", () => {
