@@ -3752,38 +3752,51 @@ const ADDRESS_ROUTED_WAKE_INFO: LintRule = {
 };
 
 /**
- * Adoption nudge for the deadlines feature (Perry spec de11dcc5). A skill that
- * performs an external/effectful dispatch (`$` / `shell` / `notify`) but declares
- * no `# Deadline:` has no total wall-clock bound — the run and everything it
- * composes can hang unboundedly on one slow dispatch. Opt-in feature, so this is
- * a tier-3 advisory (not op-count-based: a single `$ llm` is enough to be
- * unbounded). Predicate: ≥1 unbounded dispatch AND no `# Deadline:`.
+ * Advisory for an UNBOUNDED external/effectful dispatch — a `$` / `shell` /
+ * `notify` op with no time bound at any level, so the leg (and everything it
+ * composes) can hang. The right lever is a PER-LEG bound, not a whole-run one:
+ * a `$` op with its own `timeout=N` is already bounded and catchable via
+ * `(fallback:)`, and doesn't fire this. Only when there's a leg with no per-op
+ * `timeout=`, no `# Timeout:`, and no `# Deadline:` do we nudge.
+ *
+ * DELIBERATELY does NOT push `# Deadline:` as the fix (the old framing did, and
+ * it steered authors of partial-tolerant gathers to the wrong tool — a run
+ * deadline is UNCATCHABLE and aborts healthy legs too, spec 035c3219). The
+ * remediation leads with per-op `timeout=` + `(fallback:)` and frames
+ * `# Deadline:` as the separate whole-run *hard cap*, not the default answer.
  */
 const UNBOUNDED_NO_DEADLINE: LintRule = {
   id: "unbounded-no-deadline",
   severity: "info",
   description:
-    "A skill with an external/effectful dispatch ($, shell, notify) but no `# Deadline:` has no total wall-clock bound; the run (and its execute_skill tree) can hang on a slow dispatch.",
+    "A skill has an external/effectful dispatch (`$` / `shell` / `notify`) with no per-op `timeout=`, no `# Timeout:`, and no `# Deadline:` — the leg can hang unboundedly.",
   remediation:
-    "Add a `# Deadline: N` header (seconds) to bound the whole run + everything it composes. Opt-in — without it the skill keeps per-op timeouts only, which don't bound the total.",
+    "Bound each external leg with a per-op `timeout=N` (seconds) + a `(fallback: ...)` to degrade gracefully — the catchable, partial-tolerant lever (a timed-out leg throws a catchable error, so the rest of the run continues). `# Timeout: N` sets a per-op default for every op in the skill. `# Deadline: N` is a *different* tool: a whole-run UNCATCHABLE cap that aborts every leg including healthy ones when it trips — use it only for a hard total ceiling, never as the per-leg bound for a partial-tolerant gather.",
   check: (ctx) => {
-    if (ctx.parsed.deadline !== null) return [];
-    let firstTarget: string | undefined;
+    // Skill-level bounds (`# Timeout:` per-op default, or `# Deadline:` whole-run)
+    // cover every op → nothing to nudge.
+    if (ctx.parsed.deadline !== null || ctx.parsed.timeout !== null) return [];
+    let firstUnbounded: string | undefined;
     for (const [targetName, target] of ctx.parsed.targets) {
       const collect = (op: SkillOp): void => {
-        if (firstTarget === undefined && (op.kind === "$" || op.kind === "shell" || op.kind === "notify")) {
-          firstTarget = targetName;
+        if (firstUnbounded !== undefined) return;
+        if (op.kind === "$" || op.kind === "shell" || op.kind === "notify") {
+          // A `$` op carrying its own `timeout=` kwarg is already leg-bounded
+          // (runtime-enforced, catchable) — that's the recommended pattern, so
+          // it should NOT trip the advisory.
+          const legBounded = op.kind === "$" && /(?:^|\s)timeout\s*=/.test(op.body);
+          if (!legBounded) firstUnbounded = targetName;
         }
       };
       walkOps(target.ops, collect);
       if (target.elseBlock !== undefined) walkOps(target.elseBlock, collect);
     }
-    if (firstTarget === undefined) return [];
+    if (firstUnbounded === undefined) return [];
     return [{
       rule: "unbounded-no-deadline",
       severity: "info" as const,
-      message: `Skill performs an external/effectful dispatch (target '${firstTarget}') but declares no \`# Deadline:\` — the run has no total wall-clock bound.`,
-      block: firstTarget,
+      message: `Unbounded external/effectful dispatch (target '${firstUnbounded}') — no per-op \`timeout=\`, no \`# Timeout:\`, no \`# Deadline:\`. Bound the leg with \`timeout=N\` + \`(fallback:)\` (catchable, partial-tolerant); reserve \`# Deadline:\` for a hard whole-run cap — it's uncatchable and aborts healthy legs too.`,
+      block: firstUnbounded,
     }];
   },
 };

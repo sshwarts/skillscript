@@ -274,7 +274,7 @@ export class RemoteMcpConnector implements McpConnector {
   async call(
     toolName: string,
     args: Record<string, unknown>,
-    _ctxOverrides?: McpDispatchCtx,
+    ctxOverrides?: McpDispatchCtx,
   ): Promise<unknown> {
     // start() self-heals a dead prior session (respawn-on-death) before we
     // check state — so a child that exited since the last dispatch is relaunched
@@ -284,10 +284,16 @@ export class RemoteMcpConnector implements McpConnector {
       // A FRESH spawn/handshake attempt still failed — surface the real error.
       throw new RemoteMcpDispatchError(`RemoteMcpConnector in error state: ${this.errorState.message}`, this.errorState);
     }
+    // Honor the deadline/timeout cancellation signal (de11dcc5): when the runtime
+    // aborts this dispatch (per-op timeout OR run deadline), cancel the in-flight
+    // RPC instead of leaving it pending on the subprocess — otherwise a hung
+    // remote call, though the LEG already bounds via OpTimeoutError at the runtime
+    // layer, keeps a dangling pending request (and, for a serial-subprocess
+    // connector, could block the next dispatch until callTimeoutMs).
     const result = await this.sendRequest("tools/call", {
       name: toolName,
       arguments: args,
-    }, this.callTimeoutMs) as { content?: unknown; isError?: boolean };
+    }, this.callTimeoutMs, ctxOverrides?.signal) as { content?: unknown; isError?: boolean };
 
     // MCP convention: `isError: true` indicates inner-tool error even
     // when JSON-RPC succeeded. Surface as DispatchError so the skill's
@@ -375,7 +381,7 @@ export class RemoteMcpConnector implements McpConnector {
 
   // ─── Internal: JSON-RPC plumbing ────────────────────────────────────────
 
-  private sendRequest(method: string, params: Record<string, unknown> | undefined, timeoutMs: number): Promise<unknown> {
+  private sendRequest(method: string, params: Record<string, unknown> | undefined, timeoutMs: number, signal?: AbortSignal): Promise<unknown> {
     if (this.child === undefined) {
       throw new RemoteMcpDispatchError(`sendRequest('${method}') called before start()`);
     }
@@ -391,6 +397,23 @@ export class RemoteMcpConnector implements McpConnector {
     };
     const encoded = this.encodeFrame(request);
     return new Promise((resolve, reject) => {
+      // Cancellation: if the runtime aborts this dispatch, drop the pending
+      // request (clear its timeout, remove from the map, reject) so it doesn't
+      // linger on the subprocess. The signal is per-op and short-lived, so a
+      // listener that never fires is GC'd with it — no explicit teardown needed.
+      if (signal !== undefined) {
+        if (signal.aborted) {
+          reject(new RemoteMcpDispatchError(`${method} aborted before dispatch (deadline/timeout)`));
+          return;
+        }
+        signal.addEventListener("abort", () => {
+          const pending = this.pending.get(id);
+          if (pending === undefined) return; // already settled
+          clearTimeout(pending.timeoutHandle);
+          this.pending.delete(id);
+          reject(new RemoteMcpDispatchError(`${method} aborted (deadline/timeout cut the dispatch)`));
+        }, { once: true });
+      }
       const timeoutHandle = setTimeout(() => {
         this.pending.delete(id);
         // v0.19.9 — clearer init-timeout error. A timed-out `initialize` is

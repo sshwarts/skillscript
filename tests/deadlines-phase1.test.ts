@@ -445,6 +445,44 @@ run:
     expect(r.findings.find((x) => x.rule === "unbounded-no-deadline")).toBeUndefined();
   });
 
+  // Reframe (spec 035c3219): a `$` leg with its OWN `timeout=` is already bounded
+  // + catchable — the recommended partial-tolerant pattern — so it must NOT be
+  // nudged toward a whole-run `# Deadline:`. (The old rule fired here, steering
+  // authors to the uncatchable lever.)
+  it("nudge: does NOT fire when a `$` leg carries its own `timeout=`", async () => {
+    const r = await lint(`# Status: Approved
+# Skill: t
+default: run
+run:
+    $ ddg.search query="x" timeout=8 -> R (fallback: "fb")
+`);
+    expect(r.findings.find((x) => x.rule === "unbounded-no-deadline")).toBeUndefined();
+  });
+
+  it("nudge: does NOT fire when `# Timeout:` bounds every op", async () => {
+    const r = await lint(`# Status: Approved
+# Skill: t
+# Timeout: 30
+default: run
+run:
+    $ ddg.search query="x" -> R
+`);
+    expect(r.findings.find((x) => x.rule === "unbounded-no-deadline")).toBeUndefined();
+  });
+
+  it("nudge: the message recommends per-leg timeout= and flags # Deadline as uncatchable", async () => {
+    const r = await lint(`# Status: Approved
+# Skill: t
+default: run
+run:
+    $ ddg.search query="x" -> R
+`);
+    const f = r.findings.find((x) => x.rule === "unbounded-no-deadline");
+    expect(f).toBeDefined();
+    expect(f!.message).toMatch(/timeout=/);
+    expect(f!.message).toMatch(/uncatchable/i);
+  });
+
   it("test (j): registering an outlives-call connector with no onAbort throws (leak-prevention)", () => {
     const registry = new Registry();
     const bad = {
