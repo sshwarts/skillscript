@@ -755,7 +755,7 @@ export class McpServer {
           },
           tool: {
             type: "string",
-            description: "Selective schema fetch: `\"<connector>.<tool>\"` (or a bare tool name) returns that one tool's full descriptor (name, description, input_schema) under `toolSchema`. The manual for a single tool you're about to call — not in the default menu.",
+            description: "Selective schema fetch: `\"<connector>.<tool>\"` (or a bare tool name) returns that one tool's full descriptor (name, description, input_schema, and `observed_output_shape` — the actual RETURN structure recorded from prior runs, when available) under `toolSchema`. The manual for a single tool you're about to call — check `observed_output_shape` before writing `${R.field}` against its result. Not in the default menu.",
           },
         },
       },
@@ -1392,12 +1392,26 @@ export class McpServer {
       try {
         const d = (await inst.describeTools()).find((x) => x.name === wantTool);
         if (d !== undefined) {
-          return {
+          const descriptor: Record<string, unknown> = {
             connector: e.name,
             name: d.name,
             ...(d.description !== undefined ? { description: d.description } : {}),
             ...(d.inputSchema !== undefined ? { input_schema: d.inputSchema } : {}),
           };
+          // Attach the last-observed RETURN shape (from a prior run), so an
+          // author probing a single tool here sees its output structure — the
+          // same affordance skill_preflight gives for a skill's tools. Authors
+          // naturally reach for runtime_capabilities({tool}) to answer "what
+          // does this return?" (Perry, pdf-extract) — this closes that gap.
+          if (this.deps.traceStore?.getObservedShapes !== undefined) {
+            const shapes = await this.deps.traceStore.getObservedShapes([{ connector: e.name, tool: d.name }]);
+            const rec = shapes.get(`${e.name}.${d.name}`);
+            if (rec !== undefined) {
+              descriptor["observed_output_shape"] = rec.shape;
+              descriptor["observed_at_ms"] = rec.observed_at_ms;
+            }
+          }
+          return descriptor;
         }
       } catch {
         // Unreachable upstream — keep scanning other connectors.

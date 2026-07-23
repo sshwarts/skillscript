@@ -132,6 +132,30 @@ describe("v0.23.0 — observed-shape end-to-end (run → preflight)", () => {
     expect(typeof ct[0]!["observed_at_ms"]).toBe("number");
   });
 
+  // Perry (pdf-extract): authors reach for runtime_capabilities({tool}) to answer
+  // "what does this return?" — it must carry the observed shape too, not only
+  // skill_preflight (which requires already having a skill that references it).
+  it("surfaces observed_output_shape via runtime_capabilities({tool}), not just skill_preflight", async () => {
+    await skillStore.store(
+      "searcher",
+      `# Skill: searcher\n# Status: Approved\n# Vars: TOPIC\n\nrun:\n    $ ddg.search query="\${TOPIC}" -> R\n    emit(text="done")\ndefault: run\n`,
+      { status: "Approved" },
+    );
+    // Before any run: the tool fetch has the input schema but no observed shape.
+    const before = await callTool(srv, "runtime_capabilities", { tool: "ddg.search" });
+    expect((before["toolSchema"] as Record<string, unknown>)["observed_output_shape"]).toBeUndefined();
+
+    await callTool(srv, "execute_skill", { name: "searcher", inputs: { TOPIC: "skillscript" } });
+
+    const after = await callTool(srv, "runtime_capabilities", { tool: "ddg.search" });
+    const ts = after["toolSchema"] as Record<string, unknown>;
+    expect(ts["observed_output_shape"]).toEqual({
+      kind: "object",
+      keys: { results: "array", query: "string", count: "number" },
+    });
+    expect(typeof ts["observed_at_ms"]).toBe("number");
+  });
+
   it("captures a TEXT-returning tool's shape as {kind: string} (the ddg.search reality the probe found)", async () => {
     // Rebuild the server with a connector that returns a formatted text blob.
     const d2 = mkdtempSync(join(tmpdir(), "v0.23.0-txt-"));

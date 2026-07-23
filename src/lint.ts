@@ -976,6 +976,12 @@ const LLM_KWARG_SURFACE = new Set([
   "fallback",
 ]);
 
+// Runtime-reserved per-op kwargs on a `$` dispatch — the runtime consumes/pops
+// these before the connector sees args, so they're never part of a tool's own
+// input schema and must not be flagged as `unknown-connector-arg`. `timeout`
+// (per-op bound) + `approved` (mutation-gate authorization directive).
+const RESERVED_DISPATCH_KWARGS = new Set(["timeout", "approved"]);
+
 const UNKNOWN_LLM_ARG: LintRule = {
   id: "unknown-llm-arg",
   severity: "warning",
@@ -1247,9 +1253,13 @@ function connectorArgLintInfo(
     const eq = tok.indexOf("=");
     if (eq === -1) continue;
     const k = tok.slice(0, eq).trim();
-    // `timeout` is a runtime-reserved per-op kwarg, popped before the connector
-    // sees args — never part of the tool's own schema.
-    if (k !== "" && k !== "timeout") argNames.push(k);
+    // Runtime-reserved per-op kwargs are consumed by the runtime and popped
+    // before the connector sees args — they're never part of the tool's own
+    // schema, so don't flag them as unknown. Notably `approved=`: the
+    // `unconfirmed-mutation` rule's remediation tells authors to add it, so
+    // flagging it here as an unknown tool arg is a direct self-contradiction
+    // (Perry, pdf-extract).
+    if (k !== "" && !RESERVED_DISPATCH_KWARGS.has(k)) argNames.push(k);
   }
   return { connector: op.mcpConnector, toolName, argNames, inputSchema: descriptor.inputSchema };
 }

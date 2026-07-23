@@ -64,6 +64,17 @@ describe("v0.23.0 — connector-aware input lint (injected schemas)", () => {
     expect(rulesOf(res.findings)).not.toContain("unknown-connector-arg");
   });
 
+  // Perry (pdf-extract): `approved=` is the mutation-gate auth directive, popped
+  // by the runtime before the connector — flagging it as an unknown tool arg
+  // directly contradicts `unconfirmed-mutation`'s "add approved=" remediation.
+  it("ignores the runtime-reserved `approved=` auth kwarg", async () => {
+    const res = await lint(skill(`$ ddg.search query="hi" approved="probe" -> R`), {
+      ...baseOpts,
+      mcpConnectorToolSchemas: injectedSchemas(),
+    });
+    expect(rulesOf(res.findings)).not.toContain("unknown-connector-arg");
+  });
+
   it("flags a missing required arg", async () => {
     const res = await lint(skill(`$ ddg.search limit=5 -> R`), {
       ...baseOpts,
