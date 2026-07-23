@@ -906,6 +906,10 @@ Pipe filters apply transforms to resolved variables before substitution. Syntax:
 | `contains:"X"` | Boolean: type-aware substring / element membership | `${MSG|contains:"urgent"}` for `"Yes, urgent"` | `true` |
 | `fallback:"X"` | Coalesce on missing/undefined/empty ref | `${VAR.missing|fallback:"-"}` | `-` |
 | `isodate` | Epoch seconds → ISO-8601 timestamp | `${EPOCH|isodate}` for `1779660000` | `2026-05-24T22:00:00.000Z` |
+| `head:"N"` | First N lines (string, `\n`-split) | `${LOG|head:"2"}` for `"a\nb\nc"` | `a\nb` |
+| `tail:"N"` | Last N lines | `${LOG|tail:"1"}` for `"a\nb\n"` | `b` |
+| `lines:"M-N"` | 1-indexed inclusive line range | `${LOG|lines:"2-3"}` for `"a\nb\nc\nd"` | `b\nc` |
+| `pluck:"<field>"` | Project array-of-objects → array of field values (JSON-string out) | `${ITEMS|pluck:"id"}` for `[{"id":"1"},{"id":"2"}]` | `["1","2"]` |
 
 ### `length` semantics
 
@@ -985,6 +989,29 @@ show:
 
 Input is interpreted as Unix epoch seconds. Non-numeric input produces runtime error. For millisecond inputs, divide first or use a wrapping op.
 
+### `head:"N"` / `tail:"N"` / `lines:"M-N"` — line-slice family (shipped 0.38)
+
+One shared implementation, three names. Operates on the stringified input, split on `\n`.
+
+- **Args are quoted** (parser is quoted-only): `head:"5"`, `tail:"1"`, `lines:"2-10"`. Unquoted (`head:5`) silently drops the arg — always quote.
+- **Line split:** split on `\n`; strip a trailing `\r` per line (CRLF-safe); **drop a single trailing empty line** produced by a terminal newline — so `tail:"1"` of `"a\nb\n"` is `"b"`, not `""`.
+- `head:"N"` = first N lines; `tail:"N"` = last N lines; `lines:"M-N"` = 1-indexed inclusive range (`lines:"2-4"` → lines 2,3,4).
+- **Never throws — clamp or empty.** N (or a range bound) over the line count returns what exists. `N="0"` → `""`; `M>N` → `""`; malformed / negative / non-numeric arg → treated as 0 → `""`. The family has no error path by design.
+- **Output:** selected lines rejoined with `\n` (a string), so it composes with further filters.
+- **NOT type-guarded** — like `|trim`/`|length`, it treats all input as string. Applying it to structured data slices that value's serialization (useless-but-harmless), because `applyFilter` is string-in/string-out and can't see the original type.
+- **Security payoff:** `file_read(spool)|tail:"N"` does log tailing entirely fs-read-only — no `tail`/`grep` shell binary needs allowlisting. This is the driver.
+
+### `pluck:"<field>"` — array projection (shipped 0.38)
+
+Projects an array of objects to an array of one field's values. Closes the structural-dedup gap (project a seen-log to an ID list for clean `in`/`not in` membership instead of `contains`-on-a-string).
+
+- **Input:** array of objects, plus JSON-string-of-array tolerance (same as `contains`/`in` RHS, for LLM-output-as-JSON). Non-array → `TypeMismatchError` (a cheap content check: pluck JSON-parses its input and throws if the result isn't an array).
+- **Output:** a **JSON-stringified array** (`'["1","2"]'`) — string-out contract. This is *why* pluck is viable where json_parse-as-filter wasn't: its output feeds `in`/`not in`/`length`/`contains`, all of which are JSON-string-of-array tolerant, so `if "x" in ${ITEMS|pluck:"id"}:`-shaped membership and `${ITEMS|pluck:"id"|length}` both work.
+- **Omit rule:** omit an element when its field is absent OR its value is null/undefined; a non-object element (e.g. `pluck:"id"` on `[1,2,3]`) has no field → omit. Net: pluck compacts to the present scalar values only — a clean list for dedup/membership (no nulls emitted).
+- **Single-level field only** in v1 (`pluck:"url"`). No dotted-path descent yet.
+- **Round-trip boundary:** the output is a JSON *string* until a downstream array-aware filter re-parses it. Fine for `in`/`not in`/`length`/`contains`; but don't `.0`-index the raw pluck output expecting a live array element.
+- **Idiom note (`in`/`not in` RHS):** the RHS of `in`/`not in` does NOT yet accept an inline filter chain, so the clean one-liner `if ${M.id} in ${ITEMS|pluck:"id"}:` does not parse. Current idiom is two-step: `$set IDS = "${ITEMS|pluck:"id"}"` then `if ${M.id} not in ${IDS}:`. The inline one-liner arrives when the `in`-RHS-filter-chain extension lands (tracked: board df88957f).
+
 ## Filter chaining
 
 Filters chain left-to-right. The output of each filter becomes input to the next.
@@ -1019,6 +1046,8 @@ if ${M.id|trim} in ${SEEN}:
     emit(text="already processed")
 ```
 
+**RHS asymmetry (current):** an inline filter chain is accepted on the LHS but NOT the RHS, so `if ${M.id} in ${ITEMS|pluck:"id"}:` does not parse. Bind the RHS first (`$set IDS = "${ITEMS|pluck:"id"}"` then `if ${M.id} not in ${IDS}:`). Extension to accept a RHS filter chain is tracked (board df88957f); when it lands, the pluck one-liner works directly.
+
 ## Filter use in numeric comparison
 
 Filters may appear on either side of `<`, `>`, `<=`, `>=` comparisons. `|length` is the canonical companion — most numeric-threshold patterns are "more than N items" rather than arithmetic on raw values.
@@ -1032,7 +1061,7 @@ elif ${BODY|length} > 1000:
 
 ## Error handling
 
-Unknown filter on a resolved variable produces a tier-1 `unknown-filter` compile error. Catches both bare (`|unknown`) and colon-positional (`|unknown:"arg"`) shapes. Filter chains that fail at runtime (e.g., `|json` on a non-serializable value, `|length` on a number, `|isodate` on a non-numeric value) produce op errors that route through the target's `else:` handler.
+Unknown filter on a resolved variable produces a tier-1 `unknown-filter` compile error. Catches both bare (`|unknown`) and colon-positional (`|unknown:"arg"`) shapes. Filter chains that fail at runtime (e.g., `|json` on a non-serializable value, `|length` on a number, `|isodate` on a non-numeric value, `|pluck` on a non-array) produce op errors that route through the target's `else:` handler. The line-slice family (`head`/`tail`/`lines`) is the exception — it never throws (clamps to empty).
 
 Bare `${NAME}` without a filter is unchanged.
 
@@ -1042,24 +1071,18 @@ Several filters are planned but not yet shipped:
 
 | Filter | Effect | Use case |
 |--------|--------|----------|
-| `head:N` | First N lines | Truncate long output for embedding in prompts |
-| `tail:N` | Last N lines | Recent log entries |
-| `lines:M-N` | Range of lines | Specific slice |
-| `field:N` | Nth whitespace-separated field | Awk-like extraction |
+| `field:"N"` | Nth whitespace-separated field | Awk-like extraction |
 | `summary` | One-line abbreviation | Compress for human-facing emissions |
-| `pluck:<field>` | Project array of objects to array of field values | Paired with `in`/`not in` for dedup-by-id workflows |
 | `join:"<sep>"` | List → string with separator | Filter-shape alternative to string `$append`; reconsider if filter-chain demand surfaces |
 | `isodate_ms` | Epoch ms → ISO-8601 | Companion to `|isodate`; defer until demand |
 
-`pluck` is the highest-priority remaining filter — it closes the structural-dedup gap for skills that iterate retrieval results and want to exclude already-seen items by ID without manual comparison loops.
-
-`join:"<sep>"` is parked: string-typed `$append` + bind-time `$set` interpolation (bash-shaped pair) is the primitive way to compose lists into strings. `|join:` is the filter-shape alternative; reconsider if real filter-chain demand surfaces.
+`field:"N"` is the next candidate if awk-like field extraction demand surfaces (fold in cheaply alongside the line family's split machinery). `summary` remains underspecified — define what it means before building. `join:"<sep>"` is parked: string-typed `$append` + bind-time `$set` interpolation (bash-shaped pair) is the primitive way to compose lists into strings; `|join:` is the filter-shape alternative, reconsider if real filter-chain demand surfaces. `isodate_ms` is trivial, add on demand.
 
 ## Composition philosophy
 
-Filters are pure functions (input → output, no side effects). Stay small and orthogonal — each filter does one thing. Composition emerges from chaining, not from elaborate per-filter parameter spaces. The shipped set covers ~90% of real-world string-shaping needs; the pending set extends to slicing and array projection.
+Filters are pure functions (input → output, no side effects). Stay small and orthogonal — each filter does one thing. Composition emerges from chaining, not from elaborate per-filter parameter spaces. The shipped set covers ~90% of real-world string-shaping needs plus line-slicing and array projection.
 
-`length`, `fallback:`, `isodate`, and `contains:` were all added in response to cold-author harness signal — authored skills demonstrated the gap was load-bearing before each filter shipped. `contains:` is also notable as the first filter to operate on structured types; filter-as-conditional-primitive is the design line that warranted the cross.
+`length`, `fallback:`, `isodate`, `contains:`, `head`/`tail`/`lines`, and `pluck` were all added in response to cold-author harness signal — an authored skill demonstrated the gap was load-bearing before each filter shipped. `contains:` and `pluck` are notable as the filters that operate on structured types (membership and projection); filter-as-conditional-primitive and structural-dedup are the design lines that warranted the cross. Everything else operates on the resolved string form.
 
 ## Conditionals & iteration — if/elif/else, foreach, supported operators
 
@@ -2621,5 +2644,5 @@ When any of these primitives ship, the relevant grammar moves into its canonical
 
 ---
 
-*Rendered from `skillscript/skillscript-language-reference` — 2026-07-21 12:57 EDT*  
+*Rendered from `skillscript/skillscript-language-reference` — 2026-07-23 13:56 EDT*  
 *Source of truth: AMP (`amp_render_document("skillscript/skillscript-language-reference")`)*
