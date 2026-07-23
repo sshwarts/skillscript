@@ -3367,7 +3367,7 @@ const APPEND_STRUCTURED_TO_STRING: LintRule = {
   id: "append-structured-to-string",
   severity: "info",
   description: "`$append VAR ${REF}` where VAR is a string accumulator and ${REF} is a bare `$` op output (possibly a structured list/object) with no `.field` accessor and no `|json` filter. Appending a structured value to a string stringifies and fragments it.",
-  remediation: "If ${REF} is a structured value, project a scalar field (`${REF.detail}`) or serialize it explicitly (`${REF|json}`). If ${REF} is already a scalar string, this advisory doesn't apply.",
+  remediation: "If ${REF} is a structured value, project a scalar field (`${REF.detail}`) or serialize it explicitly (`${REF|json}`). Unsure of the shape? `runtime_capabilities({tool: \"<connector>.<tool>\"})` reports the tool's `observed_output_shape` from prior runs. If ${REF} is already a scalar string, this advisory doesn't apply.",
   check: (ctx) => {
     const findings: LintFinding[] = [];
     const origins = buildBindingOrigins(ctx.parsed);
@@ -3677,7 +3677,7 @@ const OBJECT_ITERATION_ADVISORY: LintRule = {
   id: "object-iteration-advisory",
   severity: "info",
   description: "A `foreach IT in ${VAR}` iterates a bound variable whose origin is a `$` MCP tool output, without a `.field` accessor. The tool may return a bare array OR an envelope-wrapped one — verify against the tool's actual response shape.",
-  remediation: "Verify the tool's response shape. Some MCP tools return bare arrays (iterate directly: `foreach IT in ${VAR}` is correct); others wrap arrays in envelopes (e.g., `.items`, `.results`, `.data`) and need `foreach IT in ${VAR.items}` or the actual field. If your tool is known to return bare arrays, configure `LintOptions.bareArrayReturnTools` to suppress this advisory.",
+  remediation: "Verify the tool's response shape — `runtime_capabilities({tool: \"<connector>.<tool>\"})` reports its `observed_output_shape` (recorded from prior runs), so you can see the actual envelope before committing field access. Some MCP tools return bare arrays (iterate directly: `foreach IT in ${VAR}` is correct); others wrap arrays in envelopes (e.g., `.items`, `.results`, `.data`) and need `foreach IT in ${VAR.items}` or the actual field. If your tool is known to return bare arrays, configure `LintOptions.bareArrayReturnTools` to suppress this advisory.",
   check: (ctx) => {
     const findings: LintFinding[] = [];
     const origins = buildBindingOrigins(ctx.parsed);
