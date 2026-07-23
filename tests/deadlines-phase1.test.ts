@@ -675,6 +675,13 @@ run:
     });
     expect(r.deadlineExceeded).toBe(true);
     expect(aborted).toBe(true); // the connector received the abort and stopped
+    // The deadline is uncatchable EVEN when the signal-honoring connector rejects
+    // with its own error on abort: that rejection must not win the race and get
+    // swallowed by `(fallback:)`. (Regression guard for the load-dependent race
+    // that flaked this test on CI — the connector's "aborted" rejection could beat
+    // RunDeadlineExceeded; dispatchWithTimeout now converts deterministically.)
+    expect(r.fallbacks).toEqual([]);
+    expect(r.finalVars["R"]).not.toBe("fb");
   });
 
   it("no `# Deadline:` and no injected deadline → today's behavior, unchanged", async () => {

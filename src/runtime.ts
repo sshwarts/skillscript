@@ -2083,15 +2083,23 @@ async function dispatchWithTimeout<T>(
     : timeoutMs;
 
   let timer: ReturnType<typeof setTimeout> | undefined;
+  // Marks that the timer fired AS THE RUN DEADLINE (not a per-op timeout). Set
+  // synchronously inside the timer callback — before any cleanup await and before
+  // the abort-triggered connector rejection can settle the race — so the
+  // post-race catch below can convert deterministically.
+  let deadlineCut = false;
   const timeoutPromise = new Promise<never>((_, reject) => {
     timer = setTimeout(async () => {
-      // Signal the connector to stop its in-flight work first (call-bounded
-      // true-cancel), then decide the error class + run any outlives-call cleanup.
-      controller.abort();
       // If we're at/past this op's cut instant, the timer IS the run deadline
       // (the clamp made `effectiveMs` land there); otherwise it's a per-op
-      // timeout (`OpTimeoutError`, catchable).
-      if (cutInstant !== undefined && Date.now() >= cutInstant) {
+      // timeout (`OpTimeoutError`, catchable). Decide BEFORE aborting so the flag
+      // is set regardless of how the connector reacts to the abort.
+      const isDeadline = cutInstant !== undefined && Date.now() >= cutInstant;
+      if (isDeadline) deadlineCut = true;
+      // Signal the connector to stop its in-flight work (call-bounded true-cancel),
+      // then decide the error class + run any outlives-call cleanup.
+      controller.abort();
+      if (isDeadline) {
         if (onAbort !== undefined && reserveMs > 0) {
           // Bounded cleanup: give onAbort up to `reserveMs`, never let it hang or
           // throw past the budget. (A `< CLEANUP_CAP` window for a late op is the
@@ -2109,6 +2117,18 @@ async function dispatchWithTimeout<T>(
   });
   try {
     return await Promise.race([fn(controller.signal), timeoutPromise]);
+  } catch (e) {
+    // Deadline race: a signal-honoring connector aborted by the deadline cut may
+    // reject with its OWN error (its `abort` listener rejects synchronously inside
+    // `controller.abort()` above), which can WIN the Promise.race against our
+    // RunDeadlineExceeded rejection — load-dependent, so it flaked only on busy CI
+    // runners. When the timer fired as the run deadline, that outcome is
+    // uncatchable and must win regardless of which rejection settled first; else a
+    // downstream `(fallback:)` silently swallows a run-terminal expiry.
+    if (deadlineCut && !(e instanceof RunDeadlineExceeded)) {
+      throw new RunDeadlineExceeded(deadlineMs!, undefined, deadlineBudgetMs, deadlineSource);
+    }
+    throw e;
   } finally {
     if (timer !== undefined) clearTimeout(timer);
   }
