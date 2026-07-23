@@ -1,7 +1,7 @@
 // Pipe-filter implementations. `$(NAME|filter)` syntax dispatches here.
 
 /** The names of every registered filter. Lint's `unknown-filter` rule consults this. */
-export const KNOWN_FILTERS = ["url", "shell", "json", "trim", "length", "fallback", "isodate", "contains"] as const;
+export const KNOWN_FILTERS = ["url", "shell", "json", "trim", "length", "fallback", "isodate", "contains", "head", "tail", "lines", "pluck"] as const;
 export type KnownFilter = (typeof KNOWN_FILTERS)[number];
 
 /**
@@ -44,6 +44,33 @@ export function parseFilterChain(chain: string | undefined): FilterSpec[] {
 //
 // All filters operate on strings. The caller (parser at compile time, runtime
 // substituter at execution time) stringifies the underlying value first.
+
+/**
+ * Parse a filter arg as an integer. Empty / undefined / non-integer → NaN, so
+ * callers can uniformly treat a bad count as "no valid N". Used by the
+ * head/tail/lines family, which clamps-or-empties rather than throwing.
+ */
+function parseIntArg(arg: string | undefined): number {
+  if (arg === undefined) return NaN;
+  const t = arg.trim();
+  if (!/^-?\d+$/.test(t)) return NaN;
+  return parseInt(t, 10);
+}
+
+/**
+ * Split a string into content lines for the head/tail/lines family:
+ *   - split on `\n`;
+ *   - strip a trailing `\r` per line so CRLF input behaves;
+ *   - drop a SINGLE trailing empty line produced by a terminal newline, so
+ *     `tail:"1"` of `"a\nb\n"` is `"b"`, not `""`. A genuine interior blank
+ *     line is preserved; only the terminal-newline artifact is dropped.
+ * Empty input → `[]` (→ empty string out).
+ */
+function splitContentLines(value: string): string[] {
+  const lines = value.split("\n").map((l) => (l.endsWith("\r") ? l.slice(0, -1) : l));
+  if (lines.length > 0 && lines[lines.length - 1] === "") lines.pop();
+  return lines;
+}
 
 /**
  * Apply a named pipe filter to a string value. Filters supported in v1:
@@ -156,6 +183,69 @@ export function applyFilter(value: string, filter: string, arg?: string): string
         /* not JSON — fall through to substring semantics */
       }
       return value.includes(arg) ? "true" : "";
+    }
+    case "head": {
+      // First N content lines. Bad N (NaN / <1 / non-integer) → empty string:
+      // the family clamps-or-empties and NEVER throws (Perry signoff fe394ac1).
+      // Operates on the stringified input — applied to structured data it slices
+      // that value's serialization, consistent with the type-blind filter layer.
+      const n = parseIntArg(arg);
+      if (!Number.isFinite(n) || n < 1) return "";
+      return splitContentLines(value).slice(0, n).join("\n");
+    }
+    case "tail": {
+      // Last N content lines. Same never-throw / clamp-or-empty discipline.
+      const n = parseIntArg(arg);
+      if (!Number.isFinite(n) || n < 1) return "";
+      const lines = splitContentLines(value);
+      return lines.slice(Math.max(0, lines.length - n)).join("\n");
+    }
+    case "lines": {
+      // 1-indexed INCLUSIVE range `M-N`. Malformed / out-of-order / non-numeric
+      // bound → empty string (never-throw). `lines:"2-4"` → lines 2,3,4.
+      if (arg === undefined) return "";
+      const dash = arg.indexOf("-");
+      if (dash < 0) return ""; // single number / no range → malformed → empty
+      const m = parseIntArg(arg.slice(0, dash));
+      const n = parseIntArg(arg.slice(dash + 1));
+      if (!Number.isFinite(m) || !Number.isFinite(n)) return "";
+      const lines = splitContentLines(value);
+      const start = Math.max(0, m - 1); // clamp M<1 up to line 1
+      const end = n; // slice end is exclusive; 1-indexed inclusive N == exclusive N
+      if (end <= start) return ""; // M>N (e.g. "5-2") or N<1 → empty
+      return lines.slice(start, end).join("\n");
+    }
+    case "pluck": {
+      // Project `<field>` from each element of an array of objects → a JSON
+      // array string (the string-out contract is why pluck is viable where
+      // json_parse-as-filter wasn't; composes with `in`/`not in`/`length`/
+      // `contains`, all JSON-string-of-array tolerant). Single-level field only.
+      // Omit an element when the field is absent OR null/undefined, or when the
+      // element isn't an object (e.g. `pluck:"id"` on `[1,2,3]`) — compacts to
+      // present values only (Perry signoff fe394ac1). Non-array input throws —
+      // a content-parse check, cheaply detectable from the stringified value.
+      if (arg === undefined) {
+        throw new Error("|pluck filter: requires a quoted field name (e.g., |pluck:\"id\")");
+      }
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(value);
+      } catch {
+        throw new Error(
+          `|pluck filter: input '${value.slice(0, 40)}${value.length > 40 ? "..." : ""}' is not a JSON array of objects. Apply pluck to a structured array value.`,
+        );
+      }
+      if (!Array.isArray(parsed)) {
+        throw new Error(`|pluck filter: input is not an array (got ${parsed === null ? "null" : typeof parsed}); pluck projects field '${arg}' from each element of an array of objects.`);
+      }
+      const out: unknown[] = [];
+      for (const el of parsed) {
+        if (el === null || typeof el !== "object" || Array.isArray(el)) continue; // non-object element → omit
+        const v = (el as Record<string, unknown>)[arg];
+        if (v === null || v === undefined) continue; // absent / null field → omit
+        out.push(v);
+      }
+      return JSON.stringify(out);
     }
     default:
       throw new Error(`Unknown filter '${filter}' — supported: ${KNOWN_FILTERS.join(", ")}`);

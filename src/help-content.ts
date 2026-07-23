@@ -318,6 +318,8 @@ Optional \`encoding\` kwarg (default \`"utf8"\`):
 - \`encoding="base64"\` — reads the **raw bytes** and binds them base64-encoded (single line, no wrapping). Use this to inline a **binary** file (image, PDF) into an API payload — e.g. \`attachments:[{content: "\${B64}", ...}]\`. A plain utf8 read would corrupt non-text bytes before any \`|filter\` could run, so base64 must happen at read time, not via a pipe filter.
 - Any other encoding value is refused at runtime and flagged \`unknown-file-encoding\` (tier-2) at compile.
 
+**Tail/slice a log without a shell binary:** chain \`\${R|tail:"N"}\` / \`\${R|head:"N"}\` / \`\${R|lines:"M-N"}\` on the read result — it runs fs-read-only, with NO \`tail\`/\`grep\` shell-binary allowlist grant needed (and no \`unsafe=true\`). See the Pipe filters section below.
+
 The filesystem path allowlist gates every read regardless of encoding. **Container note:** when the runtime is sandboxed (Docker, container deployment), the runtime's filesystem is namespace-isolated from the author's host — \`/tmp/x\` in the skill maps to the runtime's \`/tmp/x\`, not the host's. Use absolute paths under a known shared volume for cross-namespace work.
 
 \`\`\`
@@ -440,6 +442,14 @@ Apply on \`\${VAR|filter}\` references; chain left-to-right.
 | \`fallback:"X"\` | Coalesce-on-missing: when the upstream ref is unresolved, substitute literal \`X\` and continue the chain. Positional — \`\${VAR|fallback:"-"|upper}\` defaults-then-uppercases. |
 | \`isodate\` | Format an epoch timestamp (ms or sec, auto-detected by magnitude) as ISO-8601. Passes already-ISO strings through unchanged. \`\${EVENT.fired_at_unix|isodate}\`. |
 | \`contains:"X"\` | Boolean substring/membership check. Returns \`"true"\` on match, \`""\` on miss — use in conditionals: \`if \${R|contains:"urgent"}:\`. Type-aware: list LHS (or JSON-string-of-list) does element membership; string LHS does substring match. Mirrors \`if "X" in \${R}:\` semantics from the conditional grammar. |
+| \`head:"N"\` | First N lines of the (string) input. \`\${LOG|head:"20"}\`. |
+| \`tail:"N"\` | Last N lines. \`file_read(spool) -> L\` then \`\${L|tail:"50"}\` tails a log **fs-read-only, no shell binary** — no \`tail\`/\`grep\` allowlist grant needed. |
+| \`lines:"M-N"\` | The 1-indexed **inclusive** line range M..N. \`\${SRC|lines:"10-20"}\` → lines 10 through 20. |
+| \`pluck:"field"\` | Project one field from each element of an **array of objects** → the array of field values. Structural dedup — bind then membership-test: \`\$set IDS = "\${ITEMS|pluck:"id"}"\` then \`if \${M.id} not in \${IDS}:\`. Single-level field only; omits an element whose field is absent/null or that isn't an object. |
+
+**Line filters (\`head\`/\`tail\`/\`lines\`)** operate on the input **as a string**: split on \`\\n\`, CRLF-tolerant, a terminal newline's trailing empty line is dropped (so \`tail:"1"\` of \`"a\\nb\\n"\` is \`"b"\`). They never throw — a bad/negative/out-of-range count clamps to what exists or yields \`""\`. Applied to structured data they slice that value's JSON serialization (rarely what you want) — the filter layer is type-blind.
+
+**\`pluck\` output is a JSON array string** (e.g. \`["a","b"]\`), which is exactly why it composes with \`in\` / \`not in\` / \`|length\` / \`|contains\` (all JSON-string-of-array tolerant). It stays a string until a downstream array-aware filter re-parses it — don't try to index raw pluck output (\`\${X|pluck:"id"}.0\` won't work). Non-array input throws. Bind the projection to a var before an \`in\` / \`not in\` test (the two-step above) — a filter chain inline on the \`in\` **RHS** (\`in \${ITEMS|pluck:"id"}\`) isn't parsed yet.
 
 **\`\${NOW}\` ambient ref** substitutes as an ISO-8601 string. Numeric epoch values remain available as \`\${EVENT.fired_at}\` (ms) and \`\${EVENT.fired_at_unix}\` (sec).
 

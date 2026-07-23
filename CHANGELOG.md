@@ -2,6 +2,20 @@
 
 Each release carries an **Upgrade impact:** line (first in its section) so a bump's requirements are visible at a glance. Tags (closed set): **BREAKING** (a manual change is needed to keep working) · **RE-APPROVE** (secured-mode signature invalidation — skills must be re-approved before they run) · **CONFIG** (`connectors.json` / config edit needed) · **none (additive)** (no action; backward-compatible). Standard from 0.20.0 forward; the pre-0.20 transitions that need action are flagged inline below (0.14.0, 0.18.8, 0.19.0). Full walkthrough: [UPGRADING.md](UPGRADING.md).
 
+## 0.38.0 — 2026-07-23 — line-slice + pluck pipe filters; approved= lint exemption; observed-shape in runtime_capabilities
+
+**Upgrade impact:** none (additive). Four new pipe filters, a lint false-positive removed, and a discovery surface widened — no behavior change to existing skills.
+
+**Pipe filters — line-slice family + `pluck`** (Perry build spec; each cleared the project's "a real authored skill demonstrated the gap" bar):
+
+- **`head:"N"` / `tail:"N"` / `lines:"M-N"`** — line-slice a string (one shared impl). Split on `\n`, CRLF-tolerant, and a terminal newline's trailing empty line is dropped (so `tail:"1"` of `"a\nb\n"` is `"b"`, not `""`); `lines:"M-N"` is a 1-indexed **inclusive** range. **Never throws** — a bad / negative / out-of-range count clamps to what exists or yields `""`. **Security payoff:** `file_read(spool) -> L` then `${L|tail:"N"}` tails a log **fs-read-only, with no `tail`/`grep` shell-binary allowlist grant and no `unsafe=true`**; a `file_read` help cross-reference now points authors to it.
+- **`pluck:"field"`** — project one field from each element of an **array of objects** → the array of field values (emitted as a JSON-array string, so it composes with `in` / `not in` / `|length` / `|contains`, all JSON-string-of-array tolerant). Omits an element whose field is absent/null or that isn't an object; single-level field only. Turns a hand-rolled dedup-by-id loop into a clean projection. Current idiom binds the projection then membership-tests (`$set IDS = "${SEEN|pluck:"id"}"` then `if ${M.id} not in ${IDS}:`); an inline filter chain on the `in` **RHS** is a pending grammar extension.
+- Both operate on the stringified input (the filter layer is type-blind); `pluck` additionally content-parses and throws on non-array input.
+
+**`approved=` no longer flags as `unknown-connector-arg`.** The mutation-gate auth kwarg is popped by the runtime before the connector sees args, so validating it against the tool's input schema was a false positive that directly contradicted `unconfirmed-mutation`'s "add `approved=`" remediation. `timeout=` and `approved=` are now a named reserved-dispatch-kwarg set, exempt from arg validation.
+
+**`observed_output_shape` now rides `runtime_capabilities({tool})`.** The last-observed return shape was surfaced only in `skill_preflight` (which needs a skill already referencing the tool); it now also attaches to the tool fetch authors reach for to answer "what does this return?", and the tool description advertises it.
+
 ## 0.37.0 — 2026-07-21 — robustness: per-leg bounds over whole-run deadlines + remote true-cancel
 
 **Upgrade impact:** none (additive). No lint codes added/removed and no behavior change to existing skills — a lint advisory's *guidance* changed, and `RemoteMcpConnector` now honors the cancellation signal it previously ignored.
