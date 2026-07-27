@@ -2,6 +2,20 @@
 
 Each release carries an **Upgrade impact:** line (first in its section) so a bump's requirements are visible at a glance. Tags (closed set): **BREAKING** (a manual change is needed to keep working) · **RE-APPROVE** (secured-mode signature invalidation — skills must be re-approved before they run) · **CONFIG** (`connectors.json` / config edit needed) · **none (additive)** (no action; backward-compatible). Standard from 0.20.0 forward; the pre-0.20 transitions that need action are flagged inline below (0.14.0, 0.18.8, 0.19.0). Full walkthrough: [UPGRADING.md](UPGRADING.md).
 
+## 0.39.0 — 2026-07-27 — remove the deprecated `# OnError:` header
+
+**Upgrade impact:** BREAKING — **only if a skill carries a `# OnError:` header.** That header was inert (never wired to runtime error handling), so removing it changes no behavior — but a skill still carrying it now **fails to compile**. Fix: delete the `# OnError:` line and use a target-level `else:` block (or an op-level `(fallback: "…")` trailer) for recovery. No skill that relied on it had working error handling to lose.
+
+**`# OnError:` is removed.** Ratified 2026-07-09 and then lost for ten minor versions, the header parsed *and* validated its named target skill — yet was never wired to runtime error handling. A skill carrying it had no recovery at all despite appearances (a silent false promise), and naming a missing handler even failed compile for a feature that did nothing. It is now a hard tier-1 parse error that names the working alternatives, so the latent "no error handling" surfaces at compile instead of hiding:
+
+- The parser rejects `# OnError:` with a diagnostic pointing at target-level `else:` and op-level `(fallback: "…")`.
+- The dead `fallbackSkillExecutor` runtime plumbing and the missing-fallback-skill compile validation are gone; the `compile_skill` response no longer carries an `on_error` field.
+- **`${ERROR_CONTEXT}` is unaffected** — it belongs to `else:`, not `# OnError:`.
+
+**Fix: the run deadline wins the abort race against a signal-honoring connector.** A call-bounded connector that honors `ctx.signal` rejects with its *own* error when the deadline aborts it; that rejection could win the internal `Promise.race` against `RunDeadlineExceeded` and be swallowed by a downstream `(fallback:)`, leaving `deadlineExceeded` unset. Load-dependent, so it only surfaced on busy CI runners. The deadline now wins deterministically — the uncatchable run-terminal expiry is never silently caught. No change for per-op `timeout=` (`OpTimeoutError`) or non-signal-honoring connectors.
+
+**Docs:** the language reference is re-rendered to move the `head` / `tail` / `lines` + `pluck` filters from the Pending table to Shipped with full semantics (they shipped in 0.38.0).
+
 ## 0.38.0 — 2026-07-23 — line-slice + pluck pipe filters; approved= lint exemption; observed-shape in runtime_capabilities
 
 **Upgrade impact:** none (additive). Four new pipe filters, a lint false-positive removed, and a discovery surface widened — no behavior change to existing skills.
