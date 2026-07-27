@@ -126,7 +126,7 @@ default: sweep
 The joined `emit()` stream becomes the augment-kind payload delivered to the on-call agent (per `# Output: agent: oncall`). The agent sees the briefing inline at next-turn dispatch.
 
 **Three layers of declaration:**
-1. **Header metadata** (`# Key: value` lines) — name, description, declared variables (`# Vars:`), declared returns (`# Returns:` — the export surface, output-side mirror of `# Vars:`; see Composition), triggers, `# Output:` routing, optional `# Autonomous:` flag, error fallbacks
+1. **Header metadata** (`# Key: value` lines) — name, description, declared variables (`# Vars:`), declared returns (`# Returns:` — the export surface, output-side mirror of `# Vars:`; see Composition), triggers, `# Output:` routing, optional `# Autonomous:` flag. (There is no error-handler header — error handling is authored in the body via `else:` / `(fallback:)`; the former `# OnError:` header was removed in v0.39.0. See Error handling.)
 2. **Targets** — named blocks of typed ops, optionally with `needs:` dependencies
 3. **`default:`** — names the goal target the runtime walks toward
 
@@ -1967,9 +1967,13 @@ Pre-bind defaults (`$set`) for every var the template/downstream reads, then gat
 - **`else:`** — target-level; when you need the error's details (`${ERROR_CONTEXT}`) to branch, or to contain a throw spanning several ops.
 - **Structural guard** — when you can cheaply validate the shape before the risky op; prevents the failure entirely.
 
-## Deprecated: `# OnError:` — parsed but not wired
+## Removed: `# OnError:` (v0.39.0, BREAKING)
 
-A skill-level `# OnError: <fallback-skill>` header parses, but it is **not wired in the current runtime: the named fallback never fires.** A skill that relies on it has, in effect, no error handling — so don't use it. Use a target-level `else:` handler (or an op-level `(fallback:)`) instead. The header is inert, not a compile error; removal is planned. To recover at the whole-skill level, wrap the body in a target with an `else:` that dispatches your recovery skill:
+The skill-level `# OnError: <fallback-skill>` header **no longer exists.** Writing it is a hard parse error directing you to `else:` / `(fallback:)`.
+
+History, because it matters for anyone reading older skills: the header parsed but was never wired — the named fallback never fired. A skill that carried it had, in effect, no error handling while appearing to have some. It was removed rather than implemented because `else:` and `(fallback:)` already cover the ground, and a silently-inert header is worse than no header. `${ERROR_CONTEXT}` is unaffected — it belongs to `else:` and remains available there.
+
+To recover at the whole-skill level, wrap the body in a target with an `else:` that dispatches your recovery skill:
 
 ```
 run:
@@ -1998,7 +2002,7 @@ else:
 | `${ref\|fallback:"x"}` filter | a missing / unresolved / empty value at use-time | the single reference |
 | `else:` block | a raised throw anywhere in the target body, WITH error context (`${ERROR_CONTEXT.kind/.message/.target}`) | the whole target |
 | structural guard (pre-bind defaults + a `contains`/shape check before the risky op) | PREVENTS the failure — the op isn't reached on bad input, so it can't fail | the risky op |
-| `# OnError: <skill>` | INERT in the current runtime (fallbackSkillExecutor never wired) — do NOT rely on it; prefer `else:` | — |
+| `# OnError: <skill>` | REMOVED in v0.39.0 (BREAKING) — the header no longer exists; writing it is a hard parse error directing you to `else:` / `(fallback:)`. Historically it parsed but was INERT (fallbackSkillExecutor never wired), so a skill carrying it had no error handling while appearing to have some. | — |
 
 `(fallback:)` = "any failure → this default." `else:` = "I need the error's DETAILS to branch." Structural guard = "I'd rather this never fail" (most robust — the failure never reaches a handler).
 
@@ -2644,5 +2648,5 @@ When any of these primitives ship, the relevant grammar moves into its canonical
 
 ---
 
-*Rendered from `skillscript/skillscript-language-reference` — 2026-07-23 13:56 EDT*  
+*Rendered from `skillscript/skillscript-language-reference` — 2026-07-27 11:01 EDT*  
 *Source of truth: AMP (`amp_render_document("skillscript/skillscript-language-reference")`)*
