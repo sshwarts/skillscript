@@ -48,7 +48,7 @@ export interface CompileOptions {
   format?: RenderFormat;
   /** Optional resolver for `# Requires:` cascade. Without it, requires fall through to declared fallback or surface as missing. */
   requireResolver?: RequireResolver;
-  /** Optional SkillStore — used for `# OnError:` validation, data-skill inlining (T3), and source-skill provenance lookup. */
+  /** Optional SkillStore — used for data-skill inlining (T3) and source-skill provenance lookup. */
   skillStore?: SkillStore;
   /** When true, embed the provenance block at the bottom of the rendered artifact instead of returning it as a sidecar. Default false (sidecar shape). */
   inlineProvenance?: boolean;
@@ -104,7 +104,6 @@ export interface CompileResult {
    * `skillfile audit` consumes this to detect recompile-staleness.
    */
   provenance: ProvenanceBlock;
-  onError: string | null;
   /**
    * Tier-2 lint warnings + orphan-target diagnostics. v0.3.3 expanded to
    * carry tier-2 findings from the lint preflight; previously the field
@@ -188,18 +187,6 @@ export async function compile(
     throw new Error(
       `Skill has no entry target (missing \`default:\` line).`,
     );
-  }
-
-  if (parsed.onError !== null && skillStore !== undefined) {
-    try {
-      await skillStore.metadata(parsed.onError);
-    } catch (err) {
-      // SkillNotFoundError (or any error from metadata lookup) → fail-clean
-      // at compile time rather than at runtime when the fallback would fire.
-      throw new Error(
-        `Skill references missing fallback skill '${parsed.onError}' in \`# OnError:\` header.`,
-      );
-    }
   }
 
   // Variable resolution precedence: caller inputs > `# Requires:` cascade >
@@ -331,7 +318,6 @@ export async function compile(
     output,
     triggers: parsed.triggers,
     outputs,
-    onError: parsed.onError,
     warnings: [...warnings, ...lintWarnings],
     advisories: lintAdvisories,
     parsed,
@@ -633,10 +619,6 @@ function renderPrompt(parsed: ParsedSkill, resolved: Map<string, string>, order:
   out.push(`# Skill: ${parsed.name ?? "(unnamed)"}`);
   if (parsed.description) out.push(parsed.description);
   out.push("");
-  if (parsed.onError !== null) {
-    out.push(`**If this skill fails, invoke fallback:** ${parsed.onError}`);
-    out.push("");
-  }
   if (resolved.size > 0) {
     out.push("## Resolved variables");
     for (const [k, v] of resolved) out.push(`- ${k} = ${v}`);
@@ -736,10 +718,6 @@ function renderProse(parsed: ParsedSkill, resolved: Map<string, string>, order: 
   if (parsed.description) {
     out.push("");
     out.push(parsed.description);
-  }
-  if (parsed.onError !== null) {
-    out.push("");
-    out.push(`**On error, falls back to:** ${parsed.onError}`);
   }
   if (resolved.size > 0) {
     out.push("");

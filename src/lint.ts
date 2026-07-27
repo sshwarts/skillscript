@@ -1491,7 +1491,7 @@ const UNPARSED_JSON_FIELD_ACCESS: LintRule = {
 };
 
 // v0.2.12 Bug 17. `# Templates:` refs were not lint-validated despite
-// `# OnError:` having compile-time validation (since v0.2.10).
+// other qualified skill references being validated at compile time.
 // v0.3.1: demoted tier-1 → tier-2 alongside unknown-skill-reference.
 // Runtime throws SkillNotFoundError on delivery if still missing.
 const UNKNOWN_TEMPLATE_REFERENCE: LintRule = {

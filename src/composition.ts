@@ -117,7 +117,7 @@ export async function executeSkillByName(
   try {
     loaded = await skillStore.load(skillName);
   } catch {
-    // v0.3.1: structured runtime error that flows through `# OnError:`.
+    // v0.3.1: structured runtime error that flows through `else:` recovery.
     // The legacy SkillNotFoundForCompositionError is kept exported for
     // backwards-compat but the new code path throws the OpError shape.
     throw new MissingSkillReferenceError(skillName, "$", "$ execute_skill");
@@ -125,7 +125,7 @@ export async function executeSkillByName(
 
   // v0.9.0 — universal execution gate. Reject Draft/Disabled, naked
   // Approved (no token), and tampered bodies (hash mismatch). Flows
-  // through `# OnError:` like any other ConnectorError subclass.
+  // through `else:` recovery like any other ConnectorError subclass.
   const gate = evaluateApprovalGate(loaded.source);
   if (!gate.ok) {
     throw new ApprovalRejectedError(skillName, gate.reason, "executeSkillByName");

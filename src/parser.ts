@@ -246,7 +246,6 @@ export interface ParsedSkill {
   secretRequires: string[];
   targets: Map<string, SkillTarget>;
   entryTarget: string | null;
-  onError: string | null;
   triggers: TriggerDecl[];
   outputs: OutputDecl[];
   /**
@@ -1123,7 +1122,6 @@ export function parse(source: string): ParsedSkill {
     targets: new Map(),
     entryTarget: null,
     entryTargetExplicit: false,
-    onError: null,
     triggers: [],
     outputs: [],
     outputTemplate: null,
@@ -1395,7 +1393,13 @@ export function parse(source: string): ParsedSkill {
           result.returns = names;
         }
       } else if (key === "onerror") {
-        result.onError = value === "" ? null : value;
+        // v0.39.0 — `# OnError:` removed. It was parsed + validated but never
+        // wired to runtime error handling, so a skill carrying it had NO error
+        // handling despite appearances (a silent false promise). A hard tier-1
+        // diagnostic surfaces that latent bug rather than compiling it clean.
+        result.parseErrors.push(
+          "`# OnError:` is no longer a supported header — it was never wired to runtime error handling, so a skill relying on it had no recovery at all. Remove it and use a target-level `else:` block for recovery logic, or an op-level `(fallback: \"...\")` trailer to degrade a single op.",
+        );
       } else if (key === "tags") {
         // Optional classification tags — comma-separated, normalized to
         // lowercase slugs, de-duped. Pure metadata (display + agent

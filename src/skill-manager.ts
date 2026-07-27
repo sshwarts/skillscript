@@ -4,7 +4,7 @@
 //
 // `ReferentialIntegrityError` is a runtime-layer error class — NOT a
 // `ConnectorError` subclass. The distinction matters: the executor's
-// `else:` / `# OnError:` machinery catches `ConnectorError`s thrown
+// `else:` recovery machinery catches `ConnectorError`s thrown
 // inside skill execution and routes them through the recovery chain.
 // `ReferentialIntegrityError` is thrown by `deleteSkill()`, which is a
 // user-facing management API — not a skill-execution op — so it surfaces

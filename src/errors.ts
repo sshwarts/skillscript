@@ -1,5 +1,5 @@
 // Structured error hierarchy. Connectors throw these; the executor catches
-// them and routes through the language's `else:` / `# OnError:` machinery.
+// them and routes through the language's `else:` recovery machinery.
 // Filter helpers (`$(ERR|class)`) expose the error class to skill authors.
 //
 // Runtime-layer errors (e.g. `ReferentialIntegrityError`, Phase 2.1) are
@@ -49,8 +49,8 @@ export class SkillNotFoundError extends ConnectorError {
 /**
  * v0.9.0 — refused at the universal execution gate (scheduler dispatch,
  * MCP execute_skill, in-skill `$ execute_skill`). Skill is Draft, Disabled,
- * or carries an invalid/missing hash-token. Flows through `# OnError:` like
- * any other connector-class error.
+ * or carries an invalid/missing hash-token. Flows through `else:` recovery
+ * like any other connector-class error.
  */
 export class ApprovalRejectedError extends ConnectorError {
   constructor(
@@ -163,8 +163,8 @@ export class TimeoutError extends ConnectorError {
 // ─── Op-level error hierarchy (executor layer) ──────────────────────────────
 //
 // Distinct from `ConnectorError` (substrate layer). OpError + subclasses are
-// thrown at runtime by the executor / dispatcher, caught by the `else:` /
-// `# OnError:` machinery, and surfaced in `result.errors[]` with structured
+// thrown at runtime by the executor / dispatcher, caught by the `else:`
+// recovery machinery, and surfaced in `result.errors[]` with structured
 // metadata + canned remediation strings per ERD §8 + lesson `a3ba4149`
 // (agent-authored output).
 
@@ -438,14 +438,14 @@ export class FilePathNotAllowedError extends OpError {
  * `# Templates:` delivery) couldn't be resolved at execute time because
  * the SkillStore has no skill by that name. v0.3.1: forward-reference
  * lint demotion means the runtime is now the resolution gate, not
- * compile-time lint. Inherits `OpError` so it flows through `# OnError:`
- * fallback chains naturally.
+ * compile-time lint. Inherits `OpError` so it flows through `else:`
+ * recovery naturally.
  *
  * Distinct from the SkillStore-contract `SkillNotFoundError` (line 39) —
  * that's thrown by `store.load()` / `store.metadata()` and signals the
  * connector-layer miss. This class is the OpError-shaped wrapper the
  * runtime synthesizes for the composition site so cold-author skills
- * can use `# OnError:` as the recovery path.
+ * can use `else:` as the recovery path.
  */
 export class MissingSkillReferenceError extends OpError {
   constructor(

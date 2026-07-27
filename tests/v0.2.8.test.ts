@@ -94,8 +94,8 @@ describe("v0.2.8 — help MCP tool", () => {
     // else: reframed as recovery logic; structural guard is the prevention path.
     expect(content).toMatch(/else:/);
     expect(content).toMatch(/throw-proof|structural guard/);
-    // # OnError: still flagged as not wired.
-    expect(content).toMatch(/NOT wired in the current runtime/);
+    // # OnError: now flagged as removed (hard compile error since v0.39.0).
+    expect(content).toMatch(/OnError.*\bremoved\b/i);
     // fan-out rule + degrade-loud survive.
     expect(content).toMatch(/fan-out/i);
     expect(content).toMatch(/Degrade LOUD/);

@@ -978,7 +978,7 @@ export class McpServer {
     } catch (err) {
       // v0.3.1: composition.ts now throws MissingSkillReferenceError (OpError
       // subclass) instead of the legacy SkillNotFoundForCompositionError, so
-      // missing-skill failures flow through `# OnError:` chains. The MCP wire
+      // missing-skill failures flow through target-level `else:` recovery. The MCP wire
       // shape continues to surface this as `class: "SkillNotFoundError"` for
       // consumer-compatibility — renamed message + structured fields, same
       // top-level class label on the wire. The legacy branch stays as a
@@ -1089,7 +1089,6 @@ export class McpServer {
         target_order: compiled.targetOrder,
         triggers: compiled.triggers,
         outputs: compiled.outputs,
-        on_error: compiled.onError,
         warnings: compiled.warnings,
         advisories: compiled.advisories,
         errors: [],

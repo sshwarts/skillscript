@@ -105,17 +105,9 @@ describe("v0.3.1 — runtime MissingSkillReferenceError on still-unresolved refs
   });
 });
 
-describe("v0.3.1 — `# OnError:` validation stays tier-1 (stronger contract)", () => {
-  it("# OnError: <missing> still blocks compile", async () => {
-    const src = "# Skill: t\n# Status: Approved\n# OnError: missing-fallback-skill\nrun:\n    emit(text=\"body\")\ndefault: run\n";
-    await expect(compile(src, { skillStore: wired.skillStore })).rejects.toThrow(/missing-fallback-skill|fallback/i);
-  });
-
-  it("# OnError: <existing> is fine", async () => {
-    const src = "# Skill: t\n# Status: Approved\n# OnError: known-child\nrun:\n    emit(text=\"body\")\ndefault: run\n";
-    await expect(compile(src, { skillStore: wired.skillStore })).resolves.toBeDefined();
-  });
-});
+// `# OnError:` validation was removed in v0.39.0 (the header itself is gone —
+// it was never wired to runtime error handling). Removal behavior is covered in
+// tests/v0.39.0-onerror-removed.test.ts.
 
 describe("v0.3.1 — help surface", () => {
   it("lint-codes topic moves unknown-skill-reference + unknown-template-reference to tier-2", () => {

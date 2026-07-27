@@ -297,7 +297,7 @@ export class RemoteMcpConnector implements McpConnector {
 
     // MCP convention: `isError: true` indicates inner-tool error even
     // when JSON-RPC succeeded. Surface as DispatchError so the skill's
-    // else: / OnError: machinery can catch it (matches the c580de5
+    // else: recovery machinery can catch it (matches the c580de5
     // contract from T1).
     if (result?.isError === true) {
       throw new RemoteMcpDispatchError(`${toolName} returned isError: ${JSON.stringify(result.content)}`);

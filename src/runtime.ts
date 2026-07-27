@@ -50,8 +50,7 @@ import type { SecretProvider, MaskedSecrets } from "./secrets.js";
  *   - `outputs` populates default-to-`lastBoundVar`, else emissions.
  *   - `??` (ask user) is fail-fast — runtime cannot pause for input.
  *   - `?` (reason) is a thought-step — emitted, doesn't bind.
- *   - Error chain: target-level `else:` → skill-level `# OnError:` fallback
- *     → bubble up.
+ *   - Error chain: target-level `else:` recovery, else the error bubbles up.
  *   - Foreach scope is loop-local — vars introduced inside the body deleted on exit.
  */
 
@@ -87,11 +86,6 @@ export interface ExecuteContext {
   callerAgentId?: string;
   /** Test escape hatch: dispatch `$` ops bare-named tools through this callback when no `primary` McpConnector is registered. */
   toolDispatch?: (toolName: string, args: Record<string, unknown>) => Promise<unknown>;
-  /** Invoked when target ops fail with no target-level `else:` but the skill declares `# OnError:`. */
-  fallbackSkillExecutor?: (
-    skillName: string,
-    vars: Record<string, unknown>,
-  ) => Promise<ExecuteResult>;
   /** Mechanical-only preview: `$` ops skip real dispatch and bind a placeholder. */
   mechanical?: boolean;
   /**
@@ -500,7 +494,7 @@ function buildLifecycleMeta(
 /**
  * Execute a parsed skill against the live variable state. Walks targets in
  * the provided order. Each target's ops run sequentially; on failure the
- * chain falls back to `else:` → `# OnError:` → bubble.
+ * chain falls back to `else:` recovery, else bubbles up.
  */
 export async function execute(
   parsed: ParsedSkill,
@@ -636,18 +630,6 @@ export async function execute(
           if (innerErr instanceof RunDeadlineExceeded) throw innerErr;
           errors.push(buildExecutionError(innerErr, targetName, "else"));
         }
-      } else if (parsed.onError !== null && ctx.fallbackSkillExecutor) {
-        try {
-          const fbResult = await ctx.fallbackSkillExecutor(
-            parsed.onError,
-            Object.fromEntries(vars),
-          );
-          for (const em of fbResult.emissions) emissions.push(em);
-          for (const fe of fbResult.errors) errors.push(fe);
-        } catch (fbErr) {
-          errors.push(buildExecutionError(fbErr, parsed.onError, "skill-fallback"));
-        }
-        break;
       } else {
         break;
       }
@@ -1319,7 +1301,7 @@ async function execOpInner(
       // Deferred-resolution path. `inline` ops that reached runtime are
       // either (a) forward-references that compile couldn't inline because
       // the target wasn't yet stored, or (b) the rare "raw AST bypassed
-      // compile()" case. Surface as MissingSkillReferenceError so `# OnError:`
+      // compile()" case. Surface as MissingSkillReferenceError so `else:`
       // can catch.
       const skillName = op.ampParams?.skillName ?? "(unknown)";
       throw new MissingSkillReferenceError(skillName, "inline", "inline", targetName);
@@ -1838,7 +1820,7 @@ async function execOpInner(
       // c580de5: surface inner-tool `isError: true` as an op error. Otherwise
       // the error text gets bound silently to the output var and the skill
       // continues. Throw so the outer execOps catch records this in
-      // `result.errors[]` and the else/OnError fallback machinery can fire.
+      // `result.errors[]` and the else: recovery machinery can fire.
       if (
         rawResult !== null &&
         typeof rawResult === "object" &&
