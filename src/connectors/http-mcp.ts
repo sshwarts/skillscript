@@ -420,7 +420,7 @@ export class HttpMcpConnector implements McpConnector {
   private async ensureSession(identityKey: string, entry: SessionEntry): Promise<void> {
     if (entry.sessionId !== null) return;
     if (entry.initializing === null) {
-      entry.initializing = (async () => {
+      const init = (async () => {
         await this.post(identityKey, entry, {
           jsonrpc: "2.0",
           id: 1,
@@ -440,6 +440,24 @@ export class HttpMcpConnector implements McpConnector {
           true,
         );
       })();
+      // v0.39.1 — clear the memoized handshake promise if it REJECTS, so a
+      // transient transport failure (e.g. the MCP server restarting mid-
+      // `initialize`, which makes `fetch` throw) doesn't latch this pool entry
+      // permanently. Pre-fix, a rejected `initializing` stayed non-null forever:
+      // every later call skipped re-init and re-awaited the same rejection —
+      // wedged until the runtime process restarted, even after the server
+      // recovered. Identity-guarded (`entry.initializing === init`) so we never
+      // clobber a newer handshake a concurrent caller may have started. We do
+      // NOT retry the tool call on a transport throw: a throw is silence about
+      // whether the effect landed, and retrying could double-apply a mutating
+      // dispatch (Perry ruling `ae25c0a3`). Clearing alone converts a permanent
+      // wedge into a transient failure the next call recovers from. `StaleSession`
+      // (a completed 4xx round-trip — a report the effect did NOT land) keeps its
+      // separate, bounded retry path.
+      init.catch(() => {
+        if (entry.initializing === init) entry.initializing = null;
+      });
+      entry.initializing = init;
     }
     await entry.initializing;
   }

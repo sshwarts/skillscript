@@ -2,6 +2,14 @@
 
 Each release carries an **Upgrade impact:** line (first in its section) so a bump's requirements are visible at a glance. Tags (closed set): **BREAKING** (a manual change is needed to keep working) · **RE-APPROVE** (secured-mode signature invalidation — skills must be re-approved before they run) · **CONFIG** (`connectors.json` / config edit needed) · **none (additive)** (no action; backward-compatible). Standard from 0.20.0 forward; the pre-0.20 transitions that need action are flagged inline below (0.14.0, 0.18.8, 0.19.0). Full walkthrough: [UPGRADING.md](UPGRADING.md).
 
+## 0.39.1 — 2026-08-07 — fix: HTTP MCP connectors recover from a transport failure during handshake
+
+**Upgrade impact:** none (additive fix) — just upgrade.
+
+**An HTTP MCP connector whose endpoint was briefly unreachable during its session handshake now recovers on the next call, instead of staying wedged until the runtime process restarts.** Previously, if `fetch()` threw mid-`initialize` (e.g. the MCP server restarting at the wrong moment), `HttpMcpConnector` memoized the *rejected* handshake promise and never cleared it — every subsequent call re-awaited the same rejection, so the connector stayed blind even after the endpoint came back healthy. Any adopter on a remote HTTP MCP connector (including AMP) was exposed to a one-blip-to-permanent-wedge failure mode.
+
+- **Fix:** the memoized handshake promise is cleared when it rejects, converting a permanent wedge into a transient failure the next call recovers from. Deliberately narrow: a transport throw is *not* retried in place — a throw carries no information about whether a mutating dispatch already landed, so retrying it could double-apply the effect. The existing bounded stale-session retry (which fires only on a completed HTTP-4xx round-trip — a report that the effect did *not* land) is unchanged.
+
 ## 0.39.0 — 2026-07-27 — remove the deprecated `# OnError:` header
 
 **Upgrade impact:** BREAKING — **only if a skill carries a `# OnError:` header.** That header was inert (never wired to runtime error handling), so removing it changes no behavior — but a skill still carrying it now **fails to compile**. Fix: delete the `# OnError:` line and use a target-level `else:` block (or an op-level `(fallback: "…")` trailer) for recovery. No skill that relied on it had working error handling to lose. **Note for a stored, already-Approved skill:** `# OnError:` is inside the approval signing hash, so deleting the line changes the signed body — the skill drops to Draft and needs a fresh operator approval before it runs again (an agent cannot self-repair it). Skillscript's own bundled/stored skills are verified clean of the header, so this only affects an adopter with a stored skill still carrying it.

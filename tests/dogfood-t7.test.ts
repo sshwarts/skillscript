@@ -24,8 +24,8 @@ const REPO_ROOT = join(__dirname, "..");
 const PACKAGE_JSON = JSON.parse(readFileSync(join(REPO_ROOT, "package.json"), "utf8")) as Record<string, unknown>;
 
 describe("T7 — package.json polish", () => {
-  it("1. version is 0.39.0 (BREAKING: `# OnError:` header removed — inert, never wired, now a hard tier-1 compile error pointing at else:/(fallback:); + deadline-wins-abort-race fix; + language-reference re-render for the 0.38.0 filters)", () => {
-    expect(PACKAGE_JSON["version"]).toBe("0.39.0");
+  it("1. version is 0.39.1 (fix: HttpMcpConnector clears the memoized handshake promise on a transport-failure rejection, so a connector wedged by a transient blip recovers on the next call instead of needing a runtime restart)", () => {
+    expect(PACKAGE_JSON["version"]).toBe("0.39.1");
   });
 
   it("2. main + types + bin + engines.node ≥ 22.5 declared", () => {
