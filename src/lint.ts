@@ -3526,8 +3526,8 @@ function isOriginSuspect(origin: BindingOrigin | undefined): boolean {
 const UNQUOTED_SUBSTITUTION_IN_KWARG_VALUE: LintRule = {
   id: "unquoted-substitution-in-kwarg-value",
   severity: "warning",
-  description: "A `$ tool key=$(VAR)` op kwarg OR a legacy `@ cmd ... $(VAR)` shell arg has an unquoted `$(VAR)` / `${VAR}` substitution where VAR may resolve to a value containing whitespace. Runtime renders into `key=value with spaces` then re-tokenizes on whitespace — only the first chunk binds to `key` (MCP) or first arg (shell). Silent arg truncation. v0.7.2 extends coverage from `$` ops to `@` ops per R4 minion 4 finding.",
-  remediation: "Wrap the substitution in quotes: `key=\"$(VAR)\"` for MCP kwargs, `\"$(VAR)\"` for shell args. The arg tokenizer respects quoted regions, preventing the re-tokenization split.",
+  description: "A `shell(command=\"... $(VAR) ...\")` op has an unquoted `$(VAR)` / `${VAR}` substitution where VAR may resolve to a value containing whitespace. The shell body is whitespace-tokenized before the spawn, so only the first chunk binds — silent word-splitting. (The `$` MCP-dispatch path was retired in v0.39.2 (ticket 7ca043f9): `$` kwargs are now parsed BEFORE substitution, so an unquoted `${VAR}` binds the whole value regardless of whitespace or embedded quotes — quoting is no longer needed there for correctness.)",
+  remediation: "Wrap the shell substitution in quotes: `\"$(VAR)\"`. The tokenizer respects quoted regions, preventing the word-split. (For `$` dispatch this is no longer required — as of v0.39.2 the value binds whole either way; quote only to force a value to string type instead of coercing `5`/`true`.)",
   check: (ctx) => {
     const findings: LintFinding[] = [];
     const origins = buildBindingOrigins(ctx.parsed);
@@ -3540,33 +3540,12 @@ const UNQUOTED_SUBSTITUTION_IN_KWARG_VALUE: LintRule = {
     const subStPattern = /\$(?:\(([^|)\s]+)|\{([^|}\s]+))/;
     for (const [targetName, target] of ctx.parsed.targets) {
       walkOps(target.ops, (op) => {
-        if (op.kind === "$") {
-          // $ MCP dispatch — scan kwarg values for unquoted substitutions.
-          const tokens = tokenizeKeywordArgs(op.body);
-          for (const tok of tokens) {
-            const eq = tok.indexOf("=");
-            if (eq === -1) continue;
-            const key = tok.slice(0, eq);
-            const value = tok.slice(eq + 1);
-            if (!(value.startsWith("$(") || value.startsWith("${"))) continue;
-            const m = subStPattern.exec(value);
-            if (m === null) continue;
-            const varName = (m[1] ?? m[2])!;
-            const rootVar = varName.split(".")[0]!;
-            const origin = origins.get(rootVar);
-            if (!isOriginSuspect(origin)) continue;
-            const dedupKey = `${targetName}:$:${key}:${varName}`;
-            if (reported.has(dedupKey)) continue;
-            reported.add(dedupKey);
-            findings.push({
-              rule: "unquoted-substitution-in-kwarg-value",
-              severity: "warning",
-              message: `\`$ ... ${key}=\${${varName}}\` in target '${targetName}': unquoted substitution. ${describeOriginRisk(origin!)} Wrap as \`${key}="\${${varName}}"\` to prevent silent arg truncation if the value contains whitespace.`,
-              block: targetName,
-              extras: { kwarg: key, var_name: varName, origin: origin!.kind, op: "$" },
-            });
-          }
-        } else if (op.kind === "shell") {
+        // v0.39.2 (ticket 7ca043f9) — the `$` MCP-dispatch branch was removed:
+        // `$` kwargs are now parsed before substitution, so an unquoted
+        // `${VAR}` binds the whole value regardless of whitespace/quotes. Only
+        // the shell path still word-splits (the runtime spawns on a whitespace-
+        // tokenized command), so the warning stays there and only there.
+        if (op.kind === "shell") {
           // Tokenize the shell body the same way the runtime would
           // (whitespace-separated, quotes respected), then flag any token
           // that is a bare unquoted substitution. Quoted tokens

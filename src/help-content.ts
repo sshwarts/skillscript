@@ -376,11 +376,11 @@ Resolves the tool name against the adopter's \`connectors.json\`. Flat form (\`$
 | Null | \`assignee=null\` | null |
 | JSON array | \`tags=["a","b"]\` | array \`["a","b"]\` |
 | JSON object | \`payload={"k":"v"}\` | object \`{"k":"v"}\` |
-| Substitution | \`id=\${BUG_ID}\` | resolved at dispatch time |
-| Quoted substitution | \`query="\${QUERY}"\` | quoted resolution (recommended when value may contain whitespace) |
+| Substitution | \`id=\${BUG_ID}\` | value resolved at dispatch time, bound INTO the parsed kwarg (unquoted → type-coerced: \`5\`→number, \`true\`→boolean, \`[...]\`→array) |
+| Quoted substitution | \`text="\${BODY}"\` | string; safe with embedded quotes AND whitespace (kwargs are parsed before substitution) — quote to force string type |
 | Triple-quote multi-line | \`text="""prose body across\\nmultiple lines"""\` | string; spans newlines, embedded \`"\` allowed, common leading indent stripped (\`textwrap.dedent\` pattern), \`\${VAR}\` interpolation works the same as single-line |
 
-**Lint warning** \`unquoted-substitution-in-kwarg-value\` fires when an unquoted \`\${VAR}\` sits in kwarg-value position and VAR's binding origin suggests whitespace. Wrap as \`key="\${VAR}"\` to prevent silent arg truncation if the resolved value contains spaces.
+**Substitution is quote-safe (v0.39.2+).** \`$\` kwargs are tokenized BEFORE substitution, then \`\${VAR}\` is bound into each parsed value — so a value containing a double-quote or whitespace no longer truncates the argument. Quoted and unquoted both bind the whole value; the only difference is type (unquoted is coerced, quoted stays string). The \`unquoted-substitution-in-kwarg-value\` lint now applies only to \`shell(...)\` args, where the command IS whitespace-tokenized before the spawn.
 
 **Triple-quote dedent.** Authors writing multi-line bodies indented inside the call site (e.g., inside an \`emit(text=...)\` block) get the common leading whitespace stripped automatically. Leading and trailing whitespace-only lines are stripped too. Interior blank lines stay. The template looks like the output:
 

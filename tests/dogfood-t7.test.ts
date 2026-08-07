@@ -24,8 +24,8 @@ const REPO_ROOT = join(__dirname, "..");
 const PACKAGE_JSON = JSON.parse(readFileSync(join(REPO_ROOT, "package.json"), "utf8")) as Record<string, unknown>;
 
 describe("T7 — package.json polish", () => {
-  it("1. version is 0.39.1 (fix: HttpMcpConnector clears the memoized handshake promise on a transport-failure rejection, so a connector wedged by a transient blip recovers on the next call instead of needing a runtime restart)", () => {
-    expect(PACKAGE_JSON["version"]).toBe("0.39.1");
+  it("1. version is 0.39.2 (fix: $ dispatch kwargs are parsed BEFORE substitution, so an embedded quote / unquoted whitespace in a value no longer silently truncates the argument; + execute_skill/skill_write approval-gate descriptions corrected)", () => {
+    expect(PACKAGE_JSON["version"]).toBe("0.39.2");
   });
 
   it("2. main + types + bin + engines.node ≥ 22.5 declared", () => {

@@ -1542,11 +1542,17 @@ async function execOpInner(
       // spliced in just before dispatch (below). `body` is used for tool-name
       // parsing only (the tool name never contains a marker).
       const { masked: maskedBody, names: secretNames } = maskSecrets(op.body);
-      const body = substituteRuntime(maskedBody, vars);
-      const m = /^([A-Za-z_][\w:-]*)\s*([\s\S]*)$/.exec(body);
+      // v0.39.x (ticket 7ca043f9) — parse the tool name + kwarg BOUNDARIES from
+      // the RAW (pre-substitution) body, then substitute `${VAR}` INTO each
+      // parsed value. The old path substituted values into the source line and
+      // THEN tokenized, so a value containing a double-quote (or, unquoted,
+      // whitespace) truncated the kwarg and reported success — a truncated email
+      // reached a customer. Tokenizing a line where every value is still a
+      // `${VAR}` placeholder makes that class structurally impossible.
+      const m = /^([A-Za-z_][\w:-]*)\s*([\s\S]*)$/.exec(maskedBody);
       if (m === null) {
         throw new OpError(
-          `Malformed \`$\` op body: '${unmaskSecretSentinels(body, secretNames)}' — expected 'TOOL_NAME key=value ...'`,
+          `Malformed \`$\` op body: '${unmaskSecretSentinels(maskedBody, secretNames)}' — expected 'TOOL_NAME key=value ...'`,
           "$",
           "Use `$ tool_name key=value ...` syntax. See `help({topic: 'ops'})` for examples.",
           targetName,
@@ -1554,7 +1560,7 @@ async function execOpInner(
       }
       const toolName = m[1]!;
       const argsStr = m[2] ?? "";
-      const args = parseToolArgs(argsStr);
+      const args = parseToolArgsSubstituted(argsStr, vars);
       // v0.16.0 — op-level `timeout=N` kwarg reserved for `$` dispatch (parity
       // with legacy `~` `timeoutSeconds`). Pop from args before forwarding so
       // connectors don't see a kwarg they didn't declare. Accepts int literal
@@ -1643,7 +1649,12 @@ async function execOpInner(
       // where `|json_parse` (string-in/string-out) couldn't propagate
       // parsed structure through `.field` access.
       if (toolName === "json_parse" && op.mcpConnector === undefined) {
-        const input = argsStr.trim();
+        // json_parse takes a POSITIONAL expression (`$(VAR)` / `${VAR}` / a JSON
+        // literal), not `key=value` kwargs, so it substitutes its whole input
+        // here rather than going through parseToolArgsSubstituted. (Pre-v0.39.x
+        // it read the already-substituted body; now the body is substituted
+        // per-kwarg-value, so this positional path substitutes explicitly.)
+        const input = substituteRuntime(argsStr, vars).trim();
         if (input === "") {
           throw new OpError(
             `\`$ json_parse\` requires an input expression (target '${targetName}').`,
@@ -2288,6 +2299,60 @@ function parseToolArgs(argsStr: string): Record<string, unknown> {
     args[key] = coerceKwargValue(rawValue);
   }
   return args;
+}
+
+/**
+ * v0.39.x — substitution-safe kwarg parser for `$` dispatch (ticket 7ca043f9).
+ *
+ * Tokenizes kwarg BOUNDARIES from the RAW op body — where every value is still a
+ * `${VAR}` placeholder, so no embedded quote or space can confuse the tokenizer —
+ * then substitutes `${VAR}` INTO each parsed value and coerces per-value. This is
+ * the cure for the silent-truncation class: the old path substituted values into
+ * the source line and then tokenized, so a value carrying a `"` (or, unquoted, a
+ * space) truncated the kwarg with a success receipt.
+ *
+ * Per-value coercion is safe: `coerceKwargValue` strips a single value's outer
+ * quote pair and interprets escapes WITHOUT re-tokenizing, so embedded quotes
+ * survive; a bare `${VAR}` re-coerces so `count=${N}` stays an int. JSON-shaped
+ * literals are parsed from the raw form (placeholders are valid JSON strings)
+ * then deep-substituted, so an embedded quote in a substituted array/object
+ * element never re-enters JSON tokenization.
+ */
+function parseToolArgsSubstituted(rawArgsStr: string, vars: Map<string, unknown>): Record<string, unknown> {
+  const tokens = tokenizeKeywordArgs(rawArgsStr);
+  const args: Record<string, unknown> = {};
+  for (const tok of tokens) {
+    const eq = tok.indexOf("=");
+    if (eq === -1) continue;
+    const key = tok.slice(0, eq).trim();
+    const rawValue = tok.slice(eq + 1);
+    const shape = rawValue.replace(/^\s+/, "");
+    // JSON-shaped literal: parse the RAW form, then deep-substitute. Falls
+    // through to scalar handling when the raw form isn't valid JSON (e.g.
+    // `[${A}, ${B}]`, which is valid only after substitution).
+    if (shape.startsWith("[") || shape.startsWith("{")) {
+      try {
+        args[key] = deepSubstituteValue(JSON.parse(shape) as unknown, vars);
+        continue;
+      } catch {
+        /* not raw-valid JSON — handle as a scalar below */
+      }
+    }
+    args[key] = coerceKwargValue(substituteRuntime(rawValue, vars));
+  }
+  return args;
+}
+
+/** Recursively substitute `${VAR}` into every string within a parsed JSON value. */
+function deepSubstituteValue(v: unknown, vars: Map<string, unknown>): unknown {
+  if (typeof v === "string") return substituteRuntime(v, vars);
+  if (Array.isArray(v)) return v.map((e) => deepSubstituteValue(e, vars));
+  if (v !== null && typeof v === "object") {
+    const out: Record<string, unknown> = {};
+    for (const [k, val] of Object.entries(v as Record<string, unknown>)) out[k] = deepSubstituteValue(val, vars);
+    return out;
+  }
+  return v;
 }
 
 /**

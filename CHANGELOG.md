@@ -2,6 +2,20 @@
 
 Each release carries an **Upgrade impact:** line (first in its section) so a bump's requirements are visible at a glance. Tags (closed set): **BREAKING** (a manual change is needed to keep working) · **RE-APPROVE** (secured-mode signature invalidation — skills must be re-approved before they run) · **CONFIG** (`connectors.json` / config edit needed) · **none (additive)** (no action; backward-compatible). Standard from 0.20.0 forward; the pre-0.20 transitions that need action are flagged inline below (0.14.0, 0.18.8, 0.19.0). Full walkthrough: [UPGRADING.md](UPGRADING.md).
 
+## 0.39.2 — 2026-08-07 — fix: `$` dispatch kwargs no longer truncate on an embedded quote; approval-gate descriptions corrected
+
+**Upgrade impact:** none (additive fix + doc corrections) — just upgrade.
+
+**A `$` dispatch kwarg whose value contains a double-quote (or, unquoted, whitespace) is no longer silently truncated.** Previously the runtime substituted `${VAR}` into the op's source line and *then* tokenized the kwargs, so a value carrying a `"` broke the tokenizer — the argument was cut at the first embedded quote (with a spurious leading `"`) and the dispatch still reported success. A truncated payload could reach an external system with a clean receipt (a customer email went out truncated before it was caught). Now `$` kwargs are tokenized **before** substitution and `${VAR}` is bound into each parsed value, so nothing a value contains can reach the tokenizer — the corruption is structurally impossible.
+
+- Type coercion is preserved: `limit=${N}` → number, `flag=${B}` → boolean, quoted `count="5"` → string.
+- Array / object kwargs deep-substitute: `to=["${VAR}"]` stays an **array** with the value intact, even when the value contains a quote (previously it degraded to a string).
+- The unquoted-whitespace truncation class is fixed as a side effect (`note=${VAR}` binds the whole value).
+- `$ json_parse`'s positional input still substitutes correctly.
+- The `unquoted-substitution-in-kwarg-value` lint now applies only to `shell(...)` args (where the command *is* whitespace-tokenized before the spawn); its `$`-dispatch branch is removed as a now-false-positive.
+
+**`execute_skill` / `skill_write` tool descriptions corrected (no behavior change).** `execute_skill`'s description said Draft/tampered bodies are rejected without noting that this holds only for the `{name}` form — a `{source}` (ad-hoc inline) body runs regardless of its `# Status:`, with effects gated by secured mode alone. `skill_write`'s description now states that a forced downgrade to Draft records approval state but is not by itself a block on every execution path, and that enforcement reads the `# Status:` header **in the stored body**, not the returned metadata — so a custom SkillStore that downgrades metadata without rewriting the body header leaves the body gate-passing (bundled stores rewrite the body to keep the two in sync).
+
 ## 0.39.1 — 2026-08-07 — fix: HTTP MCP connectors recover from a transport failure during handshake
 
 **Upgrade impact:** none (additive fix) — just upgrade.

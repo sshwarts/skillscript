@@ -87,7 +87,7 @@ default: run
     expect(um).toHaveLength(1);
   });
 
-  it("still fires on $ op kwargs (original v0.5.0 coverage intact)", async () => {
+  it("v0.39.2 — no longer fires on $ op kwargs ($ dispatch is now parse-then-substitute; the truncation it warned about is fixed)", async () => {
     const src = `# Skill: t
 # Status: Approved
 # Vars: Q=multi word
@@ -97,7 +97,6 @@ default: run
 `;
     const r = await lint(src);
     const um = r.findings.filter((f) => f.rule === "unquoted-substitution-in-kwarg-value");
-    expect(um.length).toBeGreaterThanOrEqual(1);
-    expect(um[0]!.extras).toMatchObject({ op: "$" });
+    expect(um).toEqual([]);
   });
 });
