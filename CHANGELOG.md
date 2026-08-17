@@ -2,6 +2,18 @@
 
 Each release carries an **Upgrade impact:** line (first in its section) so a bump's requirements are visible at a glance. Tags (closed set): **BREAKING** (a manual change is needed to keep working) · **RE-APPROVE** (secured-mode signature invalidation — skills must be re-approved before they run) · **CONFIG** (`connectors.json` / config edit needed) · **none (additive)** (no action; backward-compatible). Standard from 0.20.0 forward; the pre-0.20 transitions that need action are flagged inline below (0.14.0, 0.18.8, 0.19.0). Full walkthrough: [UPGRADING.md](UPGRADING.md).
 
+## 0.39.3 — 2026-08-17 — fix: a SkillStore failure no longer reads as a negative answer (fail-closed delete guard + honest "store unreachable" errors)
+
+**Upgrade impact:** none (additive fix) — just upgrade. One behavior change is in the safe direction: `skillfile delete` (and the dashboard delete) now **refuse** rather than proceed when the store cannot be scanned for dependents; `--force` is the documented override.
+
+**A store failure ("could not tell") is no longer flattened into a negative answer ("not found" / "no dependents" / "no valid signature").** The discriminator is the error *type*: a `SkillNotFoundError` is a genuine miss; anything else means the question was never answered. Same failure class as the 0.39.1 HTTP-MCP latch — one return value doing double duty for "no" and "couldn't ask."
+
+- **Delete-dependency guard fails closed.** `findStaticDependents` previously returned `[]` when the store `query()`/`load()` failed — so during a store outage the delete surfaces concluded "nothing depends on this" and allowed the delete. It now throws on a scan it could not complete, and both delete surfaces refuse (the dashboard returns `503` so the SPA aborts instead of showing a dependency-clean confirm). A skill that vanished mid-scan (`SkillNotFoundError`) is still skipped — it can't be a dependent.
+- **…and the guard now detects the reference form it was silently missing.** The old text-regex matched only the `execute_skill(name=…)` / `inline(skill=…)` function-call forms and missed `$ execute_skill name="…"` — the common bare-dispatch form — so a skill referenced that way was invisible to the guard. Detection now parses each body and matches exactly what the linter and runtime treat as a composition reference (both forms).
+- **Composition surfaces the real cause.** `$ execute_skill` against an unreachable store threw `MissingSkillReferenceError` ("…has no skill by that name… typo?"), sending the author to chase a spelling bug during an outage. A genuine not-found still throws that; any other failure now throws a new `SkillStoreUnavailableError` (an `OpError`, so it still flows through `else:` / `(fallback:)`) carrying the underlying transport message.
+- **Lint tells the truth too.** `unknown-skill-reference` and `unknown-template-reference` no longer report every reference as "missing" when the store is unreachable — they emit a single "store unreachable — references not checked" finding with its own remediation, instead of blaming the author's spelling for an outage.
+- **`skill_status` promote keeps refusing, but says why.** Promoting to Approved in secured mode still refuses on any store failure (a status change must never grant approval) — but a transport failure now reports the store as unreachable instead of accusing the body of carrying no valid signature. Not-found and unsigned each get their own truthful refusal.
+
 ## 0.39.2 — 2026-08-07 — fix: `$` dispatch kwargs no longer truncate on an embedded quote; approval-gate descriptions corrected
 
 **Upgrade impact:** none (additive fix + doc corrections) — just upgrade.

@@ -11,7 +11,7 @@ import { compile } from "./compile.js";
 import { parse as parseSkill } from "./parser.js";
 import { extractEffectfulFootprint, extractConnectorToolRefs, buildSkillFlow, type SkillFlow } from "./skill-surface.js";
 import { listKnownConnectorClasses } from "./connectors/config.js";
-import { LintFailureError, MissingSkillReferenceError, OpError } from "./errors.js";
+import { LintFailureError, MissingSkillReferenceError, OpError, SkillNotFoundError, messageOf } from "./errors.js";
 import {
   executeSkillByName,
   executeSkillFromSource,
@@ -598,8 +598,30 @@ export class McpServer {
         // flip Draft→Approved with no signature — a forgeable trust-state lie.
         // Enforce HERE, at the ingress, regardless of substrate.
         if (newState === "Approved" && isSecuredMode()) {
-          const loaded = await this.deps.skillStore.load(name).catch(() => null);
-          if (loaded === null || !evaluateApprovalGate(loaded.source).ok) {
+          // Refuse in EVERY branch — a status change must never grant approval
+          // (red-team 33bf53d3). But tell the truth about WHY (2d2a7fd4): a
+          // store failure is not "no valid signature". Catch-by-type instead of
+          // flattening load() failures to null and blaming a missing signature.
+          let loaded;
+          try {
+            loaded = await this.deps.skillStore.load(name);
+          } catch (err) {
+            if (err instanceof SkillNotFoundError) {
+              throw new OpError(
+                `cannot promote '${name}' to Approved — no skill by that name is stored.`,
+                "skill_status",
+                `Store the skill first, then approve it via the dashboard or \`skillfile approve\`.`,
+                name,
+              );
+            }
+            throw new OpError(
+              `cannot promote '${name}' to Approved in secured mode — the SkillStore was unreachable, so the body's signature could not be verified (${messageOf(err)}). Refusing: a status change must never grant approval on an unverified body.`,
+              "skill_status",
+              `This is a store-availability failure, not a signing problem — check that the SkillStore substrate is reachable, then retry.`,
+              name,
+            );
+          }
+          if (!evaluateApprovalGate(loaded.source).ok) {
             throw new OpError(
               `cannot promote '${name}' to Approved in secured mode — the skill carries no valid signature. Approve it via the dashboard or \`skillfile approve\` (which signs the body); a status change alone cannot grant approval.`,
               "skill_status",

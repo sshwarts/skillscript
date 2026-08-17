@@ -862,14 +862,28 @@ async function cmdDelete(args: string[]): Promise<number> {
     process.stderr.write(`skillfile delete: skill '${name}' not found in ${SKILLS_DIR}.\n`);
     return 66;
   }
-  const dependents = await findStaticDependents(store, name);
-  if (dependents.length > 0 && !force) {
-    process.stderr.write(
-      `✗ '${name}' is referenced by: ${dependents.join(", ")}.\n` +
-      `  They will fail to dispatch it once it's gone. This deletion is permanent — there is no restore.\n` +
-      `  Re-run with --force to delete anyway.\n`,
-    );
-    return 1;
+  if (!force) {
+    // Fail closed: a scan we could not complete must never read as "no
+    // dependents" (2d2a7fd4). Refuse the delete and point at --force.
+    let dependents: string[];
+    try {
+      dependents = await findStaticDependents(store, name);
+    } catch (err) {
+      process.stderr.write(
+        `✗ cannot verify what depends on '${name}': ${(err as Error).message}\n` +
+        `  The store could not be fully scanned, so a skill that composes against '${name}' may exist.\n` +
+        `  Refusing to delete. Re-run with --force to delete without the dependency check.\n`,
+      );
+      return 1;
+    }
+    if (dependents.length > 0) {
+      process.stderr.write(
+        `✗ '${name}' is referenced by: ${dependents.join(", ")}.\n` +
+        `  They will fail to dispatch it once it's gone. This deletion is permanent — there is no restore.\n` +
+        `  Re-run with --force to delete anyway.\n`,
+      );
+      return 1;
+    }
   }
   await store.delete(name);
   process.stdout.write(

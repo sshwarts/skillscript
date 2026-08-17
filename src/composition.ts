@@ -22,7 +22,7 @@ import { compile } from "./compile.js";
 import { execute, type ExecuteContext, type ExecuteResult } from "./runtime.js";
 import type { Registry } from "./connectors/registry.js";
 import type { SkillStore } from "./connectors/types.js";
-import { MissingSkillReferenceError, ApprovalRejectedError } from "./errors.js";
+import { MissingSkillReferenceError, ApprovalRejectedError, SkillNotFoundError, SkillStoreUnavailableError, messageOf } from "./errors.js";
 import { evaluateApprovalGate, isSecuredMode } from "./approval.js";
 
 const DEFAULT_MAX_RECURSION_DEPTH = 10;
@@ -116,11 +116,16 @@ export async function executeSkillByName(
   let loaded;
   try {
     loaded = await skillStore.load(skillName);
-  } catch {
+  } catch (err) {
     // v0.3.1: structured runtime error that flows through `else:` recovery.
-    // The legacy SkillNotFoundForCompositionError is kept exported for
-    // backwards-compat but the new code path throws the OpError shape.
-    throw new MissingSkillReferenceError(skillName, "$", "$ execute_skill");
+    // Catch-by-type (2d2a7fd4): a genuine not-found is the "typo / forward-ref"
+    // case the author can fix; any other failure (store unreachable, torn read)
+    // means we could not determine whether the skill exists, so it must NOT be
+    // flattened into "not found". Preserve the real cause.
+    if (err instanceof SkillNotFoundError) {
+      throw new MissingSkillReferenceError(skillName, "$", "$ execute_skill");
+    }
+    throw new SkillStoreUnavailableError(skillName, "$", "$ execute_skill", messageOf(err));
   }
 
   // v0.9.0 — universal execution gate. Reject Draft/Disabled, naked

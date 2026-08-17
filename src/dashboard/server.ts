@@ -537,17 +537,31 @@ export class DashboardServer {
       json(404, { deleted: false, error: `skill '${name}' not found` });
       return;
     }
-    const dependents = await findStaticDependents(this.skillStore!, name);
     if (!force) {
       // Preflight — scan only, never delete. The SPA uses `dependents` to build
-      // a single confirm before re-POSTing with force.
+      // a single confirm before re-POSTing with force. Fail closed (2d2a7fd4):
+      // a scan we could not complete must not return 200 with empty dependents —
+      // that reads as "safe to delete" during a store outage. Return non-200 so
+      // the SPA aborts the delete rather than presenting it as dependency-clean.
+      let dependents: string[];
+      try {
+        dependents = await findStaticDependents(this.skillStore!, name);
+      } catch (err) {
+        json(503, {
+          deleted: false,
+          error:
+            `cannot verify what depends on '${name}' — the store could not be fully scanned ` +
+            `(${(err as Error).message}). Deletion refused to avoid orphaning a dependent skill.`,
+        });
+        return;
+      }
       json(200, { deleted: false, preflight: true, dependents });
       return;
     }
     try {
       await this.skillStore!.delete(name);
       this.scheduler?.dropAllTriggersForSkill(name);
-      json(200, { deleted: true, name, dependents });
+      json(200, { deleted: true, name });
     } catch (err) {
       json(500, { deleted: false, error: (err as Error).message });
     }

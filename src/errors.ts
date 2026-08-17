@@ -468,6 +468,38 @@ export class MissingSkillReferenceError extends OpError {
   }
 }
 
+/**
+ * The SkillStore could not be reached while resolving a composed reference.
+ *
+ * Distinct from `MissingSkillReferenceError` on purpose: a genuine not-found
+ * (`SkillNotFoundError` from `store.load()`) means the skill is absent and the
+ * author should fix the name or add a fallback. A store failure means we could
+ * not tell WHETHER the skill exists — flattening the two into "not found, was
+ * it a typo?" sends the author chasing a spelling bug during an outage. This
+ * class preserves the underlying failure message so the real cause is visible.
+ * (2d2a7fd4 — "cannot distinguish nothing-to-report from could-not-tell".)
+ */
+export class SkillStoreUnavailableError extends OpError {
+  constructor(
+    public readonly missingSkillName: string,
+    opKind: string,
+    public readonly viaOp: "inline" | "$ execute_skill" | "# Templates",
+    innerCause: string,
+    target?: string,
+  ) {
+    const message =
+      `Skill '${target ?? "?"}' references skill '${missingSkillName}' via \`${viaOp}\`, ` +
+      `but the SkillStore could not be reached to resolve it: ${innerCause}`;
+    const remediation =
+      `This is a store-availability failure, not a missing skill — do NOT assume a typo. ` +
+      `Check that the skill store is reachable and retry. If the reference is genuinely ` +
+      `optional, contain the failure with a \`(fallback: ...)\` trailer or a target-level ` +
+      `\`else:\` block.`;
+    super(message, opKind, remediation, target, innerCause);
+    this.name = "SkillStoreUnavailableError";
+  }
+}
+
 /** A `$(VAR)` reference couldn't be resolved at runtime. */
 export class UnresolvedVariableError extends OpError {
   constructor(

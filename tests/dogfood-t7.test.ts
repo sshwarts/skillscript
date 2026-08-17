@@ -24,8 +24,8 @@ const REPO_ROOT = join(__dirname, "..");
 const PACKAGE_JSON = JSON.parse(readFileSync(join(REPO_ROOT, "package.json"), "utf8")) as Record<string, unknown>;
 
 describe("T7 — package.json polish", () => {
-  it("1. version is 0.39.2 (fix: $ dispatch kwargs are parsed BEFORE substitution, so an embedded quote / unquoted whitespace in a value no longer silently truncates the argument; + execute_skill/skill_write approval-gate descriptions corrected)", () => {
-    expect(PACKAGE_JSON["version"]).toBe("0.39.2");
+  it("1. version is 0.39.3 (fix: a SkillStore failure is no longer flattened into a negative answer — the delete-dependency guard fails closed AND detects the bare-dispatch reference form it used to miss; composition / lint / promote distinguish 'unreachable' from 'not found')", () => {
+    expect(PACKAGE_JSON["version"]).toBe("0.39.3");
   });
 
   it("2. main + types + bin + engines.node ≥ 22.5 declared", () => {

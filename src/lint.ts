@@ -4,6 +4,18 @@ import { classifyMutation, authorizationGranted, type MutationAuthState } from "
 import { KNOWN_FILTERS } from "./filters.js";
 import type { StaticCapabilities, SkillStore, McpToolDescriptor } from "./connectors/types.js";
 import type { Registry } from "./connectors/registry.js";
+import { SkillNotFoundError, messageOf } from "./errors.js";
+
+// Shared remediation for a "could not check references — store unreachable"
+// finding (2d2a7fd4). Set EXPLICITLY on the finding: the lint engine fills an
+// unset `remediation` from the rule's own (`f.remediation ?? rule.remediation`),
+// which for the reference rules is the "fix the spelling" text — the exact
+// wrong advice during an outage.
+const STORE_UNREACHABLE_REMEDIATION =
+  "This is a store-availability problem, not a missing skill. Check that the " +
+  "SkillStore substrate is reachable, then re-run lint. If `skill_list` fails the " +
+  "same way, that confirms the store — not the skill — is the problem; don't go " +
+  "looking for a deleted or renamed skill until the store answers.";
 
 /**
  * Lint engine. Ships a growing rule set across three severity tiers:
@@ -699,7 +711,23 @@ const UNKNOWN_SKILL_REFERENCE: LintRule = {
     for (const [name, { vias, firstTarget }] of byName) {
       try {
         await ctx.skillStore.metadata(name);
-      } catch {
+      } catch (err) {
+        // Catch-by-type (2d2a7fd4): only a genuine not-found is a spelling /
+        // forward-ref warning. A store failure means we could not check ANY
+        // reference — report THAT once, instead of a pile of "missing skill"
+        // warnings that blame the author for an outage. Discard the not-found
+        // warnings gathered so far: a list of "missing" skills next to "store
+        // unreachable" still reads as missing.
+        if (!(err instanceof SkillNotFoundError)) {
+          return [{
+            rule: "unknown-skill-reference",
+            severity: "warning",
+            message: `Could not verify skill references — the SkillStore was unreachable (${messageOf(err)}). References in this skill were NOT checked.`,
+            block: firstTarget,
+            remediation: STORE_UNREACHABLE_REMEDIATION,
+            extras: { store_unreachable: true },
+          }];
+        }
         const viaList = Array.from(vias).map((v) => `\`${v}\``).join(" / ");
         findings.push({
           rule: "unknown-skill-reference",
@@ -1506,7 +1534,18 @@ const UNKNOWN_TEMPLATE_REFERENCE: LintRule = {
     for (const name of ctx.parsed.templates) {
       try {
         await ctx.skillStore.metadata(name);
-      } catch {
+      } catch (err) {
+        // Catch-by-type (2d2a7fd4): a store failure could not check the
+        // template reference — report the outage once, not "missing template".
+        if (!(err instanceof SkillNotFoundError)) {
+          return [{
+            rule: "unknown-template-reference",
+            severity: "warning",
+            message: `Could not verify template references — the SkillStore was unreachable (${messageOf(err)}). \`# Templates:\` references were NOT checked.`,
+            remediation: STORE_UNREACHABLE_REMEDIATION,
+            extras: { store_unreachable: true },
+          }];
+        }
         findings.push({
           rule: "unknown-template-reference",
           severity: "warning",
