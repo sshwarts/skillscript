@@ -2507,12 +2507,34 @@ function unwrapToolResult(result: unknown): unknown {
 
 /**
  * Coerce a string literal into its natural JS type when the shape is
- * unambiguous. v1: bracket-list `[a, b, c]` → array. Other shapes pass through.
+ * unambiguous. Structured shapes (`[...]` / `{...}`) parse as JSON first;
+ * a bracket shape that isn't valid JSON falls back to the bare literal-list
+ * split (`[a, b, c]`, whose unquoted elements are not JSON). Scalars pass
+ * through as strings.
+ *
+ * v0.39.4 (issue #3): JSON is attempted first so a real array or object
+ * survives `$set X = ${REF}`. Previously any bracket-shaped string took the
+ * naive split, which severed each element at every comma *inside* it —
+ * `[{"id":1,"name":"a"}]` became the fragments `{"id":1` and `"name":"a"}`.
+ * Mirrors the tolerance `resolveListExpr` already applies to a string that
+ * parses to an array, and the object shape `lint.ts` already assumes exists.
  */
 function coerceLiteralValue(raw: string): unknown {
   const trimmed = raw.trim();
-  if (!trimmed.startsWith("[") || !trimmed.endsWith("]")) return raw;
+  const isArrayShaped = trimmed.startsWith("[") && trimmed.endsWith("]");
+  const isObjectShaped = trimmed.startsWith("{") && trimmed.endsWith("}");
+  if (!isArrayShaped && !isObjectShaped) return raw;
+  try {
+    return JSON.parse(trimmed);
+  } catch {
+    /* not valid JSON — a bare literal list, split below */
+  }
+  // Only arrays have a bare-literal form. A brace shape that failed to parse
+  // is a malformed object, not a list, and stays a string.
+  if (!isArrayShaped) return raw;
   const inner = trimmed.slice(1, -1).trim();
+  // Reachable despite the parse attempt: JS `trim()` strips whitespace JSON
+  // rejects, so `[<nbsp>]` throws above and lands here as an empty list.
   if (inner === "") return [];
   return inner.split(",").map((s) => {
     const t = s.trim();

@@ -2,6 +2,25 @@
 
 Each release carries an **Upgrade impact:** line (first in its section) so a bump's requirements are visible at a glance. Tags (closed set): **BREAKING** (a manual change is needed to keep working) · **RE-APPROVE** (secured-mode signature invalidation — skills must be re-approved before they run) · **CONFIG** (`connectors.json` / config edit needed) · **none (additive)** (no action; backward-compatible). Standard from 0.20.0 forward; the pre-0.20 transitions that need action are flagged inline below (0.14.0, 0.18.8, 0.19.0). Full walkthrough: [UPGRADING.md](UPGRADING.md).
 
+## 0.39.4 — 2026-08-30 — fix: `$set VAR = ${structured}` no longer shreds an array or object into string fragments
+
+**Upgrade impact:** BREAKING — but on one narrow surface: a **bare** `# Vars: N=[1, 2, 3]` declaration now holds the numbers `[1,2,3]` instead of the strings `["1","2","3"]`. Conditions are unaffected (both sides stringify before comparing, so `${I} == "1"` still matches); what changes is how the whole list *renders* when you interpolate `${N}`. If a skill emits or sends a bare numeric list verbatim and something downstream matches on the quoted form, quote the elements in the declaration (`["1", "2", "3"]`) to keep the old value. Everything else here is a fix in the safe direction.
+
+**Reported externally as [issue #3](https://github.com/sshwarts/skillscript/issues/3) by ADumaine, traced to the line.** `$set VAR = ${ref}` routed the substituted value through `coerceLiteralValue`, which existed to parse the bare literal-list form (`[a, b, c]`) and split *any* bracket-shaped string on **every** comma — including commas inside each element. A real JSON array came back as garbage:
+
+```
+[{"id":1,"name":"a"},{"id":2,"name":"b"}]   →   ['{"id":1', '"name":"a"}', '{"id":2', '"name":"b"}']
+```
+
+A later `foreach` then bound each fragment as a plain string, so `${I.field}` threw `UnresolvedVariableError`. Iterating the source expression directly (`foreach I in ${DATA}:`) always worked, because `resolveListExpr` already attempts `JSON.parse` on a string — the asymmetry between the two paths was the whole bug.
+
+- **JSON is attempted first.** A structured shape (`[...]` or `{...}`) parses as JSON; only a bracket shape that is *not* valid JSON falls back to the comma-split, which is exactly the bare-literal case it was written for (`[a, b, c]` is not JSON — the elements are unquoted).
+- **Objects round-trip too.** The function had no brace branch at all, so `$set COPY = ${OBJ}` left a stringified object and every dotted access on it failed. `lint.ts` already classified `{...}` as an object literal, so lint and the runtime had disagreed on this since v0.5.0.
+- **Scalars are untouched.** The JSON attempt is gated on the structured shapes, so `$set A = 123` stays the string `"123"` and `true` / `null` stay strings — no silent retyping of ordinary assignments.
+- Empty `[]` / `[ ]` still yield `[]`, and a malformed brace shape stays a string rather than falling into the splitter.
+
+**Not fixed here, and worth knowing if you hit the same outage:** the reporter's sweep ran 12+ days reporting "0 processed" with no errors because every branch sat behind an `if` referencing the corrupted variable — and **an unresolved reference inside a condition evaluates falsy instead of raising** (`if not ${X.absent}:` conversely *fires*). That silence is independent of this bug: it is triggered by anything that makes a condition's operand unresolvable, and it survives this fix. It is a language-semantics decision under separate review, not a defect being quietly left. Until it is settled, guard an optionally-present field explicitly with `|fallback:` — `if ${R.count|fallback:"err"} != "err":` — which works today.
+
 ## 0.39.3 — 2026-08-17 — fix: a SkillStore failure no longer reads as a negative answer (fail-closed delete guard + honest "store unreachable" errors)
 
 **Upgrade impact:** none (additive fix) — just upgrade. One behavior change is in the safe direction: `skillfile delete` (and the dashboard delete) now **refuse** rather than proceed when the store cannot be scanned for dependents; `--force` is the documented override.

@@ -103,7 +103,45 @@ Current shape:
 
 After migrating, verify: send your identity header on a `/rpc` `skill_write` and confirm the captured `author`. (`bootstrap()`-level opts can also go via `bootstrapFromEnv`'s `overrides`; `DashboardServer`-level ones are env-only.)
 
-## 7. Going forward
+## 7. Bare numeric list declarations became numbers (0.39.4)
+
+0.39.4 fixed `$set VAR = ${ref}` corrupting an array of objects into string fragments
+(GitHub issue #3). The fix parses a structured value as JSON before falling back to the
+bare literal-list split — which changes one adjacent case.
+
+**What changed.** A **bare** numeric list in a declaration now holds numbers:
+
+```
+# Vars: N=[1, 2, 3]
+
+${N}   before 0.39.4  →  ["1","2","3"]
+${N}   from   0.39.4  →  [1,2,3]
+```
+
+**What did NOT change.** Conditions stringify both operands before comparing, so
+`if ${I} == "1":` still matches inside a `foreach` over that list, and a single
+element still renders as `1`. Only interpolating the **whole list** differs. Lists
+whose elements are already quoted (`["a", "b"]`) and bare non-numeric lists
+(`[a, b, c]`) are unaffected — the latter is not valid JSON, so it still takes the
+original split path.
+
+**Do you need to act?** Only if a skill interpolates a bare numeric list verbatim into
+something that matches on the quoted form — a payload sent to an external system, an
+`==` against a whole rendered list, a written record another skill parses back. To keep
+the old value exactly, quote the elements at the declaration:
+
+```
+# Vars: N=["1", "2", "3"]
+```
+
+To find candidates, grep your corpus for a bare-numeric `# Vars:` list and check whether
+the bare `${NAME}` (not `${NAME.field}` or a loop variable) is interpolated anywhere:
+
+```
+grep -rnE '^# Vars:.*=\[ *-?[0-9]' <your-skills-dir>
+```
+
+## 8. Going forward
 
 Every CHANGELOG entry carries an **Upgrade impact:** line — `BREAKING` / `RE-APPROVE` /
 `CONFIG` / `none (additive)`. Scan it before you bump. Making a specific jump and not
