@@ -17,6 +17,7 @@ import {
   UnsafeShellDisabledError,
   ShellBinaryNotAllowedError,
   UnresolvedVariableError,
+  UnresolvedConditionRefError,
   TypeMismatchError,
   MissingSkillReferenceError,
   UnconfirmedMutationError,
@@ -1909,7 +1910,7 @@ async function execOpInner(
     }
     case "if": {
       for (const branch of op.ifBranches!) {
-        if (evalCondition(branch.cond, vars)) {
+        if (evalCondition(branch.cond, vars, targetName)) {
           return execOps(branch.body, vars, emissions, fallbacks, ctx, targetName, skillTimeoutSec, absoluteTimeoutMs, traceBuilder, authState);
         }
       }
@@ -2864,42 +2865,100 @@ function stripOuterParens(cond: string): string {
  * That preserves the "validate-then-access" pattern (`if $(X) == "ok" and
  * $(MAYBE_UNRESOLVED)`) where the RHS would error if eagerly evaluated.
  */
-export function evalCondition(cond: string, vars: Map<string, unknown>): boolean {
+export function evalCondition(
+  cond: string,
+  vars: Map<string, unknown>,
+  target?: string,
+  negated = false,
+): boolean {
   const stripped = stripOuterParens(cond);
   // OR (lowest precedence) — split first.
   const orIdx = findOuterToken(stripped, "or");
   if (orIdx >= 0) {
     const lhs = stripped.slice(0, orIdx);
     const rhs = stripped.slice(orIdx + 4); // " or " is 4 chars (leading space already excluded by orIdx)
-    return evalCondition(lhs, vars) || evalCondition(rhs, vars);
+    return evalCondition(lhs, vars, target, negated) || evalCondition(rhs, vars, target, negated);
   }
   // AND
   const andIdx = findOuterToken(stripped, "and");
   if (andIdx >= 0) {
     const lhs = stripped.slice(0, andIdx);
     const rhs = stripped.slice(andIdx + 5); // " and " is 5 chars
-    return evalCondition(lhs, vars) && evalCondition(rhs, vars);
+    return evalCondition(lhs, vars, target, negated) && evalCondition(rhs, vars, target, negated);
   }
-  // NOT prefix (unary, binds higher than and/or, lower than comparison)
+  // NOT prefix (unary, binds higher than and/or, lower than comparison).
+  // v0.40.0: flip `negated` on the way down so an unresolved operand can
+  // report which way absence would have fallen. `not $(X.absent)` FIRES its
+  // branch, so the polarity is not cosmetic — it is the difference between
+  // reporting suppressed work and reporting invented work.
   const trimmedLead = stripped.trimStart();
   if (trimmedLead.startsWith("not ")) {
-    return !evalCondition(trimmedLead.slice(4), vars);
+    return !evalCondition(trimmedLead.slice(4), vars, target, !negated);
   }
-  return evalSimpleCondition(stripped, vars);
+  return evalSimpleCondition(stripped, vars, target, negated);
 }
 
-function evalSimpleCondition(cond: string, vars: Map<string, unknown>): boolean {
+/**
+ * v0.40.0 — does this filter chain carry a `fallback`, i.e. did the author
+ * explicitly say "absent is a normal state here"? That declaration is the
+ * only thing that licenses an unresolved operand in a condition.
+ */
+function chainConsumesUndefined(chain: string | undefined): boolean {
+  if (chain === undefined || chain === "") return false;
+  return parseFilterChain(chain).some((spec) => spec.name === "fallback");
+}
+
+/**
+ * v0.40.0 (ruling `c0b8e814`) — an unresolved condition operand raises unless
+ * the author guarded it with `|fallback:`. Previously it collapsed to `""` and
+ * compared false, so "the field is missing" and "the field says no" were the
+ * same answer — the defect behind a reporter's twelve-day silent outage
+ * (GitHub issue #3), where every branch sat behind such a condition.
+ *
+ * `firesOnAbsence` is the caller's answer to "would absence have taken this
+ * branch?" — true for `!=` and for anything under an odd number of `not`s.
+ */
+function requireResolvedOperand(
+  ref: string,
+  val: unknown,
+  chain: string | undefined,
+  context: "truthy" | "comparison",
+  firesOnAbsence: boolean,
+  target?: string,
+): void {
+  if (val !== undefined) return;
+  if (chainConsumesUndefined(chain)) return;
+  throw new UnresolvedConditionRefError(ref, context, firesOnAbsence, target);
+}
+
+function evalSimpleCondition(
+  cond: string,
+  vars: Map<string, unknown>,
+  target?: string,
+  negated = false,
+): boolean {
   const t = TRUTHY.exec(cond);
   if (t) {
-    const val = resolveRef(t[1]!, vars);
+    const ref = t[1]!;
+    const val = resolveRef(ref, vars);
     const chain = t[2];
-    const filtered = chain && val !== undefined ? applyFilterChain(stringifyValue(val), chain, vars) : val;
-    return isTruthy(filtered);
+    // Bare truthy: absence is falsy, so a plain `if $(X)` SKIPS and a
+    // `not $(X)` FIRES.
+    requireResolvedOperand(ref, val, chain, "truthy", negated, target);
+    if (chain) {
+      // v0.40.0: thread undefined INTO the chain (was `val !== undefined ?
+      // applyFilterChain(...) : val`, which skipped the chain in exactly the
+      // case `fallback` exists to serve — making the guard a silent no-op in
+      // truthy position while it worked in comparisons).
+      return isTruthy(applyFilterChainCondition(val, chain, vars));
+    }
+    return isTruthy(val);
   }
   const e = EQ.exec(cond);
   if (e) {
     const [, ref, chain, op, lit] = e;
     const val = resolveRef(ref!, vars);
+    requireResolvedOperand(ref!, val, chain, "comparison", negated !== (op === "!="), target);
     // v0.5.0 item 4: condition-aware chain threading so `|default:"X"`
     // consumes undefined refs in conditional context too.
     const final = applyFilterChainCondition(val, chain, vars);
@@ -2910,6 +2969,12 @@ function evalSimpleCondition(cond: string, vars: Map<string, unknown>): boolean 
     const [, lhsRef, lhsChain, op, rhsRef, rhsChain] = eRef;
     const lhsVal = resolveRef(lhsRef!, vars);
     const rhsVal = resolveRef(rhsRef!, vars);
+    // Asked once per REFERENCE, not once per condition: a compound predicate
+    // has as many failure sites as it has operands, and checking only the
+    // first makes the whole line look handled (thread `c0b8e814`).
+    const fires = negated !== (op === "!=");
+    requireResolvedOperand(lhsRef!, lhsVal, lhsChain, "comparison", fires, target);
+    requireResolvedOperand(rhsRef!, rhsVal, rhsChain, "comparison", fires, target);
     const lhsFinal = applyFilterChainCondition(lhsVal, lhsChain, vars);
     const rhsFinal = applyFilterChainCondition(rhsVal, rhsChain, vars);
     return op === "==" ? lhsFinal === rhsFinal : lhsFinal !== rhsFinal;
@@ -2918,6 +2983,7 @@ function evalSimpleCondition(cond: string, vars: Map<string, unknown>): boolean 
   if (cmp) {
     const [, ref, chain, op, lit] = cmp;
     const val = resolveRef(ref!, vars);
+    requireResolvedOperand(ref!, val, chain, "comparison", negated, target);
     const final = applyFilterChainCondition(val, chain, vars);
     return compareNumeric(final, op as CmpOp, lit!, `$(${ref}${chain ? chain : ""})`);
   }
@@ -2926,6 +2992,8 @@ function evalSimpleCondition(cond: string, vars: Map<string, unknown>): boolean 
     const [, lhsRef, lhsChain, op, rhsRef, rhsChain] = cmpRef;
     const lhsVal = resolveRef(lhsRef!, vars);
     const rhsVal = resolveRef(rhsRef!, vars);
+    requireResolvedOperand(lhsRef!, lhsVal, lhsChain, "comparison", negated, target);
+    requireResolvedOperand(rhsRef!, rhsVal, rhsChain, "comparison", negated, target);
     const lhsFinal = applyFilterChainCondition(lhsVal, lhsChain, vars);
     const rhsFinal = applyFilterChainCondition(rhsVal, rhsChain, vars);
     const refDesc = `$(${lhsRef}) ${op} $(${rhsRef})`;
@@ -2971,7 +3039,12 @@ function evalSimpleCondition(cond: string, vars: Map<string, unknown>): boolean 
       throw new Error(`Runtime error in \`in\` condition: RHS \`$(${rhsRef})\` must be an array (got ${got})`);
     }
     const lhsVal = resolveRef(lhsRef!, vars);
-    if (lhsVal === undefined) return false;
+    // v0.40.0: was `if (lhsVal === undefined) return false` — the same
+    // could-not-tell-reads-as-no collapse this release removes everywhere
+    // else. Left silent, our own release note ("an unresolved reference in a
+    // condition raises") would be false for `in`, which is the
+    // description-vs-behaviour mismatch class. The RHS already threw below.
+    requireResolvedOperand(lhsRef!, lhsVal, lhsChain, "comparison", negated !== (notKey !== undefined), target);
     const lhsStr = applyFilterChain(stringifyValue(lhsVal), lhsChain, vars);
     const found = rhsVal.some((item) => stringifyValue(item) === lhsStr);
     return notKey !== undefined ? !found : found;

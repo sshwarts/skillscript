@@ -271,7 +271,16 @@ const CORE_PATHS = [
 // onAbort + per-op reserve, the uncertain-effect log (safe-default record on
 // external dispatch), AbortSignal wiring, operator ceiling, and the
 // unbounded-no-deadline lint. Shipped at 12636 LOC (64 headroom).
-const NARROW_MAX_LOC = 12700;
+// v0.39.4: nudged 12700 → 12800 for coerceLiteralValue JSON-parse-first
+// (GitHub issue #3). Landed at exactly 12700, i.e. on the boundary.
+// v0.40.0: nudged 12800 → 12900 for the condition-semantics change (ruling
+// `c0b8e814`) — `|fallback:` firing in bare-truthy context, the throw on an
+// unresolved condition operand across EQ/CMP/TRUTHY/`not`/`in`, the polarity
+// threading that lets the error say whether absence would have FIRED or
+// SKIPPED the branch, and the unguarded-dotted-ref-in-condition lint. Most of
+// the growth is rationale comments on strings that were ruled on and must not
+// be casually reworded. Signal-not-budget.
+const NARROW_MAX_LOC = 12900;
 const NARROW_MAX_FILES = 23;
 const BROAD_INFO_LOC = 9500;
 const BROAD_INFO_FILES = 28;

@@ -141,7 +141,69 @@ the bare `${NAME}` (not `${NAME.field}` or a loop variable) is interpolated anyw
 grep -rnE '^# Vars:.*=\[ *-?[0-9]' <your-skills-dir>
 ```
 
-## 8. Going forward
+## 8. Unresolved references in `if` conditions now raise (0.40.0)
+
+Before 0.40.0, a condition operand that could not be resolved evaluated as **false**.
+So `if ${R.count} == "5":` on a response with no `count` field took the else path —
+and reported nothing. "The field is missing" and "the field says no" were the same
+answer. From 0.40.0 the unresolvable case raises `UnresolvedConditionRefError` and
+aborts the target.
+
+**Note the direction, because it is not only about silence.** Absence made some
+conditions *fire*:
+
+```
+if not ${R.result.asleep}:      # absent → not false → TRUE  → branch RAN
+if ${R.count} != "0":           # absent → "" != "0" → TRUE  → branch RAN
+if ${R.count} == "0":           # absent → "" == "0" → false → branch skipped
+```
+
+The first two performed work on a value nothing could read. That is why this raises
+rather than warns.
+
+### Will this affect me?
+
+Only if a condition operand can actually be absent at runtime. **A skill whose fields
+always resolve sees no change at all.** There is no compile-time signal for this —
+lint cannot read a connector's response contract — so use the new warning to list
+candidates:
+
+```
+skillfile lint <skill>          # look for: unguarded-dotted-ref-in-condition
+```
+
+### At most sites, do nothing
+
+If the field is always present in a well-formed response, **the raise is what you
+want** and the warning is expected. Absence there means something upstream broke —
+a renamed field, a changed API shape, a typo — and you want to hear about it.
+
+Only where absence is a **normal, expected state** should you say so explicitly:
+
+```
+truthy       if ${R.result.asleep|fallback:"true"}:
+comparison   if ${R.count|fallback:"none"} != "none":
+```
+
+**Do not add `|fallback:` just to clear the warning.** It suppresses the raise, which
+puts back exactly the silence this release removes. Adding it everywhere converts a
+loud, locatable failure into the twelve-day variety.
+
+### One related fix in the same release
+
+`|fallback:` previously worked in comparisons but was **silently ignored in bare-truthy
+position** — `if ${X.maybe|fallback:"true"}:` behaved as if the filter were not there.
+It now fires in all three contexts. If you wrote a truthy guard before 0.40.0 believing
+it worked, it did not; it does now.
+
+### There is no in-language catch
+
+A raising condition aborts the target. `else:` cannot catch it — the condition itself
+raised, so no branch is chosen — `(fallback: …)` is an op trailer rather than a
+condition guard, and `# OnError:` was removed in 0.39.0. Handle it by fixing the
+upstream cause or by declaring the absence expected, not by catching.
+
+## 9. Going forward
 
 Every CHANGELOG entry carries an **Upgrade impact:** line — `BREAKING` / `RE-APPROVE` /
 `CONFIG` / `none (additive)`. Scan it before you bump. Making a specific jump and not

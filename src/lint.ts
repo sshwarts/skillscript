@@ -3258,6 +3258,85 @@ function isNumericBooleanOrNullLiteral(raw: string): boolean {
   return false;
 }
 
+/**
+ * v0.40.0 (ruling `c0b8e814`) — a dotted reference in an `if` condition with
+ * no `|fallback:` guard.
+ *
+ * This is a GENERATOR fix, not a migration aid. 8 of the 10 dotted conditions
+ * in the corpus were unguarded and every one was written by an agent, so the
+ * shape is default output; the rule's durable job is preventing new instances.
+ *
+ * READ BEFORE EDITING THE REMEDIATION. At roughly 6 of 7 sites the correct
+ * answer is to CHANGE NOTHING and let the raise stand — absence there means a
+ * real upstream fault. So the text must force a decision and must never read
+ * as "add a fallback to fix this": a rule whose remediation reintroduces the
+ * silence this release removes is worse than no rule. The wording below was
+ * ruled on and is deliberate — leave-it-raising first, guard second, and an
+ * explicit "do not add one to quiet this warning". Tier-2 on purpose: the
+ * rule detects a SHAPE and cannot read a connector's response contract, so it
+ * cannot tell a correct site from an incorrect one — and a check that cannot
+ * distinguish right from wrong must not be able to block a write.
+ */
+const UNGUARDED_DOTTED_REF_IN_CONDITION: LintRule = {
+  id: "unguarded-dotted-ref-in-condition",
+  severity: "warning",
+  description: "A dotted reference (`$(X.field)`) used as an `if` condition operand without a `|fallback:` guard. As of v0.40.0 an unresolved condition operand raises instead of evaluating false.",
+  // The line breaks are load-bearing (ruled `c0b8e814`). This message presents
+  // TWO valid outcomes and "leave it raising" has to read as first-class. Run
+  // flat, it reads as one recommendation with a qualification — and since
+  // "no change is needed" is not actionable text while `|fallback:"true"` is,
+  // a reader scanning for what to DO finds only the token we do not want taken
+  // by default. Keep the fork visible.
+  remediation:
+    "Check first: should this reference always resolve?\n\n" +
+    "  • If the field is always present in a well-formed response, this warning is\n" +
+    "    EXPECTED and NO CHANGE IS NEEDED — raising is the behaviour you want, because\n" +
+    "    absence would mean something upstream is broken.\n\n" +
+    "  • Only if absence is a normal, expected state at this site, say so explicitly:\n" +
+    "        truthy       $(X.field|fallback:\"true\")\n" +
+    "        comparison   $(X.field|fallback:\"none\") != \"none\"\n\n" +
+    "  A fallback suppresses the raise. Do not add one to quiet this warning.",
+  check: (ctx) => {
+    const findings: LintFinding[] = [];
+    // A dotted ref that is an OPERAND. Refs nested inside a filter argument
+    // (`|contains:"$(IT.url)"`) are excluded — those already raise today via
+    // substituteRuntime, so flagging them would be noise about a solved case.
+    const OPERAND = /\$[({]([A-Za-z_]\w*(?:\.[A-Za-z_]\w*)+)((?:\s*\|\s*[A-Za-z_]\w*(?:\s*:\s*"[^"]*")?)*)[)}]/g;
+    for (const [targetName, target] of ctx.parsed.targets) {
+      walkOps(target.ops, (op) => {
+        if (op.ifBranches === undefined) return;
+        for (const b of op.ifBranches) {
+          // Strip filter arguments before scanning so their inner refs can't
+          // match as operands.
+          const scanned = b.cond.replace(/:\s*"[^"]*"/g, ':""');
+          for (const m of scanned.matchAll(OPERAND)) {
+            const ref = m[1]!;
+            const chain = m[2] ?? "";
+            if (/\|\s*fallback\s*:/.test(chain)) continue;
+            // Polarity: `!=` and an odd number of `not`s mean absence would
+            // FIRE the branch rather than skip it. That is the single most
+            // decision-relevant fact at the site, so it goes in the message
+            // even though it does not change whether the rule fires.
+            const negated = /(^|\s)not\s/.test(b.cond);
+            const inequality = /!=/.test(b.cond);
+            const fires = negated !== inequality;
+            findings.push({
+              rule: "unguarded-dotted-ref-in-condition",
+              severity: "warning",
+              message:
+                `In target '${targetName}': \`$(${ref})\` is a dotted reference in an \`if\` condition. ` +
+                `As of v0.40.0, a condition operand that cannot be resolved RAISES instead of evaluating false. ` +
+                `Absence here would ${fires ? "FIRE" : "SKIP"} this branch.`,
+              block: targetName,
+            });
+          }
+        }
+      });
+    }
+    return findings;
+  },
+};
+
 const UNINITIALIZED_APPEND: LintRule = {
   id: "uninitialized-append",
   severity: "error",
@@ -3857,6 +3936,7 @@ const RULES: LintRule[] = [
   UNKNOWN_CONNECTOR_ARG,
   MISSING_REQUIRED_CONNECTOR_ARG,
   UNINITIALIZED_APPEND,
+  UNGUARDED_DOTTED_REF_IN_CONDITION,
   FOREACH_LOCAL_ACCUMULATOR_TARGET,
   APPEND_TO_NON_LIST,
   DISABLED_SKILL_REFERENCE,

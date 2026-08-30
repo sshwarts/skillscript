@@ -501,6 +501,54 @@ export class SkillStoreUnavailableError extends OpError {
 }
 
 /** A `$(VAR)` reference couldn't be resolved at runtime. */
+/**
+ * v0.40.0 — an operand of an `if` condition could not be resolved.
+ *
+ * Distinct from `UnresolvedVariableError` (its sibling below) because the
+ * remediation is different: elsewhere an unresolved ref is simply a bug, but
+ * in a condition "absent" may be a legitimate state the author meant to test
+ * for, so the message has to present BOTH outcomes. It also has to say which
+ * way absence would have fallen — `not`/`!=` FIRE a branch on absence rather
+ * than skipping it, so the failure being prevented is an unintended action,
+ * not just unintended silence.
+ *
+ * Wording is deliberate and was ruled on (thread `c0b8e814`): leave-it-raising
+ * is presented FIRST and the `|fallback:` guard second, because the guard
+ * suppresses the raise and is the wrong answer at most sites. Do not reorder
+ * these, and do not drop the "not to quiet this" line — an agent reading this
+ * string will act on it without fetching any documentation.
+ */
+export class UnresolvedConditionRefError extends OpError {
+  constructor(
+    public readonly varRef: string,
+    public readonly context: "truthy" | "comparison",
+    public readonly firesOnAbsence: boolean,
+    target?: string,
+  ) {
+    const fell = firesOnAbsence ? "FIRED" : "SKIPPED";
+    const message =
+      `Unresolved variable reference in an \`if\` condition: $(${varRef})\n` +
+      `Context: ${context}. Absence here would have ${fell} this branch.` +
+      (target !== undefined ? ` Target '${target}' aborted.` : "");
+    // The line breaks are load-bearing, not cosmetic (ruled `c0b8e814`).
+    // "no change is needed" is not actionable text; `|fallback:"true"` is. Run
+    // this together as one paragraph and a reader scanning for *what do I do*
+    // finds exactly one concrete token — the one we do NOT want taken by
+    // default. The separation is what stops the only executable-looking string
+    // in the message from reading as the instruction.
+    const remediation =
+      `A condition operand that cannot be resolved now raises rather than evaluating false.\n\n` +
+      `  This usually means a REAL FAULT UPSTREAM — a renamed field, a changed response\n` +
+      `  shape, or a misspelled reference. Check that first.\n\n` +
+      `  Only if absence is genuinely expected at this site, express it:\n` +
+      `      truthy       $(X.field|fallback:"true")\n` +
+      `      comparison   $(X.field|fallback:"none") != "none"\n\n` +
+      `  A fallback suppresses the raise. Do not add one solely to clear this error.`;
+    super(message, "if", remediation, target);
+    this.name = "UnresolvedConditionRefError";
+  }
+}
+
 export class UnresolvedVariableError extends OpError {
   constructor(
     public readonly varRef: string,
