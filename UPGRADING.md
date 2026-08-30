@@ -196,6 +196,48 @@ position** — `if ${X.maybe|fallback:"true"}:` behaved as if the filter were no
 It now fires in all three contexts. If you wrote a truthy guard before 0.40.0 believing
 it worked, it did not; it does now.
 
+### If the condition is inside a `foreach`, the blast radius is the whole loop
+
+**Read this before upgrading a skill that loops over externally-sourced records.**
+It is the case the rest of this section does not cover, and it was raised by an
+adopter running exactly that shape.
+
+`foreach` has **no per-iteration error boundary.** A raise inside the loop body
+propagates straight out and aborts the whole target. So on a sweep over many
+independent records:
+
+```
+foreach R in ${RECORDS}:
+    if ${R.stage} == "active":      # one record missing `stage`…
+        ...
+    else:
+        ...
+                                    # …and every record AFTER it in iteration
+                                    # order gets zero processing this run.
+```
+
+Before 0.40.0 that condition silently skipped the bad record and the rest of the
+batch continued. Now the batch stops at the first bad record. **Both behaviours
+are wrong for this shape** — the old one was silent, the new one is batch-wide —
+and the language currently has no way to express "raise loudly, but isolate this
+record."
+
+**So this is the one place where adding `|fallback:` is about isolation rather
+than suppression**, and it is a legitimate use:
+
+```
+foreach R in ${RECORDS}:
+    if ${R.stage|fallback:"unknown"} == "active":
+        ...
+    else:
+        # a record with no `stage` lands here instead of killing the batch
+```
+
+If your loop already has an `else:` catch-all per record, that is what the guard
+preserves. Audit `foreach` bodies first and single-value skills second — the
+per-record case is where an upgrade can cost you a whole run rather than one
+branch.
+
 ### There is no in-language catch
 
 A raising condition aborts the target. `else:` cannot catch it — the condition itself
