@@ -4,6 +4,8 @@ description: "Canonical spec — syntax, ops, semantics. Frontmatter, ops, filte
 mode: wide
 ---
 
+# Skillscript Language Reference — syntax, ops, semantics
+
 Canonical language reference for skillscript. Audience: skill authors (human + agent). Specifies what is valid syntax, what behavior to expect at compile + runtime, and what is currently pending implementation.
 
 It describes the current runtime; release history lives in the CHANGELOG. Items not yet implemented are called out in the relevant sections.
@@ -972,6 +974,8 @@ emit:
 
 **Order-independent in a filter chain.** A `|fallback` anywhere in the chain rescues an unresolved base — `${x|trim|fallback:"d"}` and `${x|fallback:"d"|trim}` both degrade an unresolved `x` to `"d"`. Nuance: it rescues a genuinely-unresolved/missing base; a **present-but-empty value still flows through the other filters**, so `${x|length|fallback:"0"}` on `x="  "` returns `"2"`, not `"0"`. See the Robustness & error containment section for the chain semantics.
 
+**Identical in every evaluation context** — substitution, comparison, truthy, `not`, and both `in` operands all apply the chain the same way and honour the same emptiness predicate. *(Version note: order-independence is a v0.26.2 decision and empty-awareness predates v0.19.12, but both were implemented in the substitution path only. The condition path had its own applier that coerced an undefined base to `""` mid-chain and fired `fallback` on undefined alone — so a `fallback` placed after another filter silently produced an empty string, and `${X.empty|fallback:"D"}` differed by context. **v0.40.1 unified them**, with a conformance test asserting every chain shape agrees across contexts. On v0.40.0 and earlier, put `fallback` first in any chain used inside a condition.)*
+
 **Why filter-shape, not ref-level `(fallback:)`.** Op-level `(fallback: ...)` exists on `$` dispatch and `shell()` for **error/empty recovery** (the op ran, then failed or returned empty). Ref-level `|fallback:` is **coalesce** (the lookup itself found nothing — missing, null, or empty). They rhyme but are adjacent concepts. The filter-chain attachment keeps composition clean (`${VAR|json_parse|fallback:"-"}` works as a chain step) and the vocabulary alignment with op-level `(fallback:)` lets cold authors learn "fallback" as the universal concept while the syntax disambiguates the attachment site.
 
 **Closes the missing-field strict-error trap**: `${ISSUE.customFields.Assignee}` against an object without that key threw `UnresolvedVariableError` and aborted whole-render. The filter is the per-ref opt-out.
@@ -1035,7 +1039,7 @@ if ${VAR.maybe|fallback:"-"} == "-":
     emit(text="nothing there")
 ```
 
-Filter chains in conditions all work in conditional context.
+Filter chains in conditions apply identically to filter chains in substitution — same order-independence for `fallback`, same emptiness predicate (v0.40.1; see the `fallback:` version note above for what differed before it).
 
 ## Filter use in `in` / `not in` set membership
 
@@ -1063,6 +1067,8 @@ elif ${BODY|length} > 1000:
 
 Unknown filter on a resolved variable produces a tier-1 `unknown-filter` compile error. Catches both bare (`|unknown`) and colon-positional (`|unknown:"arg"`) shapes. Filter chains that fail at runtime (e.g., `|json` on a non-serializable value, `|length` on a number, `|isodate` on a non-numeric value, `|pluck` on a non-array) produce op errors that route through the target's `else:` handler. The line-slice family (`head`/`tail`/`lines`) is the exception — it never throws (clamps to empty).
 
+**One exception to the `else:` route:** a filter chain evaluated inside an `if`/`elif` **condition** that raises on an unresolved reference is NOT catchable by `else:` — the raise happens while selecting a branch, so no branch is entered. Guard the operand with `|fallback:` instead. See Conditionals & iteration.
+
 Bare `${NAME}` without a filter is unchanged.
 
 ## Pending filters
@@ -1084,9 +1090,14 @@ Filters are pure functions (input → output, no side effects). Stay small and o
 
 `length`, `fallback:`, `isodate`, `contains:`, `head`/`tail`/`lines`, and `pluck` were all added in response to cold-author harness signal — an authored skill demonstrated the gap was load-bearing before each filter shipped. `contains:` and `pluck` are notable as the filters that operate on structured types (membership and projection); filter-as-conditional-primitive and structural-dedup are the design lines that warranted the cross. Everything else operates on the resolved string form.
 
+
 ## Conditionals & iteration — if/elif/else, foreach, supported operators
 
 Skillscript supports narrow conditionals and bounded iteration. Both are deliberately constrained — composition over expressiveness.
+
+> **v0.40.0 — READ THIS BEFORE THE REST OF THE SECTION.** An **unresolved reference in any condition operand RAISES** (`UnresolvedConditionRefError`, aborting the target) rather than evaluating to false. This applies to truthy tests, `not`, both `in` polarities, and every comparison operator. Before v0.40.0 an unresolvable operand silently evaluated false — which meant `if` skipped a branch and `not` *fired* one, both without any error, and a daily sweep could report "0 processed" for twelve days with nothing logged.
+>
+> Everything below describes behaviour with **resolvable** operands. Where absence is a legitimate, expected state at a site, say so explicitly with `|fallback:` on that operand — see Rule 3 and Rule 6 in the Robustness & error containment section. There is **no in-language catch** for a raising condition: `else:` cannot catch it (no branch was selected) and `(fallback:)` is an op trailer, not a condition guard. The operand-level `|fallback:` filter and a structural guard ahead of the condition are the only instruments.
 
 ## Conditionals
 
@@ -1098,6 +1109,10 @@ Skillscript supports narrow conditionals and bounded iteration. Both are deliber
 if ${VAR}:
     emit(text="VAR was set and non-empty")
 ```
+
+Truthiness is **string-emptiness**: any non-empty string is true, `""` is false. Note this means `not "false"` is **false** — the string `"false"` is non-empty and therefore truthy. If you are testing a boolean-ish value from a connector, compare it explicitly (`== "false"`) rather than relying on `not`.
+
+**An unresolved `${VAR}` here raises** rather than reading as false.
 
 ### Equality
 
@@ -1119,6 +1134,8 @@ elif ${M.id} != ${LAST_ID}:
 
 The ref-vs-ref form is the canonical change-detection pattern. Both sides resolve to strings at evaluation time; equality is byte-for-byte after filter application. No type coercion — `${N} == "42"` compares the string form of N against the literal `"42"`, even if N is "numeric" elsewhere in the connector layer.
 
+**Each operand is checked independently.** A compound predicate has as many raise sites as it has references — `if ${M.id} != ${P.anchor.id}:` can raise on either side, and a reason that explains one of them does not cover the other.
+
 ### Set membership
 
 ```
@@ -1128,7 +1145,11 @@ elif ${M.id} not in ${SEEN}:
     $ data_write content="..." approved="dedup" -> R
 ```
 
-Both sides are explicit refs. RHS must resolve to an array at runtime; clean error otherwise. LHS-undefined evaluates to `false` for both polarities. Optional filter on LHS.
+Both sides are explicit refs. RHS must resolve to an array at runtime; clean error otherwise. Optional filter on LHS.
+
+**An unresolved LHS RAISES, for both polarities.** Before v0.40.0 it evaluated to `false` for both — which was the most dangerous shape in the language, because `not in` on an unresolvable value silently reported "not present" and let a de-duplication check pass everything through.
+
+A `|fallback:` on the LHS rescues it, exactly as on every other operand. *(In v0.40.0 only, the `in` LHS used a separate chain applier that skipped `fallback`; v0.40.1 routes it through the shared condition applier, and a conformance test asserts every operand and context agree.)*
 
 **JSON-string tolerance on RHS**: if the RHS resolves to a *string* that successfully JSON-parses to an array, the parsed array is used. This accommodates the canonical pattern where the array comes from a `$ llm` call that prompted for JSON output:
 
@@ -1190,9 +1211,9 @@ classify:
 
 `a and b or c` parses as `(a and b) or c`. Standard convention. Parentheses available for explicit grouping when default precedence isn't what you want: `(a or b) and c`.
 
-**Short-circuit semantics.** `if ${X} == "ok" and ${MAYBE_UNRESOLVED}` does NOT evaluate the RHS if the LHS already determined the result (false). Matches every other language; required for the "validate-then-access" pattern.
+**Short-circuit semantics, and they are load-bearing.** `if ${X} == "ok" and ${MAYBE_UNRESOLVED}` does NOT evaluate the RHS when the LHS already determined the result. Matches every other language — and since v0.40.0 it is also the **guard** for the validate-then-access pattern, because an unevaluated operand cannot raise. Put the cheap certain test on the left.
 
-**Falsy check via `not`.** `not ${VAR}` closes the gap where you'd previously have to enumerate `if ${VAR} == "":` / `if ${VAR} == "false":` / `if ${VAR} == "0":` separately.
+**Falsy check via `not`.** `not ${VAR}` covers the cases where you'd otherwise enumerate `if ${VAR} == "":` separately.
 
 ```
 mailbox_check:
@@ -1203,11 +1224,13 @@ mailbox_check:
         emit(text="triage backlog")
 ```
 
+**Two cautions on `not`, both pre-dating v0.40.0 and one still live.** It tests emptiness, not falsity — `not "false"` and `not "0"` are both **false**, because those strings are non-empty; that is unchanged and still bites. And **`not` inverts the polarity of absence**: where a bare truthy test on an unresolvable ref used to skip a branch, `not` used to *fire* one, so absence performed work rather than withholding it. That is a large part of why v0.40.0 raises instead, and it is the half that is now fixed.
+
 **De Morgan via parens:** `if not (${A} and ${B}):` works as expected.
 
 **`not` with membership:** `not ${X} in ${LIST}` parses as `not (${X} in ${LIST})` — membership-tighter-than-not convention.
 
-**Lint interaction.** Existing `undeclared-var` lint catches references to truly-undeclared vars at compile time. Short-circuit affects only runtime evaluation — "the var is declared, but might not be bound at this evaluation point" is the runtime-only case.
+**Lint interaction.** `undeclared-var` catches references to truly-undeclared vars at compile time. Separately, **`unguarded-dotted-ref-in-condition` (tier-2, v0.40.0)** flags a dotted reference in a condition that carries no `|fallback:`, and names which way absence would fall at that site — FIRED or SKIPPED. It is a *decision* prompt, not an instruction to add a guard: if the field should always resolve, leaving it to raise is the intended outcome and the warning is expected. Do not add a `|fallback:` merely to silence it.
 
 ### What's NOT supported
 
@@ -1233,7 +1256,7 @@ Both shapes use the keyword `else:`. Distinguished by parser scope-stack at pars
 - `else:` after a target's primary body → error handler (runs when any op in the body errors). See Error handling section.
 - `else:` after `if:` / `elif:` chain → conditional branch.
 
-Both can coexist in the same target.
+Both can coexist in the same target. **Note the error handler does NOT catch a raising condition** — the raise happens while selecting a branch, so no branch was entered and there is nothing for `else:` to recover.
 
 ## Iteration: `foreach`
 
@@ -1246,9 +1269,13 @@ foreach M in ${RESULTS}:
         $ data_write content="${M.summary}" approved="dedup" -> ACK
 ```
 
+> **No per-iteration error boundary.** A raise inside the body aborts the whole target — records after the failing one never run. Since v0.40.0 an unresolvable operand in a loop-body condition is a raise, so a single malformed record can end the batch. For a sweep over independent records, use the **flag-and-continue** pattern in Rule 6 of the Robustness & error containment section; it keeps the batch alive *and* keeps the bad record loud.
+
 ### Iterator vars
 
 `${M}` and `${M.field}` pass through ambient at compile; runtime substitutes per iteration. Dotted field access resolves against whatever structure the connector returned per item — the exact field set depends on the connector. Indexed access (`${LIST.0}`, `${LIST.0.id}`) also works on bound results.
+
+**Per-item field presence is not guaranteed** by the fact that the first item had the field. This is the commonest source of a mid-loop raise.
 
 ### Loop-local scope (and the accumulator exception)
 
@@ -1297,6 +1324,11 @@ run:
         ...
 ```
 An empty list (`DOMAINS='[]'`, or an empty/whitespace string) iterates zero times. The comma-split affordance is for `# Vars:` DEFAULTS only, not runtime inputs — there is no `|split` filter (tracked as a DX enhancement).
+
+---
+
+*Updated 2026-08-30/31 for v0.40.0–v0.40.1. Corrected: "LHS-undefined evaluates to false for both polarities" (now raises, and was the most dangerous of the old shapes — `not in` silently passed everything through a de-duplication check). Added: the raise banner, per-operand checking, the `not "false"` truthiness trap, short-circuit as a deliberate guard, the `unguarded-dotted-ref-in-condition` lint rule, the no-catch note on `else:`, and the `foreach` blast-radius note pointing at flag-and-continue.*
+
 
 ## Triggers — # Triggers: header, declarative + imperative registration, source types
 
@@ -1989,6 +2021,27 @@ else:
 - Under the hood: when a `$` op returns `isError: true` the executor throws via `makeOpError` rather than binding the error text — that throw is what routes to `(fallback:)` / `else:` and surfaces in `result.errors[]`. Op-level `(fallback:)` intercepts it and binds the fallback value instead.
 - **Composition caveat:** a child skill's failures do NOT bubble to the parent's top-level `result.errors[]` — they nest in the bound `${R.errors}`. A top-level `errors: []` does not mean nothing failed downstream. Inspect `${R.errors}` or rely on `(fallback:)`/`else:`, which fire regardless of nesting depth. (See Composition.)
 
+
+## Layer 0: the one failure NEITHER layer catches — a raising condition
+
+Since **v0.40.0**, an unresolved reference in an `if`/`elif` operand raises `UnresolvedConditionRefError` and aborts the target. **Nothing on this page contains it.**
+
+- **`else:` cannot catch it.** The raise happens while *selecting* a branch, so no branch was ever entered and there is nothing for the handler to recover. `else:` catches throws from ops *inside* a body; a condition raise happens before any op in that body runs.
+- **`(fallback:)` cannot catch it.** It is an op trailer. A condition is not an op.
+- **`# OnError:` is gone** and never worked anyway.
+
+**The only two instruments are ahead of the raise, not after it:**
+
+1. **`|fallback:` on the operand itself** — `if ${R.stage|fallback:"__missing__"} == "__missing__":`. Says "absence is expected here" at the one site where it is expected. This is the sanctioned form and it is what the tier-2 `unguarded-dotted-ref-in-condition` lint rule points at.
+2. **A structural guard ahead of the condition** — bind a default with `$set`, or short-circuit on a certain operand first (`if ${X} == "ok" and ${MAYBE}:` never evaluates the right side when the left is false).
+
+**Do not reach for `|fallback:` reflexively.** If the reference *should* always resolve, the raise is the behaviour you want — it means something upstream is broken, and suppressing it puts you back where a sweep can report "0 processed" for twelve days with nothing logged. That is precisely the failure v0.40.0 exists to remove.
+
+**Propagation, for the list above:** a condition raise surfaces in `result.errors[]` and aborts the target like any uncaught throw. It is never recorded in `result.fallbacks[]`, because no fallback fired.
+
+Full semantics, including which way absence falls per operator and the flag-and-continue pattern for `foreach`, are in **Conditionals & iteration** and **Robustness & error containment** (Rule 6).
+
+
 ## Robustness & error containment — best practices (no try/catch by design)
 
 **Skillscript has no try/catch — by design. Robustness is authored, not caught.** An unguarded fallible op that fails aborts the whole target — and in a fan-out, aborts every sibling that hadn't run yet. You contain failures explicitly.
@@ -2005,6 +2058,8 @@ else:
 | `# OnError: <skill>` | REMOVED in v0.39.0 (BREAKING) — the header no longer exists; writing it is a hard parse error directing you to `else:` / `(fallback:)`. Historically it parsed but was INERT (fallbackSkillExecutor never wired), so a skill carrying it had no error handling while appearing to have some. | — |
 
 `(fallback:)` = "any failure → this default." `else:` = "I need the error's DETAILS to branch." Structural guard = "I'd rather this never fail" (most robust — the failure never reaches a handler).
+
+> **One thing NOTHING in that table catches: a raising condition.** Since v0.40.0 an unresolved reference in an `if`/`elif` operand raises and aborts the target. `else:` cannot catch it — the raise happens while *selecting* a branch, so no branch was entered — and `(fallback:)` is an op trailer, not a condition guard. The only instruments are the `|fallback:` filter on the operand itself, or a structural guard ahead of the condition. See the Conditionals & iteration section.
 
 **Rule 1 — Fallback every fallible op whose failure shouldn't be fatal.** `shell`, `$` dispatch, `file_read`, `execute_skill`, `$ json_parse` can all fail; give each `-> VAR (fallback: "<default>")` unless its failure SHOULD abort the skill (leaving it bare is how you mark it critical).
 
@@ -2023,9 +2078,44 @@ Bad input skips the `if`, the default stands, the child never throws — so a pa
 
 **Rule 3 — a `fallback` filter anywhere in a chain rescues an unresolved reference** (order-independent; also rescues a missing dotted/numeric path on a present object — `${W.a.0.b|fallback:"d"}` when `W` lacks `a` → `"d"`). A chain with NO `fallback` still throws on an unresolved ref — that's your signal to add one. It rescues only genuinely-unresolved refs; a present-but-empty value (`"  "`) still flows through the other filters, so `${x|length|fallback:"0"}` on `"  "` is `"2"`.
 
+Order-independence is a deliberate v0.26.2 decision (thread `7395b8af`, resolved in `89dfb32f`), aligning with Jinja's `undefined|filter|default` contract: an undefined base propagates lazily through the chain when a LATER `|fallback` will catch it, so a chain containing a `fallback` never explodes on an unresolved ref regardless of where the fallback sits.
+
+**As of v0.40.1 this holds identically in every evaluation context** — substitution, comparison, truthy, `not`, and both `in` operands. Before v0.40.1 the condition path had its own chain applier that coerced `undefined` to `""` mid-chain, so a `fallback` placed after another filter silently produced an empty string instead of its value; that path now shares the contract, and a conformance test asserts the contexts agree on every chain shape.
+
 **Rule 4 — A body-text output template must not reference a var a fallible step might leave unset.** The template renders after the target runs; an unset var hard-fails the render (`Unresolved variable reference: $(AREA)`) — and that is exactly how a child skill throws OUT to its `execute_skill` parent. Pre-bind every template var to a default before the fallible step (this doubles as the throw-prevention structure in Rule 2), or source each with a `|fallback`.
 
 **Rule 5 — Degrade LOUD, not silent.** A fallback value should be a visible marker ("unavailable", "—", "n/a") — never empty, never a plausible-but-wrong value. A degraded run must be diagnosable: the throw's reason is preserved in `result.fallbacks[].reason`, so a degraded leg stays traceable. Don't silently ship a blank or a fake reading. Clean-degrade beats both a hard abort and a silent lie.
+
+**Rule 6 — Inside a `foreach`, guard the condition so one bad record cannot abort the batch. (flag-and-continue)**
+
+`foreach` has **no per-iteration error boundary**: a raise in the loop body propagates out and aborts the whole target, so records after the bad one never run. For a sweep over independent, externally-sourced records that is wrong — you want the bad record *flagged*, and the other twelve *processed*.
+
+This is Rule 2 applied per-item instead of per-leg, and Rule 5 is what makes it loud. Use a distinguishable sentinel and an `elif`:
+
+```
+foreach R in ${RECS}:
+    if ${R.stage|fallback:"__missing__"} == "__missing__":
+        emit(text="  UNREADABLE ${R.id}")
+    elif ${R.stage} == "open":
+        emit(text="  processed ${R.id}")
+    else:
+        emit(text="  not-open ${R.id} (stage=${R.stage})")
+```
+
+```
+  processed a
+  UNREADABLE b
+  not-open c (stage=closed)
+```
+
+**Three states, not two: "I could not read the field" and "the field says no" stay separable** — which is the distinction raising-on-unresolved-refs exists to restore, here recovered per-record inside a loop rather than lost. **Note the `elif` operand is deliberately unguarded:** by that point the field is known present, so it keeps raising. Guarding it too would be blanket suppression and would throw away the distinction the first branch just bought you.
+
+**How this squares with the `unguarded-dotted-ref-in-condition` lint rule**, which says *"do not add a fallback to quiet this warning"*: at a **single-value** site a fallback suppresses a signal; **inside a loop** it converts a batch-fatal error into a per-record branch you can report on. Same syntax, opposite intent. The rule's own first test — *"should this reference always resolve?"* — answers **no** for a record in a sweep, so the guard here is licensed by the rule rather than in tension with it. **A per-record sweep is the canonical example of the "absence is a normal, expected state" branch.**
+
+---
+
+*Edit history: Rule 6 added 2026-08-30. On the same day Rule 3 was briefly REWRITTEN to say "order matters, put fallback first" and carried a dated note calling the original false — both wrong, and reverted within the day. Rule 3 states a deliberate v0.26.2 ruling; only the condition path failed to implement it, and v0.40.1 closed that gap. The error came from measuring the condition path and concluding the documentation was wrong, when the documentation described the intended contract and the code was the deviation. Recorded because a confident dated "correction" reversing a real ruling is the hardest kind of doc error for a later reader to detect.*
+
 
 ## Deadlines & cancellation — # Deadline: bound, uncatchable termination, effect-boundary onAbort, uncertain effects
 
@@ -2648,5 +2738,5 @@ When any of these primitives ship, the relevant grammar moves into its canonical
 
 ---
 
-*Rendered from `skillscript/skillscript-language-reference` — 2026-07-27 11:01 EDT*  
+*Rendered from `skillscript/skillscript-language-reference` — 2026-08-31 10:36 EDT*  
 *Source of truth: AMP (`amp_render_document("skillscript/skillscript-language-reference")`)*

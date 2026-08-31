@@ -439,7 +439,7 @@ Apply on \`\${VAR|filter}\` references; chain left-to-right.
 | \`json\` | JSON.stringify |
 | \`trim\` | Whitespace trim |
 | \`length\` | Array element count or string char count |
-| \`fallback:"X"\` | Coalesce-on-missing: when the upstream ref is unresolved, substitute literal \`X\` and continue the chain. Positional — \`\${VAR|fallback:"-"|upper}\` defaults-then-uppercases. |
+| \`fallback:"X"\` | Coalesce-on-absent: substitutes literal \`X\` when the upstream value is **unresolved, null, an empty string (after trim), or an empty array**, then continues the chain. **Order-independent for catching absence** — \`\${VAR|trim|fallback:"-"}\` and \`\${VAR|fallback:"-"|trim}\` both rescue an unresolved \`VAR\` (v0.26.2; conditions conform as of v0.40.1). Position still decides what the *other* filters see: \`\${VAR|fallback:"-"|upper}\` defaults-then-uppercases. In a condition it is also the **only** way to declare that an absent operand is expected — see the conditional grammar note below. |
 | \`isodate\` | Format an epoch timestamp (ms or sec, auto-detected by magnitude) as ISO-8601. Passes already-ISO strings through unchanged. \`\${EVENT.fired_at_unix|isodate}\`. |
 | \`contains:"X"\` | Boolean substring/membership check. Returns \`"true"\` on match, \`""\` on miss — use in conditionals: \`if \${R|contains:"urgent"}:\`. Type-aware: list LHS (or JSON-string-of-list) does element membership; string LHS does substring match. Mirrors \`if "X" in \${R}:\` semantics from the conditional grammar. |
 | \`head:"N"\` | First N lines of the (string) input. \`\${LOG|head:"20"}\`. |
@@ -471,6 +471,37 @@ if not \${A} and (\${B} or \${C}):      ← compound with parens + not
 \`\`\`
 
 Branches via \`if:\` / \`elif COND:\` / \`else:\`. The \`else:\` after a target body is a separate error-handler block (distinguished by indentation scope).
+
+### An operand that cannot be resolved RAISES (v0.40.0)
+
+**A condition operand that does not resolve raises \`UnresolvedConditionRefError\` and aborts the target.** It does not evaluate as false. Before v0.40.0 it silently compared as \`""\`, so "the field is missing" and "the field says no" were the same answer — a skill could report success having done nothing.
+
+Every operand is checked **individually**: \`if \${A.x} != \${B.y}:\` checks both. The raise is **not catchable** — \`else:\` cannot catch it (the condition raised, so no branch was chosen), \`(fallback: …)\` is an op trailer rather than a condition guard.
+
+Note the direction, which is why this raises rather than warns: absence did not only suppress work, it could **cause** it. \`if not \${X.absent}:\` used to **run** its branch, and so did \`if \${X.absent} != "y":\` (since \`"" != "y"\`).
+
+**If absence is a genuinely expected state at that site, declare it with \`|fallback:\`** — that is the only way to say so, and it works in every position:
+
+\`\`\`
+if \${R.state|fallback:"unknown"} == "active":     ← absent → "unknown" → else branch
+if not \${R.done|fallback:"true"}:                 ← absent → "true" → branch skipped
+\`\`\`
+
+**Do not add \`|fallback:\` merely to stop a raise.** Where a field should always be present, the raise is the point — it means something upstream broke. The \`unguarded-dotted-ref-in-condition\` lint flags candidates but cannot tell which is which; that judgement is yours.
+
+**Inside a \`foreach\`, one raise aborts the whole loop** — there is no per-iteration boundary, so every later record goes unprocessed. For a sweep over independent records, guard the operand and branch on the sentinel, which keeps the batch alive *and* reports the bad record:
+
+\`\`\`
+foreach R in \${RECORDS}:
+    if \${R.stage|fallback:"__missing__"} == "__missing__":
+        emit(text="UNREADABLE \${R.id}")           ← flagged, not silently skipped
+    elif \${R.stage} == "open":                    ← unguarded: known present by here
+        emit(text="processed \${R.id}")
+    else:
+        emit(text="not-open \${R.id}")
+\`\`\`
+
+That is the one case where adding \`|fallback:\` buys **isolation** rather than silence.
 
 ### Compound conditions
 

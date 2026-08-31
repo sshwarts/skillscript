@@ -2783,13 +2783,36 @@ function applyFilterChain(value: string, chain: string | undefined, vars?: Map<s
 function applyFilterChainCondition(value: unknown, chain: string | undefined, vars?: Map<string, unknown>): string {
   const specs = parseFilterChain(chain);
   let current: unknown = value;
-  for (const spec of specs) {
+  for (let i = 0; i < specs.length; i++) {
+    const spec = specs[i]!;
     const arg = interpolateFilterArg(spec.arg, vars);
     if (spec.name === "fallback") {
-      if (current === undefined) current = arg ?? "";
+      // v0.40.1: same emptiness predicate as the substitution path (2621).
+      // Was `undefined`-only, so `$(X|fallback:"D")` gave "D" in an emit() and
+      // "" in a condition — same syntax, same chain, different answer. A
+      // `fallback` is something the author explicitly typed asking for a
+      // default; honouring it for undefined but not for "" is a distinction
+      // they never made and cannot see. Ruling in `84f0780e`; the original
+      // empty-aware decision is thread `7395b8af` — asked in `9d8ff1b1`,
+      // shipped v0.19.12, verified and accepted in `89dfb32f`.
+      const isEmptyString = typeof current === "string" && current.trim() === "";
+      const isEmptyArray = Array.isArray(current) && current.length === 0;
+      const isNullish = current === null || current === undefined;
+      if (isNullish || isEmptyString || isEmptyArray) current = arg ?? "";
       continue;
     }
-    if (current === undefined) current = "";
+    if (current === undefined) {
+      // v0.40.1: propagate `undefined` LAZILY when a later `fallback` will
+      // catch it — the same contract the substitution path has carried since
+      // v0.26.2 (2629-2641), and the one Rule 3 documents as
+      // order-independent. Without this, `|trim|fallback:"D"` coerced to ""
+      // here, so the fallback saw a defined-but-empty value, declined to
+      // fire, and the condition compared against "" with no raise — the one
+      // remaining silent path after v0.40.0, reached by the ordering authors
+      // most naturally write (transform, then guard).
+      if (specs.slice(i + 1).some((s) => s.name === "fallback")) continue;
+      current = "";
+    }
     current = applyFilter(stringifyValue(current), spec.name, arg);
   }
   if (current === undefined) current = "";
@@ -3045,7 +3068,10 @@ function evalSimpleCondition(
     // condition raises") would be false for `in`, which is the
     // description-vs-behaviour mismatch class. The RHS already threw below.
     requireResolvedOperand(lhsRef!, lhsVal, lhsChain, "comparison", negated !== (notKey !== undefined), target);
-    const lhsStr = applyFilterChain(stringifyValue(lhsVal), lhsChain, vars);
+    // v0.40.1: was `applyFilterChain`, which SKIPS `fallback` entirely — so an
+    // `in` LHS was a fourth context with its own chain semantics. Use the
+    // condition applier like every other operand here.
+    const lhsStr = applyFilterChainCondition(lhsVal, lhsChain, vars);
     const found = rhsVal.some((item) => stringifyValue(item) === lhsStr);
     return notKey !== undefined ? !found : found;
   }

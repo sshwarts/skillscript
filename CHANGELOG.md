@@ -2,6 +2,36 @@
 
 Each release carries an **Upgrade impact:** line (first in its section) so a bump's requirements are visible at a glance. Tags (closed set): **BREAKING** (a manual change is needed to keep working) · **RE-APPROVE** (secured-mode signature invalidation — skills must be re-approved before they run) · **CONFIG** (`connectors.json` / config edit needed) · **none (additive)** (no action; backward-compatible). Standard from 0.20.0 forward; the pre-0.20 transitions that need action are flagged inline below (0.14.0, 0.18.8, 0.19.0). Full walkthrough: [UPGRADING.md](UPGRADING.md).
 
+## 0.40.1 — 2026-08-31 — fix: a filter chain now evaluates identically in a condition and in a substitution
+
+**Upgrade impact:** BREAKING, on one narrow surface — `|fallback:` in a **condition** now fires on an empty string / empty array as well as on an unresolved reference, matching what it has always done in a substitution. If a skill relies on `if ${X.empty|fallback:"D"} != "D":` being true for an empty value, that flips. Everything else here is a fix in the safe direction, and it **closes the last silent path 0.40.0 left open**.
+
+**0.40.0 promised that an unresolved reference in a condition raises. One ordering slipped through.** `|fallback:` placed *after* another filter suppressed the raise without supplying its value — the chain yielded a silent empty string:
+
+```
+${X.missing|fallback:"D"}          →  "D"    rescued
+${X.missing|trim|fallback:"D"}     →  ""     suppressed the raise, supplied nothing   ← the hole
+${X.missing|trim}                  →  raises (0.40.0 working correctly)
+```
+
+Worse, transform-then-guard is the order authors naturally write, and the language guide documents `|fallback:` as order-independent — correctly, because **that is exactly how it has behaved in substitutions since v0.26.2.** The condition evaluator simply never received that logic. So the documentation described the intended contract and the code was the deviation, not the other way round.
+
+- **`undefined` now propagates lazily through a chain when a later `|fallback:` will catch it**, in conditions as it already did in substitutions. `|fallback:` is genuinely order-independent again, as documented.
+- **`|fallback:`'s emptiness predicate now matches across contexts** — `undefined`, `null`, `""`, `[]`. Previously a condition fired only on `undefined`, so `${X.empty|fallback:"D"}` gave `"D"` in an `emit()` and `""` in an `if`. A `fallback` is something the author explicitly typed; honouring it for one kind of absence but not another is a distinction they never made.
+- **`in`'s left-hand side uses the same applier as every other operand.** It previously used a third one that skipped `fallback` outright.
+- **A chain with no `fallback` still raises.** Propagation is gated on a later `fallback` existing; nothing about 0.40.0's guarantee is relaxed.
+
+**Found by review immediately after 0.40.0 shipped, not in the field.** Our own corpus was unaffected — all three `fallback`-in-condition sites are fallback-first.
+
+### Documentation shipped in this release
+
+Two adopter-facing surfaces were describing pre-0.40.0 behaviour. Both are corrected here, and both ship **inside the npm tarball** — so anyone who installed 0.40.0 has the stale versions.
+
+- **`docs/language-reference.md` regenerated.** The committed file dated from 2026-07-27 and predated 0.39.0, so it documented condition semantics two releases out of date. Its Conditionals section stated *"LHS-undefined evaluates to `false` for both polarities"* — false since 0.40.0, and the most consequential of the stale claims, because `not in` against an unresolvable value silently reported "not present" and would let a de-duplication check pass every record through. Four sections were corrected at the source and the whole reference re-rendered: the raise semantics and per-operand checking, `not` inverting the polarity of absence, short-circuit evaluation promoted from a convenience to a deliberate raise-avoidance guard, the `unguarded-dotted-ref-in-condition` lint, a `foreach` blast-radius note, the flag-and-continue pattern with a worked example, and a statement that a raising condition is caught by **neither** `else:` nor `(fallback:)`.
+- **`help({topic: "ops"})` corrected.** The conditional-grammar section said nothing about the raise at all — the surface an agent reads before authoring a condition was silent on the headline change of the previous release. It now covers it, including the `foreach` case. The `fallback:"X"` filter row also understated the trigger as *"when the upstream ref is unresolved"* and described the filter as *"Positional"*; it now states the full predicate and that catching absence is order-independent.
+
+**Process gap this exposed:** nothing in the release flow re-renders the reference or fails when it drifts — the only CI check on that file verifies its relative links resolve. A drift gate is tracked separately.
+
 ## 0.40.0 — 2026-08-30 — BREAKING: an unresolved reference in an `if` condition raises instead of evaluating false
 
 **Upgrade impact:** BREAKING — a condition operand that cannot be resolved at runtime now raises `UnresolvedConditionRefError` and aborts the target, where it previously evaluated as false. **Nothing changes for a skill whose condition fields always resolve.** It bites only when a field is genuinely absent — and that case previously produced a wrong answer silently. There is no compile-time or lint-time signal that a given field *will* be absent (lint cannot read a connector's response contract), so the new `unguarded-dotted-ref-in-condition` warning lists the sites worth thinking about. **At most sites the correct response is to change nothing:** if the field is always present in a well-formed response, raising is the behaviour you want. Only where absence is a normal, expected state should you say so with `|fallback:`. See [UPGRADING.md §8](UPGRADING.md).

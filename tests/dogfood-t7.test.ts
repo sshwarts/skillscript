@@ -24,8 +24,8 @@ const REPO_ROOT = join(__dirname, "..");
 const PACKAGE_JSON = JSON.parse(readFileSync(join(REPO_ROOT, "package.json"), "utf8")) as Record<string, unknown>;
 
 describe("T7 — package.json polish", () => {
-  it("1. version is 0.40.0 (BREAKING: an unresolved reference in an `if` condition now raises instead of evaluating false — EQ/CMP/TRUTHY/`not`/`in`; `|fallback:` now fires in bare-truthy context and is the escape hatch; new unguarded-dotted-ref-in-condition lint)", () => {
-    expect(PACKAGE_JSON["version"]).toBe("0.40.0");
+  it("1. version is 0.40.1 (filter chains now evaluate identically in condition and substitution context — `|fallback:` after a transform supplies its value instead of yielding a silent empty string, and its emptiness predicate matches; closes the last silent path left by 0.40.0)", () => {
+    expect(PACKAGE_JSON["version"]).toBe("0.40.1");
   });
 
   it("2. main + types + bin + engines.node ≥ 22.5 declared", () => {

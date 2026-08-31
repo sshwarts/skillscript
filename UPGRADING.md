@@ -245,7 +245,34 @@ raised, so no branch is chosen — `(fallback: …)` is an op trailer rather tha
 condition guard, and `# OnError:` was removed in 0.39.0. Handle it by fixing the
 upstream cause or by declaring the absence expected, not by catching.
 
-## 9. Going forward
+## 9. `|fallback:` in a condition became empty-aware (0.40.1)
+
+0.40.1 made filter chains behave identically in a condition and in a substitution.
+Two of the three changes are pure fixes; one is a behaviour change worth checking.
+
+**The behaviour change.** In a **condition**, `|fallback:` now fires on an empty
+string and an empty array, not only on an unresolved reference:
+
+```
+if ${X.empty|fallback:"D"} == "D":
+
+    before 0.40.1   false   (fallback fired only on undefined)
+    from   0.40.1   true    (matches what a substitution has always done)
+```
+
+If a skill deliberately relies on an empty value flowing past a `fallback` in a
+condition, drop the `|fallback:` from that operand or compare on the raw value.
+
+**The fixes, which need no action.** `|fallback:` placed *after* another filter
+now supplies its value instead of yielding a silent empty string — so
+`${X.missing|trim|fallback:"D"}` rescues, as the language guide has always said
+it should and as substitutions have always done. And `in`'s left-hand side now
+honours `fallback` like every other operand.
+
+**A chain with no `fallback` still raises.** 0.40.0's guarantee is unchanged; the
+propagation only applies when a later `fallback` exists to catch it.
+
+## 10. Going forward
 
 Every CHANGELOG entry carries an **Upgrade impact:** line — `BREAKING` / `RE-APPROVE` /
 `CONFIG` / `none (additive)`. Scan it before you bump. Making a specific jump and not
