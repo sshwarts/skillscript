@@ -32,6 +32,30 @@ const expiredDeadlineCtx = () => ({
   deadlineMs: Date.now() - 1000, // already past
 });
 
+/**
+ * Budget for the MID-FLIGHT expiry tests: the deadline must fall AFTER the op
+ * has started and BEFORE it finishes, so the run is cut with work in progress.
+ * Both bounds are real, and the lower one is what bites.
+ *
+ *   lower — the runtime needs to parse, set up and dispatch before this
+ *           elapses. At the previous value of 60ms a contended CI runner could
+ *           blow the budget during setup, so the op never dispatched, nothing
+ *           was cut, and `deadlineExceeded` came back undefined. That flaked
+ *           on ubuntu 2026-08-31 and on macOS the day before — a run whose
+ *           commit changed only CHANGELOG.md and UPGRADING.md, which is what
+ *           proved it environmental rather than a regression.
+ *   upper — must stay under the shortest thing kept in flight. Two of these
+ *           tests block on `shell(command="sleep 1")` (1000ms); the other two
+ *           on a mock that sleeps 5000ms. 300ms clears setup with ~5x margin
+ *           and still cuts the 1s sleep with 3x to spare.
+ *
+ * If these flake again, raise this — do NOT lower it, and do not "fix" a
+ * failure here by relaxing the `deadlineExceeded` assertion: undefined there
+ * means the op never dispatched, which is a different code path than the one
+ * these tests exist to cover.
+ */
+const DEADLINE_MID_FLIGHT_MS = 300;
+
 const SKILL = (frontmatter: string) =>
   `# Skill: d\n${frontmatter}\n\ndefault: run\nrun:\n    emit(text="hi")\n`;
 
@@ -287,7 +311,7 @@ run:
         registry: new Registry(),
         effectsAuthorized: true,
         shellAllowlist: ["sleep"],
-        deadlineMs: Date.now() + 60, // fires mid-sleep
+        deadlineMs: Date.now() + DEADLINE_MID_FLIGHT_MS, // fires mid-sleep
         trace: { mode: "on" },
         traceStore: store,
       });
@@ -567,7 +591,7 @@ run:
       registry: new Registry(),
       effectsAuthorized: true,
       shellAllowlist: ["sleep"],
-      deadlineMs: Date.now() + 60,
+      deadlineMs: Date.now() + DEADLINE_MID_FLIGHT_MS,
     });
     expect(r.deadlineExceeded).toBe(true);
     expect(r.fallbacks).toEqual([]); // the (fallback:) did NOT catch the deadline
@@ -642,7 +666,7 @@ run:
     $ api.get_status -> R (fallback: "fb")
 `);
     const r = await execute(parsed, {}, ["run"], {
-      agentId: "test", registry, effectsAuthorized: true, deadlineMs: Date.now() + 60,
+      agentId: "test", registry, effectsAuthorized: true, deadlineMs: Date.now() + DEADLINE_MID_FLIGHT_MS,
     });
     expect(r.deadlineExceeded).toBe(true);
     expect(r.uncertainEffects?.[0]?.op).toBe("api.get_status");
@@ -671,7 +695,7 @@ run:
     $ api.get_status -> R (fallback: "fb")
 `);
     const r = await execute(parsed, {}, ["run"], {
-      agentId: "test", registry, effectsAuthorized: true, deadlineMs: Date.now() + 60,
+      agentId: "test", registry, effectsAuthorized: true, deadlineMs: Date.now() + DEADLINE_MID_FLIGHT_MS,
     });
     expect(r.deadlineExceeded).toBe(true);
     expect(aborted).toBe(true); // the connector received the abort and stopped
