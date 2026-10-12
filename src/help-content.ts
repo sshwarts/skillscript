@@ -34,7 +34,7 @@ export const SKILLSCRIPT_USAGE_INSTRUCTIONS = `A Skillscript runtime is wired ov
 - \`compile_skill({name})\` → preview the plan, no side effects.
 
 **Repeating a routine? Capture it as a skill.** What you can script = the wired connectors, models, and allowed shell binaries from \`runtime_capabilities()\` — that list is your menu. When you catch yourself re-running work over any of them, author it. If something you'd need isn't wired yet, ask the operator to add it, then capture it.
-- \`help({topic})\` → the language (ops, frontmatter, composition, error-handling, connectors, lint-codes).
+- \`help({topic})\` → the language (ops, frontmatter, composition, error-handling, triggers, connectors, lint-codes).
 - Draft → \`lint_skill({source})\` → \`compile_skill({source})\` → \`skill_write({name, source})\`.
 - **Robustness:** a failing fallible op aborts the target (in a fan-out, one failing leg sinks the rest) unless given \`(fallback: "…")\` — which as of v0.27.0 contains any failure shape, including an \`execute_skill\` child-throw and a \`$ json_parse\` off-shape. Use \`else:\` for target-level recovery logic. See \`help({topic: "error-handling"})\`.
 - **Bounding — two levers, pick by intent:** For a **partial-tolerant** run (a gather where one slow leg shouldn't sink the rest), bound **each leg** with a per-op \`timeout=N\` (seconds) + a \`(fallback: ...)\`. A timed-out leg throws a **catchable** error, so the fallback binds and the run continues — the everyday tool, and it works on any \`$\` connector op (the runtime enforces \`timeout=\` regardless of whether the remote tool's schema lists it). \`# Timeout: N\` sets a per-op default for the whole skill. \`# Deadline: N\` is the **other** lever: a whole-run wall-clock cap that terminates **uncatchably** (op \`(fallback:)\`/\`else:\` can't recover it) and aborts **every** leg including healthy ones — reserve it for a hard total ceiling, *not* the per-leg bound for a gather. Lint (\`unbounded-no-deadline\`) nudges only when a leg has no bound at any level. See \`help({topic: "frontmatter"})\` and \`help({topic: "error-handling"})\`.
@@ -202,7 +202,7 @@ What this example demonstrates:
 **Pattern note:** prefer \`emit(text="...")\` per line over building a multi-line accumulator string with \`$append\`. The runtime threads emissions into the agent-bound delivery naturally, and the per-line shape is what cold authors reach for. Multi-line string accumulators are a real pattern for file-writing scenarios; emit is the natural choice for agent-targeted delivery via \`# Output: agent:\`.
 
 Use \`help({topic: "ops"})\`, \`help({topic: "frontmatter"})\`, \`help({topic: "examples"})\`,
-\`help({topic: "composition"})\`, \`help({topic: "error-handling"})\`, \`help({topic: "connectors"})\`, or \`help({topic: "lint-codes"})\` for deeper sections.
+\`help({topic: "composition"})\`, \`help({topic: "error-handling"})\`, \`help({topic: "triggers"})\`, \`help({topic: "connectors"})\`, or \`help({topic: "lint-codes"})\` for deeper sections.
 
 **Note on substitution form.** Use \`\${VAR}\` for variable substitution. The bare-paren \`$(VAR)\` form still compiles with a tier-2 \`deprecated-substitution-shape\` warning.
 `;
@@ -581,7 +581,7 @@ The runtime injects these refs — don't declare them in \`# Vars:\` / \`# Requi
 | \`$(USER)\` | invocation context | Identity passed via \`agentId\` / CLI user |
 | \`$(SESSION_CONTEXT)\` | runtime session | Free-form session snapshot for cross-skill carry |
 | \`$(TRIGGER_TYPE)\` | scheduler | \`cron\` / \`event\` / \`webhook\` / \`agent\` / \`cli\` / \`dashboard\` / \`inline\` |
-| \`$(TRIGGER_PAYLOAD)\` | scheduler | JSON-serializable payload attached to the firing trigger |
+| \`$(TRIGGER_PAYLOAD)\` | scheduler | the firing trigger's name — the cron expression or the event_name. Event POST params arrive as \`# Vars:\`, not here |
 | \`$(ERROR_CONTEXT)\` | runtime error handler | Inside a target-level \`else:\` block only; \`.kind\` / \`.message\` / \`.target\` accessible |
 
 \`EVENT.*\` auto-populates on cron-fired skills:
@@ -929,6 +929,75 @@ default: fetch
 **Rule 5 — Degrade LOUD, not silent.** A fallback value should be a visible marker ("unavailable", "—", "n/a") — never empty, never a plausible-but-wrong value. A fired \`(fallback:)\` records its reason in \`fallbacks[]\`, but the VALUE the skill ships must itself announce the degrade. A degraded run must be diagnosable: surface that a leg degraded, don't silently ship a blank or a fake reading.
 `;
 
+const TRIGGERS = `# Triggers — how an Approved skill fires on its own
+
+A trigger fires a skill with no human or agent invoking it. The scheduler re-checks the approval gate at fire time, so a Draft or edited-since-approval skill never fires.
+
+## Two sources
+
+| Source | Declared as | Model |
+|---|---|---|
+| \`cron\` | \`# Triggers: cron: 0 9 * * *\` | **poll** — the runtime fires on a 5-field schedule. No catch-up if the runtime was down. |
+| \`event\` | \`# Triggers: event: deploy-finished\` | **push** — something external POSTs \`/event\` and the skill fires. |
+
+There are no other sources. File-watch, agent turn-completion, webhooks, sensors: each is an external adapter that POSTs \`/event\` when its thing happens.
+
+## Event triggers — the \`/event\` ingress
+
+\`\`\`
+POST /event            (dashboard port; off unless SKILLSCRIPT_EVENT_INGRESS_ENABLED=true)
+{ "event_name": "deploy-finished", "params": { "SERVICE": "api", "VERSION": "1.2.3" } }
+→ 200 { "run_id": "<trace_id>", "durability": "in-process" }
+\`\`\`
+
+- **Params ARE the skill's \`# Vars:\`.** The POSTed \`params\` bind as the skill's vars — read them as \`\${SERVICE}\`, not through \`TRIGGER_PAYLOAD\`. Strict: every declared var present, no extras (400 otherwise).
+- \`event_name\` is the public contract: case-insensitive, one event_name → one skill. Posters never name the skill.
+- \`200\` means queued, not finished. The queue is in-memory — lost on restart. Look up \`run_id\` as a trace id to see how the run went.
+- Optional bearer auth: \`SKILLSCRIPT_EVENT_INGRESS_AUTH_TOKEN\`.
+
+## What a fired skill can read
+
+| Ref | cron fire | event fire |
+|---|---|---|
+| \`\${TRIGGER_TYPE}\` | \`cron\` | \`event\` |
+| \`\${TRIGGER_PAYLOAD}\` | the cron expression | the event_name |
+| \`\${EVENT.fired_at}\` / \`_unix\` / \`_plus_1h_unix\` / \`_plus_1d_unix\` / \`_plus_7d_unix\` | fire time | fire time |
+| your \`# Vars:\` | defaults | the POSTed params |
+
+A direct \`execute_skill\` call sees \`TRIGGER_TYPE\` = \`inline\` and an empty \`TRIGGER_PAYLOAD\`.
+
+## Lifecycle
+
+- **Declare:** \`# Triggers:\` header — synced when the skill is Approved, dropped when it leaves Approved.
+- **Register at runtime:** \`register_trigger({skill_name, source, name, expires_at?})\` — \`name\` is the cron expression or event_name; \`expires_at\` is unix seconds (omit = never expires).
+- **Inspect:** \`list_triggers({skill?, source?})\`.
+- **Pause:** \`set_trigger_enabled({trigger_id, enabled})\` — stays registered, stops firing.
+- **Remove:** \`unregister_trigger({trigger_id})\`.
+
+Mark unattended skills \`# Autonomous: true\` (see \`help({topic: "frontmatter"})\`).
+
+## Recipes — "do X when async thing E finishes"
+
+Skillscript has no \`sleep\` / \`wait-until\`. A blocking wait would need suspend/resume across restarts. Instead, chain single-shot skills with triggers. The deciding question: can E notify you (push), or must you check (poll)?
+
+**1. Poll until done** (E can't notify — e.g. an npm publish going live):
+\`\`\`
+register_trigger({skill_name: "check-published", source: "cron", name: "*/2 * * * *"})
+check-published:  read the source ($ shell / $ connector)
+  condition met → do the follow-on, then unregister_trigger (stop polling)
+  not yet       → return; cron fires it again next interval
+\`\`\`
+
+**2. Fire on completion** (E can push):
+\`\`\`
+# Triggers: event: turn-completed       ← on the follow-on skill
+# Vars: SESSION
+the producer POSTs /event {"event_name":"turn-completed","params":{"SESSION":"…"}}
+\`\`\`
+
+**3. Always add a stall guard.** If E never happens, a push chain just stops, silently. Pair every wait with a second cron check ("still not done after N minutes?") that reports loudly. A \`# Deadline:\` on the check skill bounds a single run, not the overall wait.
+`;
+
 const CONNECTORS_PROLOGUE = `# Connectors
 
 Skillscript skills don't import packages — they invoke connectors. The runtime resolves dispatches through a typed registry of five contracts:
@@ -1058,7 +1127,7 @@ export function helpResponse(
       topic: null,
       version: runtimeVersion,
       content: QUICKSTART,
-      available_topics: ["ops", "frontmatter", "examples", "composition", "error-handling", "connectors", "lint-codes"],
+      available_topics: ["ops", "frontmatter", "examples", "composition", "error-handling", "triggers", "connectors", "lint-codes"],
     };
   }
   let content: string;
@@ -1068,10 +1137,11 @@ export function helpResponse(
     case "examples":    content = EXAMPLES; break;
     case "composition": content = COMPOSITION; break;
     case "error-handling": content = ERROR_HANDLING; break;
+    case "triggers":    content = TRIGGERS; break;
     case "connectors":  content = renderConnectorsTopic(registry); break;
     case "lint-codes":  content = LINT_CODES; break;
     default:
-      content = `# Unknown topic '${topic}'\n\nValid topics: ops, frontmatter, examples, composition, error-handling, connectors, lint-codes`;
+      content = `# Unknown topic '${topic}'\n\nValid topics: ops, frontmatter, examples, composition, error-handling, triggers, connectors, lint-codes`;
   }
   return { topic, version: runtimeVersion, content };
 }

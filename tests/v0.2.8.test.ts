@@ -54,7 +54,7 @@ describe("v0.2.8 — help MCP tool", () => {
     expect(result["topic"]).toBeNull();
     expect(typeof result["content"]).toBe("string");
     expect((result["content"] as string)).toMatch(/quickstart/i);
-    expect(result["available_topics"]).toEqual(["ops", "frontmatter", "examples", "composition", "error-handling", "connectors", "lint-codes"]);
+    expect(result["available_topics"]).toEqual(["ops", "frontmatter", "examples", "composition", "error-handling", "triggers", "connectors", "lint-codes"]);
     // v0.7.1 quickstart structure — trigger→process→deliver model, three op classes,
     // canonical surface, plus the basics (branching, iteration, lint).
     expect((result["content"] as string)).toMatch(/trigger.*process.*deliver|three.*op.*class/i);
@@ -63,6 +63,18 @@ describe("v0.2.8 — help MCP tool", () => {
     expect((result["content"] as string)).toMatch(/Branching/);
     expect((result["content"] as string)).toMatch(/Iteration/);
     expect((result["content"] as string)).toMatch(/lint_skill/);
+  });
+
+  it("topic=triggers returns the triggers guide (sources, event params-as-vars, ambient refs, recipes)", async () => {
+    const { mcpServer } = bootstrap({ skillsDir: join(home, "skills"), traceDir: join(home, "traces") });
+    const result = await callTool(mcpServer, "help", { topic: "triggers" });
+    expect(result["topic"]).toBe("triggers");
+    const content = result["content"] as string;
+    expect(content).not.toMatch(/Unknown topic/);
+    expect(content).toMatch(/POST \/event/);
+    expect(content).toMatch(/Params ARE the skill's `# Vars:`/);
+    expect(content).toMatch(/unregister_trigger/);
+    expect(content).toMatch(/stall guard/);
   });
 
   it("topic=ops returns op reference", async () => {

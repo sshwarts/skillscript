@@ -677,9 +677,11 @@ export class Scheduler {
     // Fire-and-forget async dispatch. Errors are recorded in the trace;
     // the caller already received its 200 + run_id.
     const nowMs = this.now();
+    // TRIGGER_TYPE / TRIGGER_PAYLOAD mirror dispatchTrigger's cron path;
+    // without them the runtime's "inline" defaults win.
     void this.dispatchSkill(
       trig.skillName,
-      params,
+      { ...params, TRIGGER_TYPE: "event", TRIGGER_PAYLOAD: trig.name },
       { source: "event", name: trig.name, fired_at_ms: nowMs, trigger_id: trig.id },
       runId,
     ).catch((err: unknown) => {

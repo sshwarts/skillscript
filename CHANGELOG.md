@@ -2,6 +2,16 @@
 
 Each release carries an **Upgrade impact:** line (first in its section) so a bump's requirements are visible at a glance. Tags (closed set): **BREAKING** (a manual change is needed to keep working) · **RE-APPROVE** (secured-mode signature invalidation — skills must be re-approved before they run) · **CONFIG** (`connectors.json` / config edit needed) · **none (additive)** (no action; backward-compatible). Standard from 0.20.0 forward; the pre-0.20 transitions that need action are flagged inline below (0.14.0, 0.18.8, 0.19.0). Full walkthrough: [UPGRADING.md](UPGRADING.md).
 
+## 0.40.2 — 2026-10-12 — fix: an event-fired skill now sees `TRIGGER_TYPE` = `event`; new `help({topic: "triggers"})`
+
+**Upgrade impact:** none (additive). The only observable change: inside a skill fired through `POST /event`, `${TRIGGER_TYPE}` now reads `event` (was `inline`) and `${TRIGGER_PAYLOAD}` reads the event_name (was empty). No skill in our corpus reads either.
+
+**Event fires were reporting themselves as `inline`.** Cron fires set `TRIGGER_TYPE` / `TRIGGER_PAYLOAD` from the trigger; `fireEvent` passed only the POSTed params, so the runtime's direct-call defaults won. The language reference has always said an event fire reports `event`. A skill branching on how it was fired could not tell a webhook from a direct call. Now pinned by an end-to-end test that fires through `fireEvent` and reads the trace.
+
+**`help({topic: "triggers"})` is new.** An agent asking how triggers work used to find only the `# Triggers:` header line in the frontmatter topic. The new topic covers the two sources (cron = poll, event = push), the `/event` request shape, what a fired skill can read in each case, the trigger lifecycle tools, and three recipes: poll-until-done, fire-on-completion, and always pairing a wait with a stall guard.
+
+- **The frontmatter topic's `TRIGGER_PAYLOAD` row was wrong.** It called it "JSON-serializable payload attached to the firing trigger". It is the trigger's name — the cron expression or the event_name. Event POST params arrive as the skill's `# Vars:`; the new topic says so where an author will look.
+
 ## 0.40.1 — 2026-08-31 — fix: a filter chain now evaluates identically in a condition and in a substitution
 
 **Upgrade impact:** BREAKING, on one narrow surface — `|fallback:` in a **condition** now fires on an empty string / empty array as well as on an unresolved reference, matching what it has always done in a substitution. If a skill relies on `if ${X.empty|fallback:"D"} != "D":` being true for an empty value, that flips. Everything else here is a fix in the safe direction, and it **closes the last silent path 0.40.0 left open**.

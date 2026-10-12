@@ -175,6 +175,38 @@ describe("v1.0 freeze — event-trigger runtime layer", () => {
     }
   });
 
+  it("event-fired skill sees TRIGGER_TYPE=event and TRIGGER_PAYLOAD=<event_name>, not the inline defaults", async () => {
+    const { scheduler, skillStore, home, cleanup } = await buildScheduler();
+    try {
+      const body = `# Skill: relay\n# Status: Approved\n# Description: ambient refs\n# Vars: MESSAGE\nm:\n    emit(text="type=\${TRIGGER_TYPE} payload=\${TRIGGER_PAYLOAD} msg=\${MESSAGE}")\ndefault: m\n`;
+      await skillStore.store("relay", body);
+      scheduler.registerTrigger({
+        skillName: "relay",
+        source: "event",
+        name: "site-distress",
+        params: ["MESSAGE"],
+        declarative: false,
+      });
+
+      const { run_id } = scheduler.fireEvent("site-distress", { MESSAGE: "page-1" });
+
+      const traceStore = new FilesystemTraceStore(join(home, "traces"));
+      const deadline = Date.now() + 5000;
+      let trace = null as Awaited<ReturnType<typeof traceStore.get>>;
+      while (Date.now() < deadline) {
+        trace = await traceStore.get(run_id);
+        if (trace) break;
+        await new Promise((r) => setTimeout(r, 20));
+      }
+
+      expect(trace, "trace record should land within 5s of fireEvent").not.toBeNull();
+      expect(trace!.errors).toEqual([]);
+      expect(trace!.emissions).toContain("type=event payload=site-distress msg=page-1");
+    } finally {
+      cleanup();
+    }
+  });
+
   it("multiple events on the same skill — each fires independently (idempotency-shape check)", async () => {
     const { scheduler, skillStore, cleanup } = await buildScheduler();
     try {

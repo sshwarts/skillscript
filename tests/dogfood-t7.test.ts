@@ -24,8 +24,8 @@ const REPO_ROOT = join(__dirname, "..");
 const PACKAGE_JSON = JSON.parse(readFileSync(join(REPO_ROOT, "package.json"), "utf8")) as Record<string, unknown>;
 
 describe("T7 — package.json polish", () => {
-  it("1. version is 0.40.1 (filter chains now evaluate identically in condition and substitution context — `|fallback:` after a transform supplies its value instead of yielding a silent empty string, and its emptiness predicate matches; closes the last silent path left by 0.40.0)", () => {
-    expect(PACKAGE_JSON["version"]).toBe("0.40.1");
+  it("1. version is 0.40.2 (event-fired skills now see TRIGGER_TYPE=event and TRIGGER_PAYLOAD=<event_name> instead of the inline defaults; new help({topic: \"triggers\"}))", () => {
+    expect(PACKAGE_JSON["version"]).toBe("0.40.2");
   });
 
   it("2. main + types + bin + engines.node ≥ 22.5 declared", () => {
